@@ -15,7 +15,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE_VERSION = "agent-loop-v1"
+FIXTURE_VERSION = "agent-loop-v2"
 EXPECTED_BENCHMARK_CASES = {
     "engine/minimal", "engine/four_tool_rounds", "engine/context_entries_0", "engine/context_entries_1024",
     *(f"engine/tools_8_bound_{n}" for n in (1, 4, 8)),

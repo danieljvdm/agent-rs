@@ -9,11 +9,11 @@ on:
         options: [compare, calibrate]
         default: compare
       base_ref:
-        description: Base commit or branch (ignored for calibration)
+        description: Base full 40-character commit SHA or branch (ignored for calibration)
         required: true
         default: '6b67138231c6cb27c9b710d4638b24db3d2a9eb7'
       candidate_ref:
-        description: Candidate commit or branch
+        description: Candidate full 40-character commit SHA or branch
         required: true
         default: main
       cohorts:

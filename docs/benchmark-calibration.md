@@ -2,11 +2,13 @@
 
 The scripted benchmark is the correctness and runtime-cost loop. The live personal-agent evaluation is a separate measure of provider behavior; it does not replace these deterministic workloads.
 
-The [initial local capture](../benchmark-results/initial-2026-10-29/COMPARISON.md) used short exploratory windows. It retained substantial same-source variation, so it does not justify a timing gate. This follow-up keeps the Rust fixture bytes unchanged and adds full-window measurements, paired cohort variability, explicit work-count checks, and a repeatable hosted runner.
+The [initial local capture](../benchmark-results/initial-2026-10-29/COMPARISON.md) used short exploratory windows. It retained substantial same-source variation, so it does not justify a timing gate. The hosted workflow adds full-window measurements, paired cohort variability, explicit work-count checks, and a repeatable runner.
+
+The current fixture is `agent-loop-v2`. It observes SQLite settlements and reads each run's public status concurrently with later admissions, recording the timestamp immediately when that status read completes. Version 1 drained settlements only after submitting the entire batch, so its SQLite per-operation latency includes artificial observer delay. Retained v1 elapsed/throughput measurements remain useful within matched v1 comparisons, but its per-operation latency is not a precise settlement distribution. Version 2 changes observation work during execution; do not compare v1 and v2 timings directly. Both sides of a v2 comparison must contain identical fixture bytes, including when benchmarking an older runtime revision.
 
 ## Full comparison on a single runner
 
-Run the **Runtime performance** workflow manually. Supply exact base and candidate commits when producing evidence for a change. Its `compare` mode checks out both revisions, reads the candidate's pinned Rust version, and builds both revisions before measurement. All captures then run sequentially on one `ubuntu-24.04` runner with four Tokio workers and the same compiler. Two cohorts mean `base, candidate, candidate, base`; higher cohort counts must be even.
+Run the **Runtime performance** workflow manually. Supply full 40-character base and candidate commit hashes when producing evidence for a change. Its `compare` mode checks out both revisions, reads the candidate's pinned Rust version, and builds both revisions before measurement. All captures then run sequentially on one `ubuntu-24.04` runner with four Tokio workers and the same compiler. Two cohorts mean `base, candidate, candidate, base`; higher cohort counts must be even.
 
 The default uses 30 Criterion samples with one-second warmup and two-second target measurement windows, plus 30 CPU and allocation samples per diagnostic case. SQLite can require longer than its target window to complete the required samples. Allocation instrumentation runs in a separate executable. The job uploads raw samples, per-capture summaries, comparison JSON, metadata and logs even after a failure.
 

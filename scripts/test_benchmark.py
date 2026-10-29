@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location("benchmark", Path(__file__).with_name("benchmark.py"))
 benchmark = importlib.util.module_from_spec(SPEC)
@@ -14,6 +15,10 @@ EVIDENCE = Path(__file__).resolve().parents[1] / "benchmark-results" / "initial-
 
 class BenchmarkReportTests(unittest.TestCase):
     def setUp(self):
+        # Retained evidence is v1. This tests its parser without claiming it is v2 data.
+        version = patch.object(benchmark, "FIXTURE_VERSION", "agent-loop-v1")
+        version.start()
+        self.addCleanup(version.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.output = Path(self.temporary.name) / "evidence"
@@ -50,6 +55,11 @@ class BenchmarkReportTests(unittest.TestCase):
         path.write_text(json.dumps(data))
         with self.assertRaisesRegex(RuntimeError, "diagnostic samples"):
             benchmark.diagnostic_samples(path, False)
+
+    def test_v1_observer_measurements_are_not_accepted_as_v2_evidence(self):
+        with patch.object(benchmark, "FIXTURE_VERSION", "agent-loop-v2"):
+            with self.assertRaisesRegex(RuntimeError, "fixture, executor, or instrumentation"):
+                benchmark.diagnostic_samples(self.output / "00-base" / "metrics.json", False)
 
     def test_changed_work_counts_incomplete_runs_and_environments_reject_comparison(self):
         base, candidate = self.prepared("base"), self.prepared("candidate")
