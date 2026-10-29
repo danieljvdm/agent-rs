@@ -8,6 +8,11 @@ on:
         type: choice
         options: [compare, calibrate]
         default: compare
+      suite:
+        description: All workloads, or recovery with minimal and durable controls
+        type: choice
+        options: [all, recovery]
+        default: all
       base_ref:
         description: Base full 40-character commit SHA or branch (ignored for calibration)
         required: true
@@ -68,6 +73,7 @@ jobs:
           RUSTUP_TOOLCHAIN: ${{ steps.toolchain.outputs.version }}
           BENCH_COHORTS: ${{ inputs.cohorts }}
           BENCH_SAMPLES: ${{ inputs.samples }}
+          BENCH_SUITE: ${{ inputs.suite }}
         shell: bash
         run: |
           # Put rustup proxies first: both checkouts must use the same selected compiler.
@@ -76,7 +82,7 @@ jobs:
             --base "$GITHUB_WORKSPACE/base" \
             --candidate "$GITHUB_WORKSPACE/candidate" \
             --out "$RUNNER_TEMP/runtime-performance" \
-            --cohorts "$BENCH_COHORTS" --samples "$BENCH_SAMPLES" --require-clean
+            --cohorts "$BENCH_COHORTS" --samples "$BENCH_SAMPLES" --suite "$BENCH_SUITE" --require-clean
       - name: Publish comparison summary
         if: always()
         shell: bash

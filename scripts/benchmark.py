@@ -32,10 +32,30 @@ EXPECTED_DIAGNOSTIC_CASES = {
     *(f"conversations_{kind}_{n}" for kind in ("engine", "sqlite") for n in (1, 16, 64)),
     *(f"recovery_prior_runs_{n}" for n in (0, 512)),
 }
+SUITES = {
+    "all": {
+        "benchmarks": EXPECTED_BENCHMARK_CASES,
+        "diagnostics": EXPECTED_DIAGNOSTIC_CASES,
+        "criterion_filter": None,
+        "diagnostic_filters": (),
+    },
+    "recovery": {
+        "benchmarks": {"engine/minimal", "sqlite/durable_four_tool_rounds",
+                       "recovery/restart_to_completion/0", "recovery/restart_to_completion/512"},
+        "diagnostics": {"minimal", "durable_four_tool_rounds", "recovery_prior_runs_0", "recovery_prior_runs_512"},
+        "criterion_filter": r"^(engine/minimal|sqlite/durable_four_tool_rounds|recovery/restart_to_completion/(0|512))$",
+        "diagnostic_filters": ("minimal", "durable_four_tool_rounds", "recovery"),
+    },
+}
 ENVIRONMENT_FIELDS = (
     "rustc", "cargo", "os", "machine", "logical_cpus", "processor", "memory_bytes", "tokio_workers",
     "concurrency", "fixed_conversation_batch", "build_profile", "features", "rustflags", "tracing", "quick",
 )
+
+def suite_config(suite):
+    if suite not in SUITES:
+        raise RuntimeError(f"unknown benchmark suite: {suite}")
+    return SUITES[suite]
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -114,7 +134,8 @@ def executable(output, name):
             return Path(item["executable"])
     raise RuntimeError(f"cargo did not report executable {name}")
 
-def prepare(repo, temporary, log, quick, require_clean=False):
+def prepare(repo, temporary, log, quick, require_clean=False, suite="all"):
+    suite_config(suite)
     repo = repo.resolve()
     if require_clean and quiet(["git", "status", "--porcelain"], repo) != "":
         raise RuntimeError(f"benchmark checkout must be a clean Git revision: {repo}")
@@ -129,6 +150,7 @@ def prepare(repo, temporary, log, quick, require_clean=False):
     if before != fingerprint(repo):
         raise RuntimeError("source changed during build; captured binaries cannot identify this source")
     info = metadata(repo, quick)
+    info["suite"] = suite
     info["executables"] = {path.name: digest(path) for path in sorted(binary_dir.iterdir())}
     info["measurement_source_sha256"] = measurement_fingerprint(info["source"])
     return {"repo": repo, "bin": binary_dir, "metadata": info}
@@ -143,6 +165,7 @@ def distribution(values):
 def summarize(output):
     entries = []
     info = json.loads((output / "metadata.json").read_text())
+    expected = suite_config(info.get("suite", "all"))["benchmarks"]
     minimum_samples = 10 if info["quick"] else 30
     for estimates in sorted((output / "criterion").rglob("new/estimates.json")):
         estimate = json.loads(estimates.read_text())
@@ -160,7 +183,7 @@ def summarize(output):
                         "median_interval_lower_ns": median["confidence_interval"]["lower_bound"] / elements,
                         "median_interval_upper_ns": median["confidence_interval"]["upper_bound"] / elements,
                         "normalized_iteration_ns_per_run": distribution(normalized)})
-    if len(entries) != len(EXPECTED_BENCHMARK_CASES) or {entry["case"] for entry in entries} != EXPECTED_BENCHMARK_CASES:
+    if len(entries) != len(expected) or {entry["case"] for entry in entries} != expected:
         raise RuntimeError("missing, duplicate, or unexpected Criterion workloads")
     (output / "summary.json").write_text(json.dumps(entries, indent=2) + "\n")
     text = ["Scripted runtime measurement. Timing gates are not calibrated.", "", "| Workload | Median µs/completed run | Median estimate interval µs |", "| --- | ---: | ---: |"]
@@ -170,13 +193,12 @@ def summarize(output):
     (output / "SUMMARY.md").write_text("\n".join(text) + "\n")
     return entries
 
-def diagnostic_samples(path, allocation_instrumented):
-    report = json.loads(path.read_text())
+def validate_diagnostic_samples(report, allocation_instrumented, expected):
     if report["fixture"] != FIXTURE_VERSION or report["workers"] != 4 or report["allocation_instrumented"] != allocation_instrumented:
         raise RuntimeError("diagnostic fixture, executor, or instrumentation differs")
     samples = report["samples"]
     cases = {sample["case"] for sample in samples}
-    if cases != EXPECTED_DIAGNOSTIC_CASES or report["samples_per_case"] < 1:
+    if not samples or cases != expected or report["samples_per_case"] < 1:
         raise RuntimeError("missing or unexpected diagnostic workloads")
     for case in cases:
         subset = [sample for sample in samples if sample["case"] == case]
@@ -194,12 +216,46 @@ def diagnostic_samples(path, allocation_instrumented):
                 raise RuntimeError("concurrent sample omitted individual operation latency")
     return samples
 
+def diagnostic_samples(path, allocation_instrumented, suite="all"):
+    report = json.loads(path.read_text())
+    if report.get("suite", suite) != suite:
+        raise RuntimeError("diagnostic suite differs from capture")
+    return validate_diagnostic_samples(report, allocation_instrumented, suite_config(suite)["diagnostics"])
+
+def merge_diagnostics(paths, output, allocation_instrumented, suite, requested_samples):
+    """Retain each process's raw report; merge only complete, disjoint workloads."""
+    expected = suite_config(suite)["diagnostics"]
+    if not paths:
+        raise RuntimeError("missing filtered diagnostic reports")
+    fields = ("fixture", "workers", "allocation_instrumented", "samples_per_case")
+    merged = {"suite": suite, "samples": [], "raw_reports": []}
+    seen = set()
+    for path in paths:
+        report = json.loads(path.read_text())
+        if report.get("suite", suite) != suite:
+            raise RuntimeError("diagnostic suite differs from capture")
+        if report["samples_per_case"] != requested_samples or any(
+                field in merged and merged[field] != report[field] for field in fields):
+            raise RuntimeError("diagnostic report metadata or requested sample count differs")
+        cases = {sample["case"] for sample in report["samples"]}
+        validate_diagnostic_samples(report, allocation_instrumented, cases)
+        if seen & cases:
+            raise RuntimeError("duplicate diagnostic workloads across filtered reports")
+        seen.update(cases)
+        merged.update({field: report[field] for field in fields})
+        merged["samples"].extend(report["samples"])
+        merged["raw_reports"].append(path.name)
+    validate_diagnostic_samples(merged, allocation_instrumented, expected)
+    output.write_text(json.dumps(merged, indent=2) + "\n")
+
 def diagnostic_summary(output):
-    timing = diagnostic_samples(output / "metrics.json", False)
-    allocations = diagnostic_samples(output / "allocations.json", True)
-    requested_samples = json.loads((output / "metadata.json").read_text()).get("diagnostic_samples_per_case")
+    info = json.loads((output / "metadata.json").read_text())
+    suite = info.get("suite", "all")
+    timing = diagnostic_samples(output / "metrics.json", False, suite)
+    allocations = diagnostic_samples(output / "allocations.json", True, suite)
+    requested_samples = info.get("diagnostic_samples_per_case")
     if requested_samples is not None:
-        expected_total = requested_samples * len(EXPECTED_DIAGNOSTIC_CASES)
+        expected_total = requested_samples * len(suite_config(suite)["diagnostics"])
         if len(timing) != expected_total or len(allocations) != expected_total:
             raise RuntimeError("diagnostic capture does not contain the requested sample count")
     groups = {}
@@ -242,7 +298,7 @@ def diagnostic_summary(output):
 def capture(prepared, output, label, samples, quick):
     output.mkdir(parents=True, exist_ok=False)
     info = dict(prepared["metadata"], label=label, started_at_unix=time.time(), status="running",
-                diagnostic_samples_per_case=samples)
+                diagnostic_samples_per_case=samples, suite=prepared["metadata"].get("suite", "all"))
     info_path = output / "metadata.json"
     info_path.write_text(json.dumps(info, indent=2) + "\n")
     try:
@@ -252,9 +308,24 @@ def capture(prepared, output, label, samples, quick):
         env.pop("AGENT_BENCH_QUICK", None)
         if quick:
             env["AGENT_BENCH_QUICK"] = "1"
-        command([str(prepared["bin"] / "agent_loop"), "--bench", "--noplot"], prepared["repo"], output / "criterion.log", env)
-        command([str(prepared["bin"] / "metrics"), "--samples", str(samples), "--output", str(output / "metrics.json")], prepared["repo"], output / "metrics.log")
-        command([str(prepared["bin"] / "allocations"), "--samples", str(samples), "--output", str(output / "allocations.json")], prepared["repo"], output / "allocations.log")
+        selected = suite_config(info["suite"])
+        criterion_command = [str(prepared["bin"] / "agent_loop"), "--bench", "--noplot"]
+        if selected["criterion_filter"] is not None:
+            criterion_command.append(selected["criterion_filter"])
+        command(criterion_command, prepared["repo"], output / "criterion.log", env)
+        for kind in ("metrics", "allocations"):
+            filters = selected["diagnostic_filters"] or (None,)
+            reports = []
+            for filter_text in filters:
+                stem = f"{kind}-{filter_text}" if filter_text else kind
+                path = output / f"{stem}.json"
+                argv = [str(prepared["bin"] / kind), "--samples", str(samples), "--output", str(path)]
+                if filter_text is not None:
+                    argv.extend(["--filter", filter_text])
+                command(argv, prepared["repo"], output / f"{stem}.log")
+                reports.append(path)
+            if selected["diagnostic_filters"]:
+                merge_diagnostics(reports, output / f"{kind}.json", kind == "allocations", info["suite"], samples)
         summarize(output)
         diagnostic_summary(output)
         if fingerprint(prepared["repo"]) != info["source"]:
@@ -268,6 +339,10 @@ def capture(prepared, output, label, samples, quick):
         info_path.write_text(json.dumps(info, indent=2) + "\n")
 
 def compare_summary(output, base, candidate, cohorts):
+    suite = base["metadata"].get("suite", "all")
+    expected = suite_config(suite)["benchmarks"]
+    if candidate["metadata"].get("suite", "all") != suite:
+        raise RuntimeError("comparison suites differ")
     different_environment = [field for field in ENVIRONMENT_FIELDS
                              if base["metadata"][field] != candidate["metadata"][field]]
     if different_environment:
@@ -281,9 +356,14 @@ def compare_summary(output, base, candidate, cohorts):
             info = json.loads((capture_path / "metadata.json").read_text())
             if info["status"] != "complete":
                 raise RuntimeError("incomplete capture cannot enter a comparison")
-            for item in json.loads((capture_path / "summary.json").read_text()):
+            if info.get("suite", "all") != suite:
+                raise RuntimeError("capture suite differs from comparison")
+            summary = json.loads((capture_path / "summary.json").read_text())
+            if len(summary) != len(expected) or {item["case"] for item in summary} != expected:
+                raise RuntimeError("missing, duplicate, or unexpected Criterion workloads in comparison")
+            for item in summary:
                 cases.setdefault(item["case"], []).append(item["median_ns_per_run"])
-            for sample in diagnostic_samples(capture_path / "metrics.json", False):
+            for sample in diagnostic_samples(capture_path / "metrics.json", False, suite):
                 signature = (sample["completed_runs"], sample["model_calls"], sample["tool_calls"])
                 previous = work_counts.setdefault(sample["case"], signature)
                 if signature != previous:
@@ -318,7 +398,7 @@ def compare_summary(output, base, candidate, cohorts):
                  "A timing gate is deliberately disabled. One job cannot establish runner-to-runner variance. Before enabling a workload-specific gate, repeat full same-source jobs, choose both relative and absolute tolerances above observed noise, and verify suspected regressions in a fresh matched job.",
                  "See comparison.json for raw paired deltas and median absolute deviations; each capture retains Criterion samples plus separate CPU/allocation diagnostics. Correctness and work counts are enforced immediately."])
     (output / "COMPARISON.md").write_text("\n".join(text) + "\n")
-    (output / "comparison.json").write_text(json.dumps({"identical_source": identical, "cohorts": cohorts,
+    (output / "comparison.json").write_text(json.dumps({"suite": suite, "identical_source": identical, "cohorts": cohorts,
         "independent_jobs": 1, "timing_gate_enabled": False, "calibration_status": "independent-job variance not established",
         "work_counts": {case: {"runs": count[0], "model_calls": count[1], "tool_calls": count[2]} for case, count in sorted(work_counts.items())},
         "workloads": rows}, indent=2) + "\n")
@@ -330,6 +410,7 @@ def main():
     parser.add_argument("--candidate", type=Path, default=ROOT)
     parser.add_argument("--cohorts", type=int, default=2)
     parser.add_argument("--samples", type=int, default=30)
+    parser.add_argument("--suite", choices=SUITES, default="all", help="all workloads, or recovery plus minimal/durable controls")
     parser.add_argument("--quick", action="store_true", help="short exploratory windows with 10 Criterion samples")
     parser.add_argument("--require-clean", action="store_true", help="require clean source checkouts; place output outside them")
     parser.add_argument("--label", default="initial")
@@ -341,9 +422,9 @@ def main():
         parser.error("output already exists")
     args.out.mkdir(parents=True)
     with tempfile.TemporaryDirectory(prefix="agent-bench-") as temporary:
-        candidate = prepare(args.candidate, temporary, args.out / "build.log", args.quick, args.require_clean)
+        candidate = prepare(args.candidate, temporary, args.out / "build.log", args.quick, args.require_clean, args.suite)
         if args.base:
-            base = prepare(args.base, temporary, args.out / "build.log", args.quick, args.require_clean)
+            base = prepare(args.base, temporary, args.out / "build.log", args.quick, args.require_clean, args.suite)
             different_environment = [field for field in ENVIRONMENT_FIELDS
                                      if base["metadata"][field] != candidate["metadata"][field]]
             if different_environment:
