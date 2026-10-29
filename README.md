@@ -76,4 +76,6 @@ cargo bench --bench agent_loop --locked
 
 [Benchmark instructions and retained results](benchmark-results/README.md) describe fixed workloads, correctness assertions, process CPU and allocation runs, and revision comparisons. Timings are informational until observed variance supports a timing gate.
 
+[Verification evidence](docs/verification.md) records the 45 passing tests, restart workflow, and [initial AB/BA benchmark comparison](benchmark-results/initial-2026-10-29/COMPARISON.md).
+
 This is a Rust-only initial implementation. There are no distributed leases, Node bindings, Cloudflare adapter, arbitrary active-run input joining, agent graphs, or placeholder subagent/MCP services.

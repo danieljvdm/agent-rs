@@ -1,0 +1,167 @@
+$ /var/folders/8p/p34jzpn978v2szrghvpvf5_00000gn/T/agent-bench-5dlhtqfs/tmpj7o2pohp/agent_loop --bench --noplot
+Gnuplot not found, using plotters backend
+Benchmarking engine/minimal
+Benchmarking engine/minimal: Warming up for 100.00 ms
+Benchmarking engine/minimal: Collecting 10 samples in estimated 250.37 ms (22k iterations)
+Benchmarking engine/minimal: Analyzing
+engine/minimal          time:   [8.5745 µs 8.7655 µs 9.0401 µs]
+                        thrpt:  [110.62 Kelem/s 114.08 Kelem/s 116.63 Kelem/s]
+Benchmarking engine/four_tool_rounds
+Benchmarking engine/four_tool_rounds: Warming up for 100.00 ms
+Benchmarking engine/four_tool_rounds: Collecting 10 samples in estimated 251.28 ms (5830 iterations)
+Benchmarking engine/four_tool_rounds: Analyzing
+engine/four_tool_rounds time:   [38.049 µs 39.009 µs 39.565 µs]
+                        thrpt:  [25.275 Kelem/s 25.635 Kelem/s 26.282 Kelem/s]
+Benchmarking engine/tools_8_bound_1
+Benchmarking engine/tools_8_bound_1: Warming up for 100.00 ms
+Benchmarking engine/tools_8_bound_1: Collecting 10 samples in estimated 252.60 ms (5335 iterations)
+Benchmarking engine/tools_8_bound_1: Analyzing
+engine/tools_8_bound_1  time:   [45.326 µs 47.185 µs 49.356 µs]
+                        thrpt:  [20.261 Kelem/s 21.193 Kelem/s 22.063 Kelem/s]
+Benchmarking engine/tools_8_bound_4
+Benchmarking engine/tools_8_bound_4: Warming up for 100.00 ms
+Benchmarking engine/tools_8_bound_4: Collecting 10 samples in estimated 251.20 ms (5830 iterations)
+Benchmarking engine/tools_8_bound_4: Analyzing
+engine/tools_8_bound_4  time:   [38.599 µs 39.278 µs 40.350 µs]
+                        thrpt:  [24.783 Kelem/s 25.459 Kelem/s 25.907 Kelem/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking engine/tools_8_bound_8
+Benchmarking engine/tools_8_bound_8: Warming up for 100.00 ms
+Benchmarking engine/tools_8_bound_8: Collecting 10 samples in estimated 250.09 ms (5830 iterations)
+Benchmarking engine/tools_8_bound_8: Analyzing
+engine/tools_8_bound_8  time:   [38.484 µs 39.242 µs 40.197 µs]
+                        thrpt:  [24.877 Kelem/s 25.483 Kelem/s 25.985 Kelem/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking engine/stream_chunks_1
+Benchmarking engine/stream_chunks_1: Warming up for 100.00 ms
+Benchmarking engine/stream_chunks_1: Collecting 10 samples in estimated 250.14 ms (22k iterations)
+Benchmarking engine/stream_chunks_1: Analyzing
+engine/stream_chunks_1  time:   [8.9807 µs 9.0804 µs 9.1593 µs]
+                        thrpt:  [109.18 Kelem/s 110.13 Kelem/s 111.35 Kelem/s]
+Benchmarking engine/stream_chunks_64
+Benchmarking engine/stream_chunks_64: Warming up for 100.00 ms
+Benchmarking engine/stream_chunks_64: Collecting 10 samples in estimated 250.02 ms (19k iterations)
+Benchmarking engine/stream_chunks_64: Analyzing
+engine/stream_chunks_64 time:   [10.321 µs 10.581 µs 10.766 µs]
+                        thrpt:  [92.888 Kelem/s 94.507 Kelem/s 96.887 Kelem/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking engine/stream_chunks_1024
+Benchmarking engine/stream_chunks_1024: Warming up for 100.00 ms
+Benchmarking engine/stream_chunks_1024: Collecting 10 samples in estimated 251.71 ms (7590 iterations)
+Benchmarking engine/stream_chunks_1024: Analyzing
+engine/stream_chunks_1024
+                        time:   [29.715 µs 30.584 µs 31.084 µs]
+                        thrpt:  [32.170 Kelem/s 32.697 Kelem/s 33.653 Kelem/s]
+Benchmarking engine/context_entries_0
+Benchmarking engine/context_entries_0: Warming up for 100.00 ms
+Benchmarking engine/context_entries_0: Collecting 10 samples in estimated 250.43 ms (23k iterations)
+Benchmarking engine/context_entries_0: Analyzing
+engine/context_entries_0
+                        time:   [8.4455 µs 8.5929 µs 8.8062 µs]
+                        thrpt:  [113.56 Kelem/s 116.37 Kelem/s 118.41 Kelem/s]
+Benchmarking engine/context_entries_1024
+Benchmarking engine/context_entries_1024: Warming up for 100.00 ms
+Benchmarking engine/context_entries_1024: Collecting 10 samples in estimated 252.01 ms (440 iterations)
+Benchmarking engine/context_entries_1024: Analyzing
+engine/context_entries_1024
+                        time:   [408.43 µs 421.01 µs 443.36 µs]
+                        thrpt:  [2.2555 Kelem/s 2.3752 Kelem/s 2.4484 Kelem/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+
+Benchmarking conversations/engine_workers_4/1
+Benchmarking conversations/engine_workers_4/1: Warming up for 100.00 ms
+
+Warning: Unable to complete 10 samples in 250.0ms. You may wish to increase target time to 458.2ms or enable flat sampling.
+Benchmarking conversations/engine_workers_4/1: Collecting 10 samples in estimated 458.24 ms (55 iterations)
+Benchmarking conversations/engine_workers_4/1: Analyzing
+conversations/engine_workers_4/1
+                        time:   [6.2582 ms 6.9582 ms 8.1119 ms]
+                        thrpt:  [7.8896 Kelem/s 9.1977 Kelem/s 10.227 Kelem/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking conversations/engine_workers_4/16
+Benchmarking conversations/engine_workers_4/16: Warming up for 100.00 ms
+Benchmarking conversations/engine_workers_4/16: Collecting 10 samples in estimated 436.46 ms (110 iterations)
+Benchmarking conversations/engine_workers_4/16: Analyzing
+conversations/engine_workers_4/16
+                        time:   [2.0982 ms 2.4972 ms 2.9468 ms]
+                        thrpt:  [21.719 Kelem/s 25.628 Kelem/s 30.502 Kelem/s]
+Benchmarking conversations/engine_workers_4/64
+Benchmarking conversations/engine_workers_4/64: Warming up for 100.00 ms
+Benchmarking conversations/engine_workers_4/64: Collecting 10 samples in estimated 287.73 ms (110 iterations)
+Benchmarking conversations/engine_workers_4/64: Analyzing
+conversations/engine_workers_4/64
+                        time:   [1.9836 ms 2.1967 ms 2.4724 ms]
+                        thrpt:  [25.885 Kelem/s 29.135 Kelem/s 32.264 Kelem/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+
+Benchmarking sqlite/durable_four_tool_rounds
+Benchmarking sqlite/durable_four_tool_rounds: Warming up for 100.00 ms
+
+Warning: Unable to complete 10 samples in 250.0ms. You may wish to increase target time to 852.3ms.
+Benchmarking sqlite/durable_four_tool_rounds: Collecting 10 samples in estimated 852.35 ms (10 iterations)
+Benchmarking sqlite/durable_four_tool_rounds: Analyzing
+sqlite/durable_four_tool_rounds
+                        time:   [29.912 ms 36.700 ms 42.889 ms]
+                        thrpt:  [23.316  elem/s 27.248  elem/s 33.431  elem/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low mild
+
+Benchmarking sqlite_conversations/host_workers_4/1
+Benchmarking sqlite_conversations/host_workers_4/1: Warming up for 100.00 ms
+
+Warning: Unable to complete 10 samples in 250.0ms. You may wish to increase target time to 21.9s.
+Benchmarking sqlite_conversations/host_workers_4/1: Collecting 10 samples in estimated 21.884 s (10 iterations)
+Benchmarking sqlite_conversations/host_workers_4/1: Analyzing
+sqlite_conversations/host_workers_4/1
+                        time:   [1.5096 s 1.8086 s 2.0759 s]
+                        thrpt:  [30.831  elem/s 35.387  elem/s 42.394  elem/s]
+Benchmarking sqlite_conversations/host_workers_4/16
+Benchmarking sqlite_conversations/host_workers_4/16: Warming up for 100.00 ms
+
+Warning: Unable to complete 10 samples in 250.0ms. You may wish to increase target time to 10.0s.
+Benchmarking sqlite_conversations/host_workers_4/16: Collecting 10 samples in estimated 10.044 s (10 iterations)
+Benchmarking sqlite_conversations/host_workers_4/16: Analyzing
+sqlite_conversations/host_workers_4/16
+                        time:   [849.35 ms 958.80 ms 1.0798 s]
+                        thrpt:  [59.271  elem/s 66.750  elem/s 75.352  elem/s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+Benchmarking sqlite_conversations/host_workers_4/64
+Benchmarking sqlite_conversations/host_workers_4/64: Warming up for 100.00 ms
+
+Warning: Unable to complete 10 samples in 250.0ms. You may wish to increase target time to 18.8s.
+Benchmarking sqlite_conversations/host_workers_4/64: Collecting 10 samples in estimated 18.833 s (10 iterations)
+Benchmarking sqlite_conversations/host_workers_4/64: Analyzing
+sqlite_conversations/host_workers_4/64
+                        time:   [820.17 ms 973.61 ms 1.1270 s]
+                        thrpt:  [56.788  elem/s 65.735  elem/s 78.033  elem/s]
+
+Benchmarking recovery/restart_to_completion/0
+Benchmarking recovery/restart_to_completion/0: Warming up for 100.00 ms
+
+Warning: Unable to complete 10 samples in 250.0ms. You may wish to increase target time to 411.8ms.
+Benchmarking recovery/restart_to_completion/0: Collecting 10 samples in estimated 411.82 ms (10 iterations)
+Benchmarking recovery/restart_to_completion/0: Analyzing
+recovery/restart_to_completion/0
+                        time:   [25.506 ms 35.942 ms 49.234 ms]
+                        thrpt:  [20.311  elem/s 27.823  elem/s 39.207  elem/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking recovery/restart_to_completion/512
+Benchmarking recovery/restart_to_completion/512: Warming up for 100.00 ms
+
+Warning: Unable to complete 10 samples in 250.0ms. You may wish to increase target time to 1.1s.
+Benchmarking recovery/restart_to_completion/512: Collecting 10 samples in estimated 1.1467 s (10 iterations)
+Benchmarking recovery/restart_to_completion/512: Analyzing
+recovery/restart_to_completion/512
+                        time:   [104.81 ms 108.88 ms 113.83 ms]
+                        thrpt:  [8.7852  elem/s 9.1844  elem/s 9.5406  elem/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+

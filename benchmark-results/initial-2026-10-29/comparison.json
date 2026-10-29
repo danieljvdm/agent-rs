@@ -1,0 +1,234 @@
+{
+  "identical_source": true,
+  "cohorts": 2,
+  "workloads": [
+    {
+      "case": "conversations/engine_workers_4/1",
+      "base_cohort_medians_ns": [
+        102715.00922309028,
+        101705.72395833333
+      ],
+      "candidate_cohort_medians_ns": [
+        77318.90104166666,
+        172374.51171875
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "conversations/engine_workers_4/16",
+      "base_cohort_medians_ns": [
+        37725.87808159723,
+        48230.158482142855
+      ],
+      "candidate_cohort_medians_ns": [
+        28683.919921875,
+        79205.68303571429
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "conversations/engine_workers_4/64",
+      "base_cohort_medians_ns": [
+        34216.23046875,
+        36536.686414930555
+      ],
+      "candidate_cohort_medians_ns": [
+        34420.806134259255,
+        62635.96640625
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "engine/context_entries_0",
+      "base_cohort_medians_ns": [
+        8530.389387316924,
+        9681.233380681817
+      ],
+      "candidate_cohort_medians_ns": [
+        8900.294756741983,
+        13305.674700598804
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "engine/context_entries_1024",
+      "base_cohort_medians_ns": [
+        427058.38958333334,
+        453771.2592592592
+      ],
+      "candidate_cohort_medians_ns": [
+        421061.65357142856,
+        517260.8779761905
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "engine/four_tool_rounds",
+      "base_cohort_medians_ns": [
+        39392.79968553459,
+        38563.709512578615
+      ],
+      "candidate_cohort_medians_ns": [
+        37857.31905503634,
+        45717.98490338164
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "engine/minimal",
+      "base_cohort_medians_ns": [
+        8707.829987212277,
+        9444.556917953376
+      ],
+      "candidate_cohort_medians_ns": [
+        8904.252540650406,
+        10549.643402777778
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "engine/stream_chunks_1",
+      "base_cohort_medians_ns": [
+        9051.206018518518,
+        9425.385224274407
+      ],
+      "candidate_cohort_medians_ns": [
+        9950.203953279426,
+        11308.310841423947
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "engine/stream_chunks_1024",
+      "base_cohort_medians_ns": [
+        29957.612060041407,
+        31183.351052048725
+      ],
+      "candidate_cohort_medians_ns": [
+        30571.290458015268,
+        38653.14120370371
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "engine/stream_chunks_64",
+      "base_cohort_medians_ns": [
+        10690.554941002949,
+        10693.176745329401
+      ],
+      "candidate_cohort_medians_ns": [
+        10838.854283576506,
+        19740.028290282906
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "engine/tools_8_bound_1",
+      "base_cohort_medians_ns": [
+        47100.11791237113,
+        41889.946601941745
+      ],
+      "candidate_cohort_medians_ns": [
+        42339.381032547695,
+        47539.513235294115
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "engine/tools_8_bound_4",
+      "base_cohort_medians_ns": [
+        40176.82479784367,
+        39830.52098765432
+      ],
+      "candidate_cohort_medians_ns": [
+        42079.59892429194,
+        38120.67283950617
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "engine/tools_8_bound_8",
+      "base_cohort_medians_ns": [
+        39316.77830188679,
+        41028.59038461538
+      ],
+      "candidate_cohort_medians_ns": [
+        40325.74677871149,
+        134356.62204301075
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "recovery/restart_to_completion/0",
+      "base_cohort_medians_ns": [
+        28040896.0,
+        35096395.5
+      ],
+      "candidate_cohort_medians_ns": [
+        37838896.0,
+        27520021.0
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "recovery/restart_to_completion/512",
+      "base_cohort_medians_ns": [
+        108313333.5,
+        110053416.5
+      ],
+      "candidate_cohort_medians_ns": [
+        107453958.0,
+        153860854.5
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "sqlite/durable_four_tool_rounds",
+      "base_cohort_medians_ns": [
+        36552938.0,
+        35219874.5
+      ],
+      "candidate_cohort_medians_ns": [
+        26214541.5,
+        56340666.5
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "sqlite_conversations/host_workers_4/1",
+      "base_cohort_medians_ns": [
+        30933445.6484375,
+        32379397.4609375
+      ],
+      "candidate_cohort_medians_ns": [
+        16563812.1796875,
+        32741797.1953125
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "sqlite_conversations/host_workers_4/16",
+      "base_cohort_medians_ns": [
+        14892074.21875,
+        19881209.6328125
+      ],
+      "candidate_cohort_medians_ns": [
+        12323410.4765625,
+        9336275.3828125
+      ],
+      "percent_change": null
+    },
+    {
+      "case": "sqlite_conversations/host_workers_4/64",
+      "base_cohort_medians_ns": [
+        15631701.5,
+        21217449.21875
+      ],
+      "candidate_cohort_medians_ns": [
+        14413109.703125,
+        13648983.71875
+      ],
+      "percent_change": null
+    }
+  ]
+}
