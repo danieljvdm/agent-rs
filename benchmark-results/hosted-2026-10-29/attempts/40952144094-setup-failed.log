@@ -1,0 +1,80 @@
+measure	Run actions/checkout@v4	﻿2026-10-29T20:47:31.3813290Z ##[group]Run actions/checkout@v4
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3814915Z with:
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3815847Z   ref: 0b2098a
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3816793Z   path: candidate
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3817818Z   repository: danieljvdm/agent-rs
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3827982Z   token: ***
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3828977Z   ssh-strict: true
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3829983Z   ssh-user: git
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3830984Z   persist-credentials: true
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3832068Z   clean: true
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3833072Z   sparse-checkout-cone-mode: true
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3834391Z   fetch-depth: 1
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3835373Z   fetch-tags: false
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3836371Z   show-progress: true
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3837383Z   lfs: false
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3838326Z   submodules: false
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3839349Z   set-safe-directory: true
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3840496Z   allow-unsafe-pr-checkout: false
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.3841655Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.4935956Z Syncing repository: danieljvdm/agent-rs
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5156388Z ##[group]Getting Git version info
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5166617Z Working directory is '/home/runner/work/agent-rs/agent-rs/candidate'
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5255916Z [command]/usr/bin/git version
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5469106Z git version 2.56.0
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5684484Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5690833Z Temporarily overriding HOME='/home/runner/work/_temp/5d0593cc-b3e7-42f8-a254-3554c627d096' before making global git config changes
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5695755Z Adding repository directory to the temporary git global config as a safe directory
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5699690Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/agent-rs/agent-rs/candidate
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5706394Z ##[group]Initializing the repository
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5709008Z [command]/usr/bin/git init /home/runner/work/agent-rs/agent-rs/candidate
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5712215Z hint: Using 'master' as the name for the initial branch. This default branch name
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5715705Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5719198Z hint: to use in all of your new repositories, which will suppress this warning,
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5722173Z hint: call:
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5723630Z hint:
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5725686Z hint: 	git config --global init.defaultBranch <name>
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5728076Z hint:
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5730213Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5733507Z hint: 'development'. The just-created branch can be renamed via this command:
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5756471Z hint:
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5758466Z hint: 	git branch -m <name>
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5760573Z hint:
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5763347Z hint: Disable this message with "git config set advice.defaultBranchName false"
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5770186Z Initialized empty Git repository in /home/runner/work/agent-rs/agent-rs/candidate/.git/
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5776295Z [command]/usr/bin/git remote add origin https://github.com/danieljvdm/agent-rs
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5781957Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5795552Z ##[group]Disabling automatic garbage collection
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5798442Z [command]/usr/bin/git config --local gc.auto 0
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5805049Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5809227Z ##[group]Setting up auth
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5812513Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5822043Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5833382Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.5880613Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.6328809Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.6397784Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.6659045Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.6715266Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.6718460Z ##[group]Fetching the repository
+measure	Run actions/checkout@v4	2026-10-29T20:47:31.6730862Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +refs/heads/0b2098a*:refs/remotes/origin/0b2098a* +refs/tags/0b2098a*:refs/tags/0b2098a*
+measure	Run actions/checkout@v4	2026-10-29T20:47:32.0625228Z The process '/usr/bin/git' failed with exit code 1
+measure	Run actions/checkout@v4	2026-10-29T20:47:32.0667465Z Waiting 12 seconds before trying again
+measure	Run actions/checkout@v4	2026-10-29T20:47:44.0639490Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +refs/heads/0b2098a*:refs/remotes/origin/0b2098a* +refs/tags/0b2098a*:refs/tags/0b2098a*
+measure	Run actions/checkout@v4	2026-10-29T20:47:44.2681888Z The process '/usr/bin/git' failed with exit code 1
+measure	Run actions/checkout@v4	2026-10-29T20:47:44.2682765Z Waiting 15 seconds before trying again
+measure	Run actions/checkout@v4	2026-10-29T20:47:59.2716745Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +refs/heads/0b2098a*:refs/remotes/origin/0b2098a* +refs/tags/0b2098a*:refs/tags/0b2098a*
+measure	Run actions/checkout@v4	2026-10-29T20:47:59.4657157Z ##[error]The process '/usr/bin/git' failed with exit code 1
+measure	Run actions/upload-artifact@v4	﻿2026-10-29T20:47:59.5025461Z ##[group]Run actions/upload-artifact@v4
+measure	Run actions/upload-artifact@v4	2026-10-29T20:47:59.5025799Z with:
+measure	Run actions/upload-artifact@v4	2026-10-29T20:47:59.5026040Z   name: runtime-performance-40952144094-1
+measure	Run actions/upload-artifact@v4	2026-10-29T20:47:59.5026388Z   path: /home/runner/work/_temp/runtime-performance
+measure	Run actions/upload-artifact@v4	2026-10-29T20:47:59.5026714Z   retention-days: 90
+measure	Run actions/upload-artifact@v4	2026-10-29T20:47:59.5026952Z   if-no-files-found: error
+measure	Run actions/upload-artifact@v4	2026-10-29T20:47:59.5027201Z   compression-level: 6
+measure	Run actions/upload-artifact@v4	2026-10-29T20:47:59.5027424Z   overwrite: false
+measure	Run actions/upload-artifact@v4	2026-10-29T20:47:59.5027648Z   include-hidden-files: false
+measure	Run actions/upload-artifact@v4	2026-10-29T20:47:59.5027900Z ##[endgroup]
+measure	Run actions/upload-artifact@v4	2026-10-29T20:47:59.7025182Z (node:2197) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+measure	Run actions/upload-artifact@v4	2026-10-29T20:47:59.7045136Z (Use `node --trace-deprecation ...` to show where the warning was created)
+measure	Run actions/upload-artifact@v4	2026-10-29T20:47:59.7216937Z ##[error]No files were found with the provided path: /home/runner/work/_temp/runtime-performance. No artifacts will be uploaded.

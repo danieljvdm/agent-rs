@@ -1,0 +1,500 @@
+measure	Set up job	﻿2026-10-29T20:48:46.0424055Z Current runner version: '2.338.0'
+measure	Set up job	2026-10-29T20:48:46.0454990Z ##[group]Runner Image Provisioner
+measure	Set up job	2026-10-29T20:48:46.0456381Z Hosted Compute Agent
+measure	Set up job	2026-10-29T20:48:46.0457278Z Version: 20261021.618
+measure	Set up job	2026-10-29T20:48:46.0458080Z Commit: 21505ad2541d5be6135ed84fc33697146cf75b8e
+measure	Set up job	2026-10-29T20:48:46.0459062Z Build Date: 2026-10-21T00:45:21Z
+measure	Set up job	2026-10-29T20:48:46.0459955Z Worker ID: {71a2c695-9a99-4a68-b0c7-8e51bfb91619}
+measure	Set up job	2026-10-29T20:48:46.0460887Z Region: westus3
+measure	Set up job	2026-10-29T20:48:46.0461693Z Cloud: Azure
+measure	Set up job	2026-10-29T20:48:46.0462361Z ##[endgroup]
+measure	Set up job	2026-10-29T20:48:46.0464120Z ##[group]Operating System
+measure	Set up job	2026-10-29T20:48:46.0464947Z Ubuntu
+measure	Set up job	2026-10-29T20:48:46.0465996Z 24.04.5
+measure	Set up job	2026-10-29T20:48:46.0466763Z LTS
+measure	Set up job	2026-10-29T20:48:46.0467472Z ##[endgroup]
+measure	Set up job	2026-10-29T20:48:46.0468125Z ##[group]Runner Image
+measure	Set up job	2026-10-29T20:48:46.0468967Z Image: ubuntu-24.04
+measure	Set up job	2026-10-29T20:48:46.0469763Z Version: 20261025.353.1
+measure	Set up job	2026-10-29T20:48:46.0471212Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261025.353/images/ubuntu/Ubuntu2404-Readme.md
+measure	Set up job	2026-10-29T20:48:46.0473433Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261025.353
+measure	Set up job	2026-10-29T20:48:46.0474800Z ##[endgroup]
+measure	Set up job	2026-10-29T20:48:46.0476370Z ##[group]GITHUB_TOKEN Permissions
+measure	Set up job	2026-10-29T20:48:46.0478673Z Contents: read
+measure	Set up job	2026-10-29T20:48:46.0479421Z Metadata: read
+measure	Set up job	2026-10-29T20:48:46.0480722Z ##[endgroup]
+measure	Set up job	2026-10-29T20:48:46.0483228Z Secret source: Actions
+measure	Set up job	2026-10-29T20:48:46.0484395Z Cache mode: write
+measure	Set up job	2026-10-29T20:48:46.0485681Z Prepare workflow directory
+measure	Set up job	2026-10-29T20:48:46.0940490Z Prepare all required actions
+measure	Set up job	2026-10-29T20:48:46.1058254Z Getting action download info
+measure	Set up job	2026-10-29T20:48:46.4278798Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+measure	Set up job	2026-10-29T20:48:46.5682537Z Download action repository 'dtolnay/rust-toolchain@master' (SHA:683b588c487a69d01f6c6ddf40f036ff682cc2c8)
+measure	Set up job	2026-10-29T20:48:46.7862785Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+measure	Set up job	2026-10-29T20:48:47.1866303Z Complete job name: measure
+measure	Run actions/checkout@v4	﻿2026-10-29T20:48:47.2681458Z ##[group]Run actions/checkout@v4
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2682943Z with:
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2683874Z   ref: 6b67138231c6cb27c9b710d4638b24db3d2a9eb7
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2685067Z   path: base
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2685999Z   repository: danieljvdm/agent-rs
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2692369Z   token: ***
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2692961Z   ssh-strict: true
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2693602Z   ssh-user: git
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2694233Z   persist-credentials: true
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2694931Z   clean: true
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2695741Z   sparse-checkout-cone-mode: true
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2696584Z   fetch-depth: 1
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2697332Z   fetch-tags: false
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2698132Z   show-progress: true
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2698846Z   lfs: false
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2699432Z   submodules: false
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2700077Z   set-safe-directory: true
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2700804Z   allow-unsafe-pr-checkout: false
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.2701845Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.4788009Z Syncing repository: danieljvdm/agent-rs
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.4792135Z ##[group]Getting Git version info
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.4794003Z Working directory is '/home/runner/work/agent-rs/agent-rs/base'
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.4796939Z [command]/usr/bin/git version
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5775760Z git version 2.56.0
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5793699Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5807401Z Temporarily overriding HOME='/home/runner/work/_temp/e40da000-e76b-4565-843b-7abe7dc8f9f4' before making global git config changes
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5810849Z Adding repository directory to the temporary git global config as a safe directory
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5816519Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/agent-rs/agent-rs/base
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5872485Z ##[group]Initializing the repository
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5875909Z [command]/usr/bin/git init /home/runner/work/agent-rs/agent-rs/base
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5964410Z hint: Using 'master' as the name for the initial branch. This default branch name
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5967611Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5969958Z hint: to use in all of your new repositories, which will suppress this warning,
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5971881Z hint: call:
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5974799Z hint:
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5976434Z hint: 	git config --global init.defaultBranch <name>
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5977947Z hint:
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5979318Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5982538Z hint: 'development'. The just-created branch can be renamed via this command:
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5984478Z hint:
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5985636Z hint: 	git branch -m <name>
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5986744Z hint:
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5988156Z hint: Disable this message with "git config set advice.defaultBranchName false"
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5990726Z Initialized empty Git repository in /home/runner/work/agent-rs/agent-rs/base/.git/
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.5994798Z [command]/usr/bin/git remote add origin https://github.com/danieljvdm/agent-rs
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.6038853Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.6040671Z ##[group]Disabling automatic garbage collection
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.6046324Z [command]/usr/bin/git config --local gc.auto 0
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.6084307Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.6086380Z ##[group]Setting up auth
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.6090575Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.6135882Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.6445545Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.6488765Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.6713436Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.6760970Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.6999396Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.7049324Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.7051685Z ##[group]Fetching the repository
+measure	Run actions/checkout@v4	2026-10-29T20:48:47.7061541Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin 6b67138231c6cb27c9b710d4638b24db3d2a9eb7
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7029103Z From https://github.com/danieljvdm/agent-rs
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7044130Z  * branch            6b67138231c6cb27c9b710d4638b24db3d2a9eb7 -> FETCH_HEAD
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7094260Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7095897Z ##[group]Determining the checkout info
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7097671Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7098386Z [command]/usr/bin/git sparse-checkout disable
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7141084Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7186033Z ##[group]Checking out the ref
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7187097Z [command]/usr/bin/git checkout --progress --force 6b67138231c6cb27c9b710d4638b24db3d2a9eb7
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7512102Z Note: switching to '6b67138231c6cb27c9b710d4638b24db3d2a9eb7'.
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7513130Z 
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7513574Z You are in 'detached HEAD' state. You can look around, make experimental
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7514526Z changes and commit them, and you can discard any commits you make in this
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7515924Z state without impacting any branches by switching back to a branch.
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7516613Z 
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7517130Z If you want to create a new branch to retain commits you create, you may
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7526736Z do so (now or later) by using -c with the switch command. Example:
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7535812Z 
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7536496Z   git switch -c <new-branch-name>
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7537103Z 
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7537529Z Or undo this operation with:
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7538053Z 
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7538565Z   git switch -
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7539293Z 
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7539900Z Turn off this advice by setting config variable advice.detachedHead to false
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7540630Z 
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7541233Z HEAD is now at 6b67138 Retain initial benchmark comparison and verification evidence
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7543936Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7577038Z [command]/usr/bin/git log -1 --format=%H
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7682505Z 6b67138231c6cb27c9b710d4638b24db3d2a9eb7
+measure	Run actions/checkout@v4	﻿2026-10-29T20:48:48.7901323Z ##[group]Run actions/checkout@v4
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7901733Z with:
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7902074Z   ref: 0b2098a4a44cdca2adf4ea49cd5cb2254a3ce60f
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7902453Z   path: candidate
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7902774Z   repository: danieljvdm/agent-rs
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7905055Z   token: ***
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7905557Z   ssh-strict: true
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7905867Z   ssh-user: git
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7906175Z   persist-credentials: true
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7906509Z   clean: true
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7906827Z   sparse-checkout-cone-mode: true
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7907174Z   fetch-depth: 1
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7907478Z   fetch-tags: false
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7907784Z   show-progress: true
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7908105Z   lfs: false
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7908403Z   submodules: false
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7908717Z   set-safe-directory: true
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7909063Z   allow-unsafe-pr-checkout: false
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.7909417Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8698395Z Syncing repository: danieljvdm/agent-rs
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8700337Z ##[group]Getting Git version info
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8701618Z Working directory is '/home/runner/work/agent-rs/agent-rs/candidate'
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8747669Z [command]/usr/bin/git version
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8831121Z git version 2.56.0
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8835457Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8845737Z Temporarily overriding HOME='/home/runner/work/_temp/b791176c-a107-4a4a-adf5-48b81121676a' before making global git config changes
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8847472Z Adding repository directory to the temporary git global config as a safe directory
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8848836Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/agent-rs/agent-rs/candidate
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8900648Z ##[group]Initializing the repository
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8901834Z [command]/usr/bin/git init /home/runner/work/agent-rs/agent-rs/candidate
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8964008Z hint: Using 'master' as the name for the initial branch. This default branch name
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8965953Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8976614Z hint: to use in all of your new repositories, which will suppress this warning,
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8977732Z hint: call:
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8978711Z hint:
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8981101Z hint: 	git config --global init.defaultBranch <name>
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8981745Z hint:
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8982397Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8983341Z hint: 'development'. The just-created branch can be renamed via this command:
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8984078Z hint:
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8984565Z hint: 	git branch -m <name>
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8985097Z hint:
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8986114Z hint: Disable this message with "git config set advice.defaultBranchName false"
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8987091Z Initialized empty Git repository in /home/runner/work/agent-rs/agent-rs/candidate/.git/
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.8988814Z [command]/usr/bin/git remote add origin https://github.com/danieljvdm/agent-rs
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.9024644Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.9025702Z ##[group]Disabling automatic garbage collection
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.9028364Z [command]/usr/bin/git config --local gc.auto 0
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.9101528Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.9106755Z ##[group]Setting up auth
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.9125944Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.9158075Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.9575676Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.9721904Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.9889653Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+measure	Run actions/checkout@v4	2026-10-29T20:48:48.9932496Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.0153130Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.0198984Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.0200518Z ##[group]Fetching the repository
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.0207857Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin 0b2098a4a44cdca2adf4ea49cd5cb2254a3ce60f
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.8588202Z From https://github.com/danieljvdm/agent-rs
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.8599533Z  * branch            0b2098a4a44cdca2adf4ea49cd5cb2254a3ce60f -> FETCH_HEAD
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.8602166Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.8603230Z ##[group]Determining the checkout info
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.8604123Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.8605396Z [command]/usr/bin/git sparse-checkout disable
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.8620784Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.8658571Z ##[group]Checking out the ref
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.8661743Z [command]/usr/bin/git checkout --progress --force 0b2098a4a44cdca2adf4ea49cd5cb2254a3ce60f
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.8991540Z Note: switching to '0b2098a4a44cdca2adf4ea49cd5cb2254a3ce60f'.
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.8992502Z 
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.8993309Z You are in 'detached HEAD' state. You can look around, make experimental
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.8994283Z changes and commit them, and you can discard any commits you make in this
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.8995591Z state without impacting any branches by switching back to a branch.
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.8996251Z 
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.8997064Z If you want to create a new branch to retain commits you create, you may
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.9000093Z do so (now or later) by using -c with the switch command. Example:
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.9000413Z 
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.9000600Z   git switch -c <new-branch-name>
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.9000806Z 
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.9000948Z Or undo this operation with:
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.9001153Z 
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.9001258Z   git switch -
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.9001454Z 
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.9001716Z Turn off this advice by setting config variable advice.detachedHead to false
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.9002104Z 
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.9002458Z HEAD is now at 0b2098a Add personal workflow evals, real crash tests, and hosted performance calibration
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.9003738Z ##[endgroup]
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.9040504Z [command]/usr/bin/git log -1 --format=%H
+measure	Run actions/checkout@v4	2026-10-29T20:48:49.9071407Z 0b2098a4a44cdca2adf4ea49cd5cb2254a3ce60f
+measure	Read the candidate's pinned toolchain	﻿2026-10-29T20:48:49.9209903Z ##[group]Run python3 - <<'PY'
+measure	Read the candidate's pinned toolchain	2026-10-29T20:48:49.9210230Z ^[[36;1mpython3 - <<'PY'^[[0m
+measure	Read the candidate's pinned toolchain	2026-10-29T20:48:49.9210447Z ^[[36;1mimport os, re, tomllib^[[0m
+measure	Read the candidate's pinned toolchain	2026-10-29T20:48:49.9210681Z ^[[36;1mfrom pathlib import Path^[[0m
+measure	Read the candidate's pinned toolchain	2026-10-29T20:48:49.9211100Z ^[[36;1mversion = tomllib.loads(Path('candidate/rust-toolchain.toml').read_text())['toolchain']['channel']^[[0m
+measure	Read the candidate's pinned toolchain	2026-10-29T20:48:49.9211542Z ^[[36;1mif not re.fullmatch(r'\d+\.\d+\.\d+', version):^[[0m
+measure	Read the candidate's pinned toolchain	2026-10-29T20:48:49.9211924Z ^[[36;1m    raise SystemExit('Performance measurements require an exact Rust toolchain version')^[[0m
+measure	Read the candidate's pinned toolchain	2026-10-29T20:48:49.9212552Z ^[[36;1mwith open(os.environ['GITHUB_OUTPUT'], 'a') as output:^[[0m
+measure	Read the candidate's pinned toolchain	2026-10-29T20:48:49.9212846Z ^[[36;1m    output.write(f'version={version}\n')^[[0m
+measure	Read the candidate's pinned toolchain	2026-10-29T20:48:49.9213073Z ^[[36;1mPY^[[0m
+measure	Read the candidate's pinned toolchain	2026-10-29T20:48:49.9234739Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+measure	Read the candidate's pinned toolchain	2026-10-29T20:48:49.9235047Z ##[endgroup]
+measure	Run dtolnay/rust-toolchain@master	﻿2026-10-29T20:48:49.9748471Z ##[group]Run dtolnay/rust-toolchain@master
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9748756Z with:
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9748924Z   toolchain: 1.99.1
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9749104Z ##[endgroup]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9802888Z ##[start-action display=Parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9840621Z ##[group]Run if [[ -z $toolchain ]]; then
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9840941Z ^[[36;1mif [[ -z $toolchain ]]; then^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9841366Z ^[[36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9841823Z ^[[36;1m  echo "'toolchain' is a required input" >&2^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9842068Z ^[[36;1m  exit 1^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9842353Z ^[[36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9842680Z ^[[36;1m  if [[ Linux == macOS ]]; then^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9843093Z ^[[36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9843545Z ^[[36;1m  else^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9843871Z ^[[36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9844220Z ^[[36;1m  fi^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9844463Z ^[[36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9844870Z ^[[36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9845456Z ^[[36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9845868Z ^[[36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9846244Z ^[[36;1melse^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9846413Z ^[[36;1m  delimiter=EOF^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9846659Z ^[[36;1m  while [[ $toolchain == *$delimiter* ]]; do delimiter+=_; done^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9847058Z ^[[36;1m  printf 'toolchain<<%s\n%s\n%s\n' "$delimiter" "$toolchain" "$delimiter" >> $GITHUB_OUTPUT^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9847381Z ^[[36;1mfi^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9864494Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9864769Z env:
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9864934Z   toolchain: 1.99.1
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9865111Z ##[endgroup]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9917407Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=11]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9919557Z ##[start-action display=Set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9936546Z ##[group]Run echo CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9936940Z ^[[36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9952849Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9953133Z ##[endgroup]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:49.9998496Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=7]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0000400Z ##[start-action display=Install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0039398Z ##[group]Run if ! command -v rustup &>/dev/null; then
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0039793Z ^[[36;1mif ! command -v rustup &>/dev/null; then^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0040390Z ^[[36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0040952Z ^[[36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0041351Z ^[[36;1mfi^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0057550Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0057823Z env:
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0057992Z   CARGO_HOME: /home/runner/.cargo
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0058202Z ##[endgroup]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0099803Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=9]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0101891Z ##[start-action display=Install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0108568Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0119211Z ##[start-action display=rustup toolchain install 1.99.1;id=__dtolnay_rust-toolchain.__run_4]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0134285Z ##[group]Run set -f  # split targets and components on commas and whitespace, without glob expansion
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0134825Z ^[[36;1mset -f  # split targets and components on commas and whitespace, without glob expansion^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0135347Z ^[[36;1mflags=()^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0135657Z ^[[36;1mfor t in ${targets//,/ }; do flags+=(--target "$t"); done^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0136130Z ^[[36;1mfor c in ${components//,/ }; do flags+=(--component "$c"); done^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0136700Z ^[[36;1mif [[ $toolchain == nightly && -n $components ]]; then flags+=(--allow-downgrade); fi^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0137198Z ^[[36;1mlog=$(mktemp)^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0137523Z ^[[36;1mtrap 'rm -f "$log"' EXIT^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0137846Z ^[[36;1mfor attempt in 1 2 3 4 5; do^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0138524Z ^[[36;1m  if rustup toolchain install "$toolchain" "${flags[@]}" --profile minimal --no-self-update --force-non-host 2>&1 | tee "$log"; then^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0139088Z ^[[36;1m    break^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0139262Z ^[[36;1m  else^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0139432Z ^[[36;1m    status=$?^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0139616Z ^[[36;1m  fi^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0139855Z ^[[36;1m  if [[ $attempt == 5 ]] || ! grep -Fq 'checksum failed for ' "$log" \^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0140293Z ^[[36;1m      || ! grep -Fq 'this is likely due to an ongoing update of the official release server' "$log"; then^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0140645Z ^[[36;1m    exit "$status"^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0140829Z ^[[36;1m  fi^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0141109Z ^[[36;1m  echo "Retrying rustup toolchain install in 30 seconds (retry $attempt of 4)" >&2^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0141453Z ^[[36;1m  sleep 30^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0141634Z ^[[36;1mdone^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0157010Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0157290Z env:
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0157458Z   CARGO_HOME: /home/runner/.cargo
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0157685Z   toolchain: 1.99.1
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0157859Z   targets: 
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0158028Z   components: 
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0158203Z   RUSTUP_PERMIT_COPY_RENAME: 1
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0158398Z ##[endgroup]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.0481378Z info: syncing channel updates for 1.99.1-x86_64-unknown-linux-gnu
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.2755675Z info: latest update on 2026-10-15 for version 1.99.1 (58cf8f9c3 2026-10-13)
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:50.2756433Z info: downloading 3 components
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5011591Z 
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5073989Z   1.99.1-x86_64-unknown-linux-gnu installed - rustc 1.99.1 (58cf8f9c3 2026-10-13)
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5074706Z 
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5284626Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=7516]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5290147Z ##[start-action display=rustup default 1.99.1;id=__dtolnay_rust-toolchain.__run_5]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5305075Z ##[group]Run rustup default "$toolchain" --force-non-host
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5305728Z ^[[36;1mrustup default "$toolchain" --force-non-host^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5322963Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5323233Z env:
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5323405Z   CARGO_HOME: /home/runner/.cargo
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5323613Z   toolchain: 1.99.1
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5323780Z ##[endgroup]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5398124Z info: using existing install for 1.99.1-x86_64-unknown-linux-gnu
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5405621Z info: default toolchain set to 1.99.1-x86_64-unknown-linux-gnu
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5405967Z 
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5466651Z   1.99.1-x86_64-unknown-linux-gnu unchanged - rustc 1.99.1 (58cf8f9c3 2026-10-13)
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5467178Z 
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5480724Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=18]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5484321Z ##[start-action display=Create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5499084Z ##[group]Run DATE=$(rustc +"$toolchain" --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5499737Z ^[[36;1mDATE=$(rustc +"$toolchain" --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5500237Z ^[[36;1mHASH=$(rustc +"$toolchain" --version --verbose | sed -ne 's/^commit-hash: //p')^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5500642Z ^[[36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5517578Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5517848Z env:
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5518016Z   CARGO_HOME: /home/runner/.cargo
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5518240Z   toolchain: 1.99.1
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5518419Z ##[endgroup]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5782893Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=29]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5785552Z ##[start-action display=Disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5801571Z ##[group]Run if [ -z "${CARGO_INCREMENTAL+set}" ]; then
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5801891Z ^[[36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5802150Z ^[[36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5802381Z ^[[36;1mfi^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5819606Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5819894Z env:
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5820067Z   CARGO_HOME: /home/runner/.cargo
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5820272Z ##[endgroup]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5858573Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=7]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5860201Z ##[start-action display=Enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5873910Z ##[group]Run if [ -z "${CARGO_TERM_COLOR+set}" ]; then
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5874206Z ^[[36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5874478Z ^[[36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5874713Z ^[[36;1mfi^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5889332Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5889599Z env:
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5889774Z   CARGO_HOME: /home/runner/.cargo
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5889980Z   CARGO_INCREMENTAL: 0
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5890155Z ##[endgroup]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5926635Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=6]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5929132Z ##[start-action display=Enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5943178Z ##[group]Run # implemented in 1.66, stabilized in 1.68, made default in 1.70
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5943589Z ^[[36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5944141Z ^[[36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5944705Z ^[[36;1m  if rustc +"$toolchain" --version --verbose | grep -q '^release: 1\.6[89]\.'; then^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5945365Z ^[[36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5945785Z ^[[36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5946194Z ^[[36;1m  elif rustc +"$toolchain" --version --verbose | grep -q '^release: 1\.6[67]\.'; then^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5946796Z ^[[36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5947189Z ^[[36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5947455Z ^[[36;1m  fi^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5947614Z ^[[36;1mfi^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5962544Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5962960Z env:
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5963125Z   CARGO_HOME: /home/runner/.cargo
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5963334Z   CARGO_INCREMENTAL: 0
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5963513Z   CARGO_TERM_COLOR: always
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5963690Z   toolchain: 1.99.1
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.5963864Z ##[endgroup]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6221377Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=29]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6225095Z ##[start-action display=Work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6241609Z ##[group]Run # https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6242187Z ^[[36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6242666Z ^[[36;1mif rustc +"$toolchain" --version --verbose | grep -q '^release: 1\.7[01]\.'; then^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6243047Z ^[[36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6243291Z ^[[36;1mfi^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6261090Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6261366Z env:
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6261535Z   CARGO_HOME: /home/runner/.cargo
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6261747Z   CARGO_INCREMENTAL: 0
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6261930Z   CARGO_TERM_COLOR: always
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6262114Z   toolchain: 1.99.1
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6262283Z ##[endgroup]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6412862Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=18]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6417448Z ##[start-action display=rustc +1.99.1 --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6432418Z ##[group]Run rustc +"$toolchain" --version --verbose
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6432722Z ^[[36;1mrustc +"$toolchain" --version --verbose^[[0m
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6449775Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6450058Z env:
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6450233Z   CARGO_HOME: /home/runner/.cargo
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6450440Z   CARGO_INCREMENTAL: 0
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6450623Z   CARGO_TERM_COLOR: always
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6450815Z   toolchain: 1.99.1
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6450984Z ##[endgroup]
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6586281Z rustc 1.99.1 (58cf8f9c3 2026-10-13)
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6587262Z binary: rustc
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6589382Z commit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6589905Z commit-date: 2026-10-13
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6590307Z host: x86_64-unknown-linux-gnu
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6590746Z release: 1.99.1
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6591168Z LLVM version: 23.1.1
+measure	Run dtolnay/rust-toolchain@master	2026-10-29T20:48:57.6652496Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=23]
+measure	Compare on one runner, after building both revisions	﻿2026-10-29T20:48:57.6703888Z ##[group]Run # Put rustup proxies first: both checkouts must use the same selected compiler.
+measure	Compare on one runner, after building both revisions	2026-10-29T20:48:57.6704404Z ^[[36;1m# Put rustup proxies first: both checkouts must use the same selected compiler.^[[0m
+measure	Compare on one runner, after building both revisions	2026-10-29T20:48:57.6704766Z ^[[36;1mexport PATH="$HOME/.cargo/bin:$PATH"^[[0m
+measure	Compare on one runner, after building both revisions	2026-10-29T20:48:57.6705026Z ^[[36;1mpython3 candidate/scripts/benchmark.py \^[[0m
+measure	Compare on one runner, after building both revisions	2026-10-29T20:48:57.6705547Z ^[[36;1m  --base "$GITHUB_WORKSPACE/base" \^[[0m
+measure	Compare on one runner, after building both revisions	2026-10-29T20:48:57.6705811Z ^[[36;1m  --candidate "$GITHUB_WORKSPACE/candidate" \^[[0m
+measure	Compare on one runner, after building both revisions	2026-10-29T20:48:57.6706096Z ^[[36;1m  --out "$RUNNER_TEMP/runtime-performance" \^[[0m
+measure	Compare on one runner, after building both revisions	2026-10-29T20:48:57.6706425Z ^[[36;1m  --cohorts "$BENCH_COHORTS" --samples "$BENCH_SAMPLES" --require-clean^[[0m
+measure	Compare on one runner, after building both revisions	2026-10-29T20:48:57.6723726Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+measure	Compare on one runner, after building both revisions	2026-10-29T20:48:57.6724150Z env:
+measure	Compare on one runner, after building both revisions	2026-10-29T20:48:57.6724321Z   CARGO_HOME: /home/runner/.cargo
+measure	Compare on one runner, after building both revisions	2026-10-29T20:48:57.6724529Z   CARGO_INCREMENTAL: 0
+measure	Compare on one runner, after building both revisions	2026-10-29T20:48:57.6724711Z   CARGO_TERM_COLOR: always
+measure	Compare on one runner, after building both revisions	2026-10-29T20:48:57.6724935Z   RUSTUP_TOOLCHAIN: 1.99.1
+measure	Compare on one runner, after building both revisions	2026-10-29T20:48:57.6725115Z   BENCH_COHORTS: 2
+measure	Compare on one runner, after building both revisions	2026-10-29T20:48:57.6725489Z   BENCH_SAMPLES: 30
+measure	Compare on one runner, after building both revisions	2026-10-29T20:48:57.6725655Z ##[endgroup]
+measure	Compare on one runner, after building both revisions	2026-10-29T20:57:43.4689094Z ##[error]The operation was canceled.
+measure	Publish comparison summary	﻿2026-10-29T20:57:43.4739876Z ##[group]Run if [ -f "$RUNNER_TEMP/runtime-performance/COMPARISON.md" ]; then
+measure	Publish comparison summary	2026-10-29T20:57:43.4740464Z ^[[36;1mif [ -f "$RUNNER_TEMP/runtime-performance/COMPARISON.md" ]; then^[[0m
+measure	Publish comparison summary	2026-10-29T20:57:43.4741028Z ^[[36;1m  cat "$RUNNER_TEMP/runtime-performance/COMPARISON.md" >> "$GITHUB_STEP_SUMMARY"^[[0m
+measure	Publish comparison summary	2026-10-29T20:57:43.4741542Z ^[[36;1melse^[[0m
+measure	Publish comparison summary	2026-10-29T20:57:43.4742318Z ^[[36;1m  printf '%s\n' 'Measurement did not complete. Inspect the retained build/capture logs; partial results are not a passing comparison.' >> "$GITHUB_STEP_SUMMARY"^[[0m
+measure	Publish comparison summary	2026-10-29T20:57:43.4743160Z ^[[36;1mfi^[[0m
+measure	Publish comparison summary	2026-10-29T20:57:43.4765726Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+measure	Publish comparison summary	2026-10-29T20:57:43.4766144Z env:
+measure	Publish comparison summary	2026-10-29T20:57:43.4766396Z   CARGO_HOME: /home/runner/.cargo
+measure	Publish comparison summary	2026-10-29T20:57:43.4766681Z   CARGO_INCREMENTAL: 0
+measure	Publish comparison summary	2026-10-29T20:57:43.4766869Z   CARGO_TERM_COLOR: always
+measure	Publish comparison summary	2026-10-29T20:57:43.4767115Z ##[endgroup]
+measure	Run actions/upload-artifact@v4	﻿2026-10-29T20:57:43.4872455Z ##[group]Run actions/upload-artifact@v4
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:43.4872826Z with:
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:43.4873109Z   name: runtime-performance-40952327481-1
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:43.4873525Z   path: /home/runner/work/_temp/runtime-performance
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:43.4873908Z   retention-days: 90
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:43.4874182Z   if-no-files-found: error
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:43.4874463Z   compression-level: 6
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:43.4874729Z   overwrite: false
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:43.4875000Z   include-hidden-files: false
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:43.4875426Z env:
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:43.4875635Z   CARGO_HOME: /home/runner/.cargo
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:43.4875968Z   CARGO_INCREMENTAL: 0
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:43.4876244Z   CARGO_TERM_COLOR: always
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:43.4876435Z ##[endgroup]
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:43.6674402Z (node:8436) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:43.6675603Z (Use `node --trace-deprecation ...` to show where the warning was created)
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:44.6427715Z (node:8436) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:45.3693862Z With the provided path, there will be 156 files uploaded
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:45.3694466Z Artifact name is valid!
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:45.3694819Z Root directory input is valid!
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:45.3716226Z Beginning upload of artifact content to blob storage
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:45.3717039Z Uploaded bytes 136305
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:45.3720292Z Finished uploading artifact content to blob storage!
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:45.3721162Z SHA256 digest of uploaded artifact zip is bc02ccad6a9e39df42b80f0e3b1158756a1db7aad56a12f0387dda9b617becc5
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:45.3721790Z Finalizing artifact upload
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:45.3723509Z Artifact runtime-performance-40952327481-1.zip successfully finalized. Artifact ID 12932542036
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:45.3724496Z Artifact runtime-performance-40952327481-1 has been successfully uploaded! Final size is 136305 bytes. Artifact ID is 12932542036
+measure	Run actions/upload-artifact@v4	2026-10-29T20:57:45.3725721Z Artifact download URL: https://github.com/danieljvdm/agent-rs/actions/runs/40952327481/artifacts/12932542036
+measure	Post Run actions/checkout@v4	﻿2026-10-29T20:57:45.3826293Z Post job cleanup.
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.6485874Z [command]/usr/bin/git version
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.6487239Z git version 2.56.0
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.6497492Z Temporarily overriding HOME='/home/runner/work/_temp/1f11145d-7b23-4e87-863d-f6d40dd67622' before making global git config changes
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.6498683Z Adding repository directory to the temporary git global config as a safe directory
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.6499581Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/agent-rs/agent-rs/candidate
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.6501010Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.6502431Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.6504140Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.6504806Z http.https://github.com/.extraheader
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.6506100Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.6507925Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.6509600Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.6511194Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+measure	Post Run actions/checkout@v4	﻿2026-10-29T20:57:45.6606955Z Post job cleanup.
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.7614011Z [command]/usr/bin/git version
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.7691220Z git version 2.56.0
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.7739954Z Temporarily overriding HOME='/home/runner/work/_temp/8158da6e-e43a-495b-a2fd-c2c508b93263' before making global git config changes
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.7742028Z Adding repository directory to the temporary git global config as a safe directory
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.7749874Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/agent-rs/agent-rs/base
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.7888143Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.7918552Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.8509569Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.8578284Z http.https://github.com/.extraheader
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.8621618Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.8738852Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.9123423Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+measure	Post Run actions/checkout@v4	2026-10-29T20:57:45.9181942Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+measure	Complete job	﻿2026-10-29T20:57:45.9674082Z Cleaning up orphan processes
+measure	Complete job	2026-10-29T20:57:45.9890567Z Terminate orphan process: pid (2179) (python3)
+measure	Complete job	2026-10-29T20:57:45.9937376Z Terminate orphan process: pid (8358) (metrics)
+measure	Complete job	2026-10-29T20:57:45.9982150Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

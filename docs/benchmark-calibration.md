@@ -2,9 +2,13 @@
 
 The scripted benchmark is the correctness and runtime-cost loop. The live personal-agent evaluation is a separate measure of provider behavior; it does not replace these deterministic workloads.
 
+The [completed hosted v2 comparison and calibration](../benchmark-results/hosted-2026-10-29/README.md) retain full-window results, raw samples, and the complete attempt ledger.
+
 The [initial local capture](../benchmark-results/initial-2026-10-29/COMPARISON.md) used short exploratory windows. It retained substantial same-source variation, so it does not justify a timing gate. The hosted workflow adds full-window measurements, paired cohort variability, explicit work-count checks, and a repeatable runner.
 
 The current fixture is `agent-loop-v2`. It observes SQLite settlements and reads each run's public status concurrently with later admissions, recording the timestamp immediately when that status read completes. Version 1 drained settlements only after submitting the entire batch, so its SQLite per-operation latency includes artificial observer delay. Retained v1 elapsed/throughput measurements remain useful within matched v1 comparisons, but its per-operation latency is not a precise settlement distribution. Version 2 changes observation work during execution; do not compare v1 and v2 timings directly. Both sides of a v2 comparison must contain identical fixture bytes, including when benchmarking an older runtime revision.
+
+The workflow's default baseline is `7a4b5e0cd2c896ed951b41f2929f4a822c9a36a5` on `benchmark-baseline-v2`: the original `6b67138` runtime with only `benches/support/mod.rs` updated to v2. Its runtime source and dependency lockfile are unchanged. This keeps the default comparison compatible with the current fixture.
 
 ## Full comparison on a single runner
 

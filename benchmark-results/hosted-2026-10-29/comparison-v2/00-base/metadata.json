@@ -1,0 +1,61 @@
+{
+  "fixture": "agent-loop-v2",
+  "source": {
+    "sha256": "dcaa40abd1ca5f04c8f85d10142a23462326dab7869b8707eb17099843a7ac12",
+    "files": {
+      "Cargo.lock": "a4e87a3e3df064b14c5dafbc883ffc31500b76305c5dab7b02a44c068b58146b",
+      "Cargo.toml": "bab321cc0d84837ffa8237cf50e59a770c5ff8ba7831abcd477f61e4bbc241ff",
+      "benches/agent_loop.rs": "2b52be771161228117cb1b54cf244b2a8b1871b8e57d544f50a1b695a6358c75",
+      "benches/support/mod.rs": "9513a5ade945970df808dd5538747e126f261a8b342942c3462471dd3f1271bc",
+      "examples/benchmark_metrics.rs": "9c1d68bfd7446aa31257f040076a17f241a69b3c16d734fa434bf6e8a08bec08",
+      "examples/durable_workflow.rs": "59387c0e69a8503b11696547e4359199423ec188109c77a8ff01089753283b3d",
+      "scripts/benchmark.py": "39182b02dd58fb1a082feb351cbe9c2787b41a156e694013af345a5f9f266e78",
+      "src/engine.rs": "030d6045eca8c33c3840ce5edfecd33919ce05259f088e0e6d0c851bc8816c3a",
+      "src/host.rs": "fc030aba7f6af5cca1782e55ef562c27ec3790494856b95c9007466f1e3a0915",
+      "src/lib.rs": "68e4e24d09001baa7428bf543bdd86e8986b55a60e2202237c4aeba137ca76e1",
+      "src/model.rs": "6beee7d7316a93851cde2dd8ccf286bdc342e15da61fcb8a13bcfd3b932493a7",
+      "src/openai.rs": "f9fdfbf96f41f0ac62a4a2be5b752ec5eeec5a6be92e27037bf85d2828575dfc",
+      "src/sqlite.rs": "d587d77d30317e8db76072cf46c51f0faf5408bcede38829b2f58047ff5d1f9b",
+      "src/tool.rs": "b12983afba85fe592e98baf6f899269baa458cb5224a230978eeeb1a6f7faa8c",
+      "src/types.rs": "e8cb787bb02c4ce2cd99609c575e8333de5dccea679587874b6cc7d17c9e807c"
+    }
+  },
+  "git_revision": "7a4b5e0cd2c896ed951b41f2929f4a822c9a36a5",
+  "git_status": "",
+  "lockfile_sha256": "a4e87a3e3df064b14c5dafbc883ffc31500b76305c5dab7b02a44c068b58146b",
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "os": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+  "machine": "x86_64",
+  "logical_cpus": 2,
+  "processor": "AMD EPYC 7763 64-Core Processor",
+  "memory_bytes": 8317935616,
+  "github_run_id": "40953367110",
+  "github_run_attempt": "1",
+  "runner_name": "GitHub Actions 1000025427",
+  "runner_image": "20261026.354.1",
+  "tokio_workers": 4,
+  "concurrency": [
+    1,
+    16,
+    64
+  ],
+  "fixed_conversation_batch": 64,
+  "build_profile": "release",
+  "features": "default",
+  "rustflags": "",
+  "tracing": "normal tracing calls; no subscriber",
+  "quick": false,
+  "measurement": "scripted dependencies through public APIs; no network or artificial sleeps",
+  "executables": {
+    "agent_loop": "3b1bdedc0a952cfa8211ae6dee5a8ae4e5edfebeaeb5bc81b66fe77705f17513",
+    "allocations": "c29ec0ecdd4ec2168cc7cf177966e54dbf8a615758f37f24f51c3220423ae85f",
+    "metrics": "012181a64af1d4f7e51a9fce26b572e7c6ee0ad366502166a06a4de7b9859432"
+  },
+  "measurement_source_sha256": "959dc54f8487be026afb30d62e6d4544cf188f0ba255c46d9564a230aa854855",
+  "label": "base",
+  "started_at_unix": 1793307896.4132836,
+  "status": "complete",
+  "diagnostic_samples_per_case": 30,
+  "finished_at_unix": 1793308213.6548169
+}

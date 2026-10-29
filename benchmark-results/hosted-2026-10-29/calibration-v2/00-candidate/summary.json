@@ -1,0 +1,268 @@
+[
+  {
+    "case": "conversations/engine_workers_4/1",
+    "runs_per_iteration": 64,
+    "median_ns_per_run": 168536.984375,
+    "median_interval_lower_ns": 168074.89508928574,
+    "median_interval_upper_ns": 168846.63504464284,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 168536.984375,
+      "min": 166848.79017857142,
+      "max": 173435.66294642858,
+      "median_absolute_deviation": 467.46986607142026
+    }
+  },
+  {
+    "case": "conversations/engine_workers_4/16",
+    "runs_per_iteration": 64,
+    "median_ns_per_run": 67294.2239487592,
+    "median_interval_lower_ns": 67135.64019717262,
+    "median_interval_upper_ns": 67496.08527960526,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 67294.2239487592,
+      "min": 65797.55989583333,
+      "max": 68783.263671875,
+      "median_absolute_deviation": 329.40659811579826
+    }
+  },
+  {
+    "case": "conversations/engine_workers_4/64",
+    "runs_per_iteration": 64,
+    "median_ns_per_run": 61091.873914930555,
+    "median_interval_lower_ns": 60912.25849931319,
+    "median_interval_upper_ns": 61210.53279622395,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 61091.873914930555,
+      "min": 60208.712611607145,
+      "max": 62030.755859375,
+      "median_absolute_deviation": 238.10195312499854
+    }
+  },
+  {
+    "case": "engine/context_entries_0",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 13673.233487838916,
+    "median_interval_lower_ns": 13651.147480237154,
+    "median_interval_upper_ns": 13701.553216180371,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 13673.233487838916,
+      "min": 13597.695075757576,
+      "max": 19019.799242424244,
+      "median_absolute_deviation": 38.22482983025748
+    }
+  },
+  {
+    "case": "engine/context_entries_1024",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 768381.1533333333,
+    "median_interval_lower_ns": 767662.2016666667,
+    "median_interval_upper_ns": 771219.4288566243,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 768381.1533333333,
+      "min": 763450.0285714286,
+      "max": 799693.7,
+      "median_absolute_deviation": 3227.508666666632
+    }
+  },
+  {
+    "case": "engine/four_tool_rounds",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 59173.08154761905,
+    "median_interval_lower_ns": 58997.683913177345,
+    "median_interval_upper_ns": 59237.12767857143,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 59173.08154761905,
+      "min": 58735.97142857143,
+      "max": 60052.04285714286,
+      "median_absolute_deviation": 235.04330687830588
+    }
+  },
+  {
+    "case": "engine/minimal",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 13886.079918170797,
+    "median_interval_lower_ns": 13875.82426060268,
+    "median_interval_upper_ns": 13918.572740068319,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 13886.079918170797,
+      "min": 13801.875,
+      "max": 14057.15234375,
+      "median_absolute_deviation": 29.4833470394733
+    }
+  },
+  {
+    "case": "engine/stream_chunks_1",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 15516.582444700165,
+    "median_interval_lower_ns": 15456.440707047816,
+    "median_interval_upper_ns": 15528.8168558126,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 15516.582444700165,
+      "min": 15400.237191078962,
+      "max": 17493.680262541024,
+      "median_absolute_deviation": 64.74659344750489
+    }
+  },
+  {
+    "case": "engine/stream_chunks_1024",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 74778.61258741259,
+    "median_interval_lower_ns": 74692.94174242424,
+    "median_interval_upper_ns": 74805.84497607655,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 74778.61258741259,
+      "min": 74443.88787878788,
+      "max": 76999.43636363637,
+      "median_absolute_deviation": 106.59753209752671
+    }
+  },
+  {
+    "case": "engine/stream_chunks_64",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 19762.557291666664,
+    "median_interval_lower_ns": 19729.850185296476,
+    "median_interval_upper_ns": 19799.975260416664,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 19762.557291666664,
+      "min": 19630.97048611111,
+      "max": 25264.80138888889,
+      "median_absolute_deviation": 50.0699305555554
+    }
+  },
+  {
+    "case": "engine/tools_8_bound_1",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 75763.3622947119,
+    "median_interval_lower_ns": 75595.97513677811,
+    "median_interval_upper_ns": 75892.3039193729,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 75763.3622947119,
+      "min": 75167.03404255319,
+      "max": 77566.31914893616,
+      "median_absolute_deviation": 184.4437056737588
+    }
+  },
+  {
+    "case": "engine/tools_8_bound_4",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 70556.06737012987,
+    "median_interval_lower_ns": 70411.55888238916,
+    "median_interval_upper_ns": 70737.95846781043,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 70556.06737012987,
+      "min": 70002.21551724138,
+      "max": 75160.62413793104,
+      "median_absolute_deviation": 273.13165893014957
+    }
+  },
+  {
+    "case": "engine/tools_8_bound_8",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 71215.99193385764,
+    "median_interval_lower_ns": 71091.86729982853,
+    "median_interval_upper_ns": 71350.03411306042,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 71215.99193385764,
+      "min": 70551.48830409357,
+      "max": 72812.66666666667,
+      "median_absolute_deviation": 187.0588972431069
+    }
+  },
+  {
+    "case": "recovery/restart_to_completion/0",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 12950506.5,
+    "median_interval_lower_ns": 12846095.6,
+    "median_interval_upper_ns": 13053921.3,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 12950506.5,
+      "min": 12551460.2,
+      "max": 14005051.2,
+      "median_absolute_deviation": 203961.40000000037
+    }
+  },
+  {
+    "case": "recovery/restart_to_completion/512",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 59833733.0,
+    "median_interval_lower_ns": 59561221.0,
+    "median_interval_upper_ns": 60658635.0,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 59833733.0,
+      "min": 57873947.0,
+      "max": 106980583.0,
+      "median_absolute_deviation": 830901.0
+    }
+  },
+  {
+    "case": "sqlite/durable_four_tool_rounds",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 18036995.25,
+    "median_interval_lower_ns": 17258393.5,
+    "median_interval_upper_ns": 18447420.0,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 18036995.25,
+      "min": 16214009.5,
+      "max": 22516949.5,
+      "median_absolute_deviation": 941112.0
+    }
+  },
+  {
+    "case": "sqlite_conversations/host_workers_4/1",
+    "runs_per_iteration": 64,
+    "median_ns_per_run": 13209024.7421875,
+    "median_interval_lower_ns": 13113167.7578125,
+    "median_interval_upper_ns": 13250510.453125,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 13209024.7421875,
+      "min": 12973023.28125,
+      "max": 13475055.15625,
+      "median_absolute_deviation": 109623.4765625
+    }
+  },
+  {
+    "case": "sqlite_conversations/host_workers_4/16",
+    "runs_per_iteration": 64,
+    "median_ns_per_run": 11347068.2734375,
+    "median_interval_lower_ns": 11303954.5625,
+    "median_interval_upper_ns": 11441635.1953125,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 11347068.2734375,
+      "min": 11168281.15625,
+      "max": 11548390.4375,
+      "median_absolute_deviation": 88205.0546875
+    }
+  },
+  {
+    "case": "sqlite_conversations/host_workers_4/64",
+    "runs_per_iteration": 64,
+    "median_ns_per_run": 11389436.578125,
+    "median_interval_lower_ns": 11328345.0078125,
+    "median_interval_upper_ns": 11566165.4453125,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 11389436.578125,
+      "min": 11102993.796875,
+      "max": 11828261.9375,
+      "median_absolute_deviation": 148019.515625
+    }
+  }
+]

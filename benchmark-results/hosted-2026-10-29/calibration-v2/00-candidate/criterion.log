@@ -1,0 +1,177 @@
+$ /tmp/agent-bench-3pyigsmf/tmpamq9iv8n/agent_loop --bench --noplot
+Gnuplot not found, using plotters backend
+Benchmarking engine/minimal
+Benchmarking engine/minimal: Warming up for 1.0000 s
+Benchmarking engine/minimal: Collecting 30 samples in estimated 2.0051 s (119k iterations)
+Benchmarking engine/minimal: Analyzing
+engine/minimal          time:   [13.892 µs 13.909 µs 13.926 µs]
+                        thrpt:  [71.807 Kelem/s 71.897 Kelem/s 71.984 Kelem/s]
+Found 1 outliers among 30 measurements (3.33%)
+  1 (3.33%) high mild
+Benchmarking engine/four_tool_rounds
+Benchmarking engine/four_tool_rounds: Warming up for 1.0000 s
+Benchmarking engine/four_tool_rounds: Collecting 30 samples in estimated 2.0276 s (33k iterations)
+Benchmarking engine/four_tool_rounds: Analyzing
+engine/four_tool_rounds time:   [59.094 µs 59.252 µs 59.419 µs]
+                        thrpt:  [16.830 Kelem/s 16.877 Kelem/s 16.922 Kelem/s]
+Benchmarking engine/tools_8_bound_1
+Benchmarking engine/tools_8_bound_1: Warming up for 1.0000 s
+Benchmarking engine/tools_8_bound_1: Collecting 30 samples in estimated 2.0073 s (22k iterations)
+Benchmarking engine/tools_8_bound_1: Analyzing
+engine/tools_8_bound_1  time:   [75.708 µs 75.818 µs 75.930 µs]
+                        thrpt:  [13.170 Kelem/s 13.190 Kelem/s 13.209 Kelem/s]
+Found 1 outliers among 30 measurements (3.33%)
+  1 (3.33%) high severe
+Benchmarking engine/tools_8_bound_4
+Benchmarking engine/tools_8_bound_4: Warming up for 1.0000 s
+Benchmarking engine/tools_8_bound_4: Collecting 30 samples in estimated 2.0276 s (27k iterations)
+Benchmarking engine/tools_8_bound_4: Analyzing
+engine/tools_8_bound_4  time:   [70.524 µs 70.725 µs 70.988 µs]
+                        thrpt:  [14.087 Kelem/s 14.139 Kelem/s 14.180 Kelem/s]
+Found 4 outliers among 30 measurements (13.33%)
+  4 (13.33%) high severe
+Benchmarking engine/tools_8_bound_8
+Benchmarking engine/tools_8_bound_8: Warming up for 1.0000 s
+Benchmarking engine/tools_8_bound_8: Collecting 30 samples in estimated 2.0089 s (27k iterations)
+Benchmarking engine/tools_8_bound_8: Analyzing
+engine/tools_8_bound_8  time:   [71.110 µs 71.205 µs 71.312 µs]
+                        thrpt:  [14.023 Kelem/s 14.044 Kelem/s 14.063 Kelem/s]
+Found 2 outliers among 30 measurements (6.67%)
+  1 (3.33%) high mild
+  1 (3.33%) high severe
+Benchmarking engine/stream_chunks_1
+Benchmarking engine/stream_chunks_1: Warming up for 1.0000 s
+Benchmarking engine/stream_chunks_1: Collecting 30 samples in estimated 2.0054 s (110k iterations)
+Benchmarking engine/stream_chunks_1: Analyzing
+engine/stream_chunks_1  time:   [15.492 µs 15.528 µs 15.582 µs]
+                        thrpt:  [64.178 Kelem/s 64.400 Kelem/s 64.551 Kelem/s]
+Found 3 outliers among 30 measurements (10.00%)
+  1 (3.33%) high mild
+  2 (6.67%) high severe
+Benchmarking engine/stream_chunks_64
+Benchmarking engine/stream_chunks_64: Warming up for 1.0000 s
+Benchmarking engine/stream_chunks_64: Collecting 30 samples in estimated 2.0059 s (89k iterations)
+Benchmarking engine/stream_chunks_64: Analyzing
+engine/stream_chunks_64 time:   [19.747 µs 19.900 µs 20.243 µs]
+                        thrpt:  [49.401 Kelem/s 50.252 Kelem/s 50.640 Kelem/s]
+Found 2 outliers among 30 measurements (6.67%)
+  2 (6.67%) high severe
+Benchmarking engine/stream_chunks_1024
+Benchmarking engine/stream_chunks_1024: Warming up for 1.0000 s
+Benchmarking engine/stream_chunks_1024: Collecting 30 samples in estimated 2.0145 s (26k iterations)
+Benchmarking engine/stream_chunks_1024: Analyzing
+engine/stream_chunks_1024
+                        time:   [74.699 µs 74.789 µs 74.889 µs]
+                        thrpt:  [13.353 Kelem/s 13.371 Kelem/s 13.387 Kelem/s]
+Found 4 outliers among 30 measurements (13.33%)
+  1 (3.33%) high mild
+  3 (10.00%) high severe
+Benchmarking engine/context_entries_0
+Benchmarking engine/context_entries_0: Warming up for 1.0000 s
+Benchmarking engine/context_entries_0: Collecting 30 samples in estimated 2.0047 s (123k iterations)
+Benchmarking engine/context_entries_0: Analyzing
+engine/context_entries_0
+                        time:   [13.673 µs 13.712 µs 13.778 µs]
+                        thrpt:  [72.578 Kelem/s 72.927 Kelem/s 73.138 Kelem/s]
+Found 3 outliers among 30 measurements (10.00%)
+  1 (3.33%) high mild
+  2 (6.67%) high severe
+Benchmarking engine/context_entries_1024
+Benchmarking engine/context_entries_1024: Warming up for 1.0000 s
+Benchmarking engine/context_entries_1024: Collecting 30 samples in estimated 2.1870 s (2325 iterations)
+Benchmarking engine/context_entries_1024: Analyzing
+engine/context_entries_1024
+                        time:   [767.87 µs 769.40 µs 771.03 µs]
+                        thrpt:  [1.2970 Kelem/s 1.2997 Kelem/s 1.3023 Kelem/s]
+Found 2 outliers among 30 measurements (6.67%)
+  2 (6.67%) high severe
+
+Benchmarking conversations/engine_workers_4/1
+Benchmarking conversations/engine_workers_4/1: Warming up for 1.0000 s
+Benchmarking conversations/engine_workers_4/1: Collecting 30 samples in estimated 2.3104 s (210 iterations)
+Benchmarking conversations/engine_workers_4/1: Analyzing
+conversations/engine_workers_4/1
+                        time:   [10.758 ms 10.785 ms 10.816 ms]
+                        thrpt:  [5.9170 Kelem/s 5.9344 Kelem/s 5.9492 Kelem/s]
+Found 1 outliers among 30 measurements (3.33%)
+  1 (3.33%) high severe
+Benchmarking conversations/engine_workers_4/16
+Benchmarking conversations/engine_workers_4/16: Warming up for 1.0000 s
+
+Warning: Unable to complete 30 samples in 2.0s. You may wish to increase target time to 2.1s, enable flat sampling, or reduce sample count to 20.
+Benchmarking conversations/engine_workers_4/16: Collecting 30 samples in estimated 2.1481 s (465 iterations)
+Benchmarking conversations/engine_workers_4/16: Analyzing
+conversations/engine_workers_4/16
+                        time:   [4.2785 ms 4.2975 ms 4.3198 ms]
+                        thrpt:  [14.815 Kelem/s 14.892 Kelem/s 14.958 Kelem/s]
+Found 2 outliers among 30 measurements (6.67%)
+  1 (3.33%) low mild
+  1 (3.33%) high mild
+Benchmarking conversations/engine_workers_4/64
+Benchmarking conversations/engine_workers_4/64: Warming up for 1.0000 s
+Benchmarking conversations/engine_workers_4/64: Collecting 30 samples in estimated 3.9202 s (930 iterations)
+Benchmarking conversations/engine_workers_4/64: Analyzing
+conversations/engine_workers_4/64
+                        time:   [3.9010 ms 3.9119 ms 3.9241 ms]
+                        thrpt:  [16.309 Kelem/s 16.360 Kelem/s 16.406 Kelem/s]
+
+Benchmarking sqlite/durable_four_tool_rounds
+Benchmarking sqlite/durable_four_tool_rounds: Warming up for 1.0000 s
+Benchmarking sqlite/durable_four_tool_rounds: Collecting 30 samples in estimated 2.4248 s (60 iterations)
+Benchmarking sqlite/durable_four_tool_rounds: Analyzing
+sqlite/durable_four_tool_rounds
+                        time:   [17.744 ms 18.309 ms 18.929 ms]
+                        thrpt:  [52.830  elem/s 54.617  elem/s 56.356  elem/s]
+Found 3 outliers among 30 measurements (10.00%)
+  3 (10.00%) high mild
+
+Benchmarking sqlite_conversations/host_workers_4/1
+Benchmarking sqlite_conversations/host_workers_4/1: Warming up for 1.0000 s
+
+Warning: Unable to complete 30 samples in 2.0s. You may wish to increase target time to 26.0s, or reduce sample count to 10.
+Benchmarking sqlite_conversations/host_workers_4/1: Collecting 30 samples in estimated 26.041 s (30 iterations)
+Benchmarking sqlite_conversations/host_workers_4/1: Analyzing
+sqlite_conversations/host_workers_4/1
+                        time:   [841.58 ms 844.77 ms 848.01 ms]
+                        thrpt:  [75.471  elem/s 75.760  elem/s 76.047  elem/s]
+Benchmarking sqlite_conversations/host_workers_4/16
+Benchmarking sqlite_conversations/host_workers_4/16: Warming up for 1.0000 s
+
+Warning: Unable to complete 30 samples in 2.0s. You may wish to increase target time to 22.7s, or reduce sample count to 10.
+Benchmarking sqlite_conversations/host_workers_4/16: Collecting 30 samples in estimated 22.661 s (30 iterations)
+Benchmarking sqlite_conversations/host_workers_4/16: Analyzing
+sqlite_conversations/host_workers_4/16
+                        time:   [725.23 ms 727.69 ms 730.15 ms]
+                        thrpt:  [87.653  elem/s 87.950  elem/s 88.248  elem/s]
+Benchmarking sqlite_conversations/host_workers_4/64
+Benchmarking sqlite_conversations/host_workers_4/64: Warming up for 1.0000 s
+
+Warning: Unable to complete 30 samples in 2.0s. You may wish to increase target time to 22.2s, or reduce sample count to 10.
+Benchmarking sqlite_conversations/host_workers_4/64: Collecting 30 samples in estimated 22.196 s (30 iterations)
+Benchmarking sqlite_conversations/host_workers_4/64: Analyzing
+sqlite_conversations/host_workers_4/64
+                        time:   [727.98 ms 732.55 ms 737.25 ms]
+                        thrpt:  [86.809  elem/s 87.366  elem/s 87.914  elem/s]
+
+Benchmarking recovery/restart_to_completion/0
+Benchmarking recovery/restart_to_completion/0: Warming up for 1.0000 s
+Benchmarking recovery/restart_to_completion/0: Collecting 30 samples in estimated 2.1015 s (150 iterations)
+Benchmarking recovery/restart_to_completion/0: Analyzing
+recovery/restart_to_completion/0
+                        time:   [12.869 ms 12.983 ms 13.107 ms]
+                        thrpt:  [76.295  elem/s 77.025  elem/s 77.704  elem/s]
+Found 1 outliers among 30 measurements (3.33%)
+  1 (3.33%) high mild
+Benchmarking recovery/restart_to_completion/512
+Benchmarking recovery/restart_to_completion/512: Warming up for 1.0000 s
+
+Warning: Unable to complete 30 samples in 2.0s. You may wish to increase target time to 3.4s, or reduce sample count to 10.
+Benchmarking recovery/restart_to_completion/512: Collecting 30 samples in estimated 3.4241 s (30 iterations)
+Benchmarking recovery/restart_to_completion/512: Analyzing
+recovery/restart_to_completion/512
+                        time:   [60.246 ms 63.431 ms 67.757 ms]
+                        thrpt:  [14.759  elem/s 15.765  elem/s 16.599  elem/s]
+Found 4 outliers among 30 measurements (13.33%)
+  1 (3.33%) high mild
+  3 (10.00%) high severe
+

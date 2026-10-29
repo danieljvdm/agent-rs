@@ -1,0 +1,214 @@
+{
+  "verified": true,
+  "revision": "83b187ca9423f429fd46990d693aba23fd60768b",
+  "source_sha256": "08f69b8490421f7610f5a48c8f92018bf538bbe767dc646ea483cf6122197e18",
+  "measurement_source_sha256": "ec1ef4dc7b59ae7bdef9711136073e8edaed97eae96ec58f6ed4696cbcb4022e",
+  "compiler": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "machine": [
+    "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+    "x86_64",
+    "AMD EPYC 7763 64-Core Processor",
+    2,
+    8317935616
+  ],
+  "captures": [
+    {
+      "name": "00-base",
+      "seconds": 304.030912399292,
+      "criterion_min_samples": 30
+    },
+    {
+      "name": "00-candidate",
+      "seconds": 301.3059208393097,
+      "criterion_min_samples": 30
+    },
+    {
+      "name": "01-candidate",
+      "seconds": 306.14453077316284,
+      "criterion_min_samples": 30
+    },
+    {
+      "name": "01-base",
+      "seconds": 297.2549088001251,
+      "criterion_min_samples": 30
+    }
+  ],
+  "criterion_workloads_per_capture": 19,
+  "diagnostic_cases_per_capture": 23,
+  "cpu_samples": 2760,
+  "allocation_samples": 2760,
+  "noise": [
+    {
+      "case": "conversations/engine_workers_4/1",
+      "median_us": 168.03616415550596,
+      "paired_min_pct": 0.26461711756078365,
+      "paired_max_pct": 1.5345248233427977,
+      "max_abs_noise_us": 2.54715513392858,
+      "cohort_median_min_us": 165.98982924107142,
+      "cohort_median_max_us": 168.536984375
+    },
+    {
+      "case": "conversations/engine_workers_4/16",
+      "median_us": 67.35005012542128,
+      "paired_min_pct": -0.9518575045937783,
+      "paired_max_pct": 0.5578793522138081,
+      "max_abs_noise_us": 0.6467007908241358,
+      "cohort_median_min_us": 67.03191906622023,
+      "cohort_median_max_us": 67.94092473958334
+    },
+    {
+      "case": "conversations/engine_workers_4/64",
+      "median_us": 61.58393318708949,
+      "paired_min_pct": -1.246907588273849,
+      "paired_max_pct": 0.06077312137440227,
+      "max_abs_noise_us": 0.7713775772084192,
+      "cohort_median_min_us": 61.09187391493055,
+      "cohort_median_max_us": 61.86325149213897
+    },
+    {
+      "case": "engine/context_entries_0",
+      "median_us": 13.807012837442683,
+      "paired_min_pct": -1.7537659654377369,
+      "paired_max_pct": -1.0745282060937944,
+      "max_abs_noise_us": 0.2462020065885008,
+      "cohort_median_min_us": 13.673233487838916,
+      "cohort_median_max_us": 14.03847556860582
+    },
+    {
+      "case": "engine/context_entries_1024",
+      "median_us": 768.5347966666666,
+      "paired_min_pct": 0.6777472435782528,
+      "paired_max_pct": 0.6967100704245555,
+      "max_abs_noise_us": 5.316349333333317,
+      "cohort_median_min_us": 763.064804,
+      "cohort_median_max_us": 773.8982047138046
+    },
+    {
+      "case": "engine/four_tool_rounds",
+      "median_us": 59.281221307798475,
+      "paired_min_pct": -0.9167656476732344,
+      "paired_max_pct": -0.12375401786822726,
+      "max_abs_noise_us": 0.5474977556437661,
+      "cohort_median_min_us": 59.17308154761905,
+      "cohort_median_max_us": 59.72057930326282
+    },
+    {
+      "case": "engine/minimal",
+      "median_us": 13.860528964598547,
+      "paired_min_pct": -1.0575609910882355,
+      "paired_max_pct": 0.6273937072890368,
+      "max_abs_noise_us": 0.1478772223889391,
+      "cohort_median_min_us": 13.799502706552706,
+      "cohort_median_max_us": 13.982855233415235
+    },
+    {
+      "case": "engine/stream_chunks_1",
+      "median_us": 15.544541645109442,
+      "paired_min_pct": -1.0690096187389142,
+      "paired_max_pct": -0.14710379102109705,
+      "max_abs_noise_us": 0.1680233516483513,
+      "cohort_median_min_us": 15.516582444700164,
+      "cohort_median_max_us": 15.71766508954009
+    },
+    {
+      "case": "engine/stream_chunks_1024",
+      "median_us": 75.06796800936048,
+      "paired_min_pct": -0.2746495870053045,
+      "paired_max_pct": 14.64683527946946,
+      "max_abs_noise_us": 11.007298641729431,
+      "cohort_median_min_us": 74.77861258741258,
+      "cohort_median_max_us": 86.15867729591837
+    },
+    {
+      "case": "engine/stream_chunks_64",
+      "median_us": 19.851593106457244,
+      "paired_min_pct": -0.29766030588525005,
+      "paired_max_pct": 3.052851155316083,
+      "max_abs_noise_us": 0.6069565104133144,
+      "cohort_median_min_us": 19.762557291666663,
+      "cohort_median_max_us": 20.48858452088452
+    },
+    {
+      "case": "engine/tools_8_bound_1",
+      "median_us": 75.8008161163522,
+      "paired_min_pct": -0.21051262997546782,
+      "paired_max_pct": 0.01760623733488842,
+      "max_abs_noise_us": 0.15982790444952844,
+      "cohort_median_min_us": 75.7633622947119,
+      "cohort_median_max_us": 75.92319019916143
+    },
+    {
+      "case": "engine/tools_8_bound_4",
+      "median_us": 70.4763460422078,
+      "paired_min_pct": -0.8311846224780428,
+      "paired_max_pct": 0.22649190425148014,
+      "max_abs_noise_us": 0.5890339737274335,
+      "cohort_median_min_us": 70.27776959770115,
+      "cohort_median_max_us": 70.86680357142858
+    },
+    {
+      "case": "engine/tools_8_bound_8",
+      "median_us": 71.50002591845237,
+      "paired_min_pct": -0.7913567022493462,
+      "paired_max_pct": 1.5669520202333143,
+      "max_abs_noise_us": 1.1111130957782442,
+      "cohort_median_min_us": 70.9091970545977,
+      "cohort_median_max_us": 72.02031015037593
+    },
+    {
+      "case": "recovery/restart_to_completion/0",
+      "median_us": 12982.714300000001,
+      "paired_min_pct": -0.49493650061877004,
+      "paired_max_pct": 2.833288552108737,
+      "max_abs_noise_us": 362.0178999999985,
+      "cohort_median_min_us": 12777.304300000002,
+      "cohort_median_max_us": 13139.322199999999
+    },
+    {
+      "case": "recovery/restart_to_completion/512",
+      "median_us": 59860.38725,
+      "paired_min_pct": -0.08901508350517284,
+      "paired_max_pct": 4.7387763121787385,
+      "max_abs_noise_us": 2739.914,
+      "cohort_median_min_us": 57819.0195,
+      "cohort_median_max_us": 60558.9335
+    },
+    {
+      "case": "sqlite/durable_four_tool_rounds",
+      "median_us": 17614.812125,
+      "paired_min_pct": 4.911210786901754,
+      "paired_max_pct": 13.635336445251212,
+      "max_abs_noise_us": 2236.1315,
+      "cohort_median_min_us": 16399.533,
+      "cohort_median_max_us": 18635.6645
+    },
+    {
+      "case": "sqlite_conversations/host_workers_4/1",
+      "median_us": 13217.48228125,
+      "paired_min_pct": -0.12789320346839883,
+      "paired_max_pct": 4.022522933835249,
+      "max_abs_noise_us": 519.87796875,
+      "cohort_median_min_us": 12924.176625,
+      "cohort_median_max_us": 13444.05459375
+    },
+    {
+      "case": "sqlite_conversations/host_workers_4/16",
+      "median_us": 11424.95775390625,
+      "paired_min_pct": -1.3542643639739227,
+      "paired_max_pct": 4.767055978431278,
+      "max_abs_noise_us": 535.1942109375,
+      "cohort_median_min_us": 11226.9336328125,
+      "cohort_median_max_us": 11762.12784375
+    },
+    {
+      "case": "sqlite_conversations/host_workers_4/64",
+      "median_us": 11439.34119921875,
+      "paired_min_pct": -0.868718832797899,
+      "paired_max_pct": 6.27011113125806,
+      "max_abs_noise_us": 694.9369140625,
+      "cohort_median_min_us": 11083.32690625,
+      "cohort_median_max_us": 11778.2638203125
+    }
+  ]
+}

@@ -11,7 +11,7 @@ on:
       base_ref:
         description: Base full 40-character commit SHA or branch (ignored for calibration)
         required: true
-        default: '6b67138231c6cb27c9b710d4638b24db3d2a9eb7'
+        default: '7a4b5e0cd2c896ed951b41f2929f4a822c9a36a5'
       candidate_ref:
         description: Candidate full 40-character commit SHA or branch
         required: true

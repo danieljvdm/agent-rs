@@ -1,5 +1,7 @@
 # Runtime benchmarks
 
+The [full hosted v2 comparison and calibration](hosted-2026-10-29/README.md) both passed: eight complete captures, 19 timed workloads per capture, and 5,520 CPU/latency plus 5,520 separate allocation samples. Candidate medians ranged from -2.1% to +1.9% relative to the base; same-source variation reached 14.65% in one workload. Timings remain informational, with all raw data and unsuccessful attempts retained.
+
 The [initial 2026-10-29 comparison](initial-2026-10-29/COMPARISON.md) retains four successful same-source AB/BA captures at revision `4388ae4`: all 19 workloads, 460 CPU/latency samples, and 460 separately instrumented allocation samples. It uses the quick exploratory profile (10 Criterion samples and 5 diagnostic samples per case per capture). [Example diagnostic summary](initial-2026-10-29/00-base/DIAGNOSTICS.md) and adjacent JSON retain the raw evidence. The visible variation, including large swings in some workloads, does not support a timing gate or speedup claim.
 
 Run `cargo bench --bench agent_loop` for the uninstrumented Criterion suite. It uses four Tokio workers, no network, deterministic scripts and tools, and no artificial sleeps. Tools make one cooperative yield so bounded concurrency is observable. The public runtime APIs validate final output, exact model/tool/cleanup counts, complete batches and declaration-order history on every iteration. Skipping work fails the benchmark.
