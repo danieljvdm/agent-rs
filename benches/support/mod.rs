@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 use yielded_agent::*;
 
-pub const FIXTURE_VERSION: &str = "agent-loop-v1";
+pub const FIXTURE_VERSION: &str = "agent-loop-v2";
 pub const WORKERS: usize = 4;
 pub const CONCURRENT_TOTAL: usize = 64;
 
@@ -418,6 +418,8 @@ pub fn percentile(values: &[u64], quantile: f64) -> u64 {
 #[cfg(feature = "sqlite")]
 pub mod durable {
     use super::*;
+    use std::collections::{HashMap, HashSet};
+    use std::future::Future;
     use std::path::Path;
     use yielded_agent::host::{Host, HostOptions};
     use yielded_agent::sqlite::SqliteStore;
@@ -490,41 +492,87 @@ pub mod durable {
             fixture: &Fixture,
             count: usize,
         ) -> Vec<(RunState, Duration)> {
-            let mut starts = std::collections::HashMap::new();
-            for _ in 0..count {
-                let conversation = uuid::Uuid::new_v4().to_string();
-                let started = Instant::now();
-                let id = self
-                    .host
-                    .submit(&conversation, "input", fixture.input(), None)
-                    .await
-                    .unwrap();
-                starts.insert(id, started);
-            }
-            let mut completed = Vec::with_capacity(count);
-            tokio::time::timeout(Duration::from_secs(30), async {
-                while !starts.is_empty() {
-                    if let ProgressEvent::Settled { run_id } = self
-                        .events
-                        .recv()
+            assert!((1..=CONCURRENT_TOTAL).contains(&count));
+            let host = &self.host;
+            let events = &mut self.events;
+            let submit = async {
+                let mut starts = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let conversation = uuid::Uuid::new_v4().to_string();
+                    let started = Instant::now();
+                    let id = host
+                        .submit(&conversation, "input", fixture.input(), None)
                         .await
-                        .expect("host progress channel closed")
-                        && let Some(started) = starts.remove(&run_id)
-                    {
-                        let state = self.host.status(run_id).await.unwrap();
-                        completed.push((state, started.elapsed()));
+                        .unwrap();
+                    starts.push((id, started));
+                }
+                starts
+            };
+            let observe = async {
+                let mut completed = Vec::with_capacity(count);
+                let mut seen = HashSet::with_capacity(count);
+                let mut statuses = stream::FuturesUnordered::new();
+                while completed.len() < count {
+                    tokio::select! {
+                        event = events.recv() => {
+                            if let ProgressEvent::Settled { run_id } = event.expect("host progress channel closed") {
+                                assert!(seen.insert(run_id), "duplicate settlement event");
+                                assert!(seen.len() <= count, "unexpected settlement event");
+                                statuses.push(async move {
+                                    let state = host.status(run_id).await.unwrap();
+                                    let completed_at = Instant::now();
+                                    assert!(state.is_terminal(), "settlement event preceded durable completion");
+                                    (state, completed_at)
+                                });
+                            }
+                        }
+                        result = statuses.next(), if !statuses.is_empty() => {
+                            completed.push(result.expect("missing status result"));
+                        }
                     }
                 }
-            })
+                assert!(statuses.is_empty(), "unjoined status query");
+                completed
+            };
+            tokio::time::timeout(
+                Duration::from_secs(30),
+                join_batch_observation(count, submit, observe),
+            )
             .await
-            .expect("durable concurrent benchmark failed to settle");
-            completed
+            .expect("durable concurrent benchmark failed to settle")
         }
         pub async fn close(mut self) {
             self.host.shutdown().await.unwrap();
             drop(self.host);
             self.store.close().await.unwrap();
         }
+    }
+
+    /// Poll admission and observation together. Completion may arrive before its
+    /// admission future returns, so join by RunId only after both sides finish.
+    /// Both futures are owned here: cancellation never leaves an observer task behind.
+    pub async fn join_batch_observation(
+        count: usize,
+        submit: impl Future<Output = Vec<(RunId, Instant)>>,
+        observe: impl Future<Output = Vec<(RunState, Instant)>>,
+    ) -> Vec<(RunState, Duration)> {
+        let (starts, completed) = tokio::join!(submit, observe);
+        assert_eq!(starts.len(), count, "missing admission");
+        assert_eq!(completed.len(), count, "missing completion observation");
+        let mut starts: HashMap<_, _> = starts.into_iter().collect();
+        assert_eq!(starts.len(), count, "duplicate admission ID");
+        let completed = completed
+            .into_iter()
+            .map(|(state, completed_at)| {
+                let started = starts.remove(&state.id).expect("unmatched completion ID");
+                let latency = completed_at
+                    .checked_duration_since(started)
+                    .expect("completion timestamp preceded admission");
+                (state, latency)
+            })
+            .collect();
+        assert!(starts.is_empty(), "admission was not observed completing");
+        completed
     }
     struct StopAfterRound {
         store: Arc<SqliteStore>,
