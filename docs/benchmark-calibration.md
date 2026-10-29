@@ -12,7 +12,7 @@ Run the **Runtime performance** workflow manually. Supply full 40-character base
 
 The default uses 30 Criterion samples with one-second warmup and two-second target measurement windows, plus 30 CPU and allocation samples per diagnostic case. SQLite can require longer than its target window to complete the required samples. Allocation instrumentation runs in a separate executable. The job uploads raw samples, per-capture summaries, comparison JSON, metadata and logs even after a failure.
 
-The hosted runner is one reproducible runner class, not a claim of exclusive physical hardware. Other tenants and storage variability can still affect it. The workflow serializes performance jobs in this repository. Do not run unrelated builds or tests within the measurement job; there are no laptop-wide CPU locks or idle-machine waits.
+The hosted runner is one reproducible runner class, not a claim of exclusive physical hardware. Other tenants and storage variability can still affect it. The workflow serializes jobs within each mode. A comparison and calibration can run concurrently on [separate hosted VMs](https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/choose-the-runner-for-a-job), while each job keeps its own captures sequential. Do not compare timings across those VMs as if they measured a code change. Do not run unrelated builds or tests within the measurement job; there are no laptop-wide CPU locks or idle-machine waits.
 
 The same controller works locally with two prepared clean checkouts and an output directory outside them:
 

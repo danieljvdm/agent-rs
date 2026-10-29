@@ -28,9 +28,10 @@ on:
 permissions:
   contents: read
 
-# Keep complete jobs, rather than cancelling a measurement when another is requested.
+# Each job gets its own hosted VM. Serialize each mode while allowing an independent
+# calibration job alongside a comparison; never overlap captures inside one job.
 concurrency:
-  group: runtime-performance
+  group: runtime-performance-${{ inputs.mode }}
   cancel-in-progress: false
 
 jobs:
