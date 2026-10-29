@@ -1,0 +1,1 @@
+$ /tmp/agent-bench-vgr3wn34/tmp2lkoppb0/allocations --samples 100 --output /home/runner/work/_temp/runtime-performance/01-base/allocations-minimal.json --filter minimal

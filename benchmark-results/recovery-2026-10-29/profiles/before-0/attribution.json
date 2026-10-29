@@ -1,0 +1,26 @@
+{
+  "total_bytes": 1867450,
+  "groups": {
+    "other engine work": {
+      "bytes": 236201,
+      "blocks": 1087
+    },
+    "RunState cloning": {
+      "bytes": 352812,
+      "blocks": 3243
+    },
+    "checkpoint decoding": {
+      "bytes": 1078693,
+      "blocks": 6614
+    },
+    "other work": {
+      "bytes": 5308,
+      "blocks": 37
+    },
+    "checkpoint encoding": {
+      "bytes": 194436,
+      "blocks": 169
+    }
+  },
+  "rule": "Each allocation stack counted once, first matching decode_state, write_state, RunState::clone, engine, then other."
+}

@@ -1,5 +1,7 @@
 # Runtime benchmarks
 
+The [recovery allocation optimization](recovery-2026-10-29/README.md) improves matched recovery time after 512 prior runs by 28.7% and 30.5% in two independent hosted jobs. A separate profile shows cumulative Rust allocation traffic falling from 109.3 MB to 60.7 MB (-44.5%) and peak tracked allocations from 4.89 MB to 3.35 MB (-31.6%). Suspected durable-control stalls in the first job did not recur in the larger repeat; both jobs and the uncertainty are retained in the report.
+
 The [full hosted v2 comparison and calibration](hosted-2026-10-29/README.md) both passed: eight complete captures, 19 timed workloads per capture, and 5,520 CPU/latency plus 5,520 separate allocation samples. Candidate medians ranged from -2.1% to +1.9% relative to the base; same-source variation reached 14.65% in one workload. Timings remain informational, with all raw data and unsuccessful attempts retained.
 
 The [initial 2026-10-29 comparison](initial-2026-10-29/COMPARISON.md) retains four successful same-source AB/BA captures at revision `4388ae4`: all 19 workloads, 460 CPU/latency samples, and 460 separately instrumented allocation samples. It uses the quick exploratory profile (10 Criterion samples and 5 diagnostic samples per case per capture). [Example diagnostic summary](initial-2026-10-29/00-base/DIAGNOSTICS.md) and adjacent JSON retain the raw evidence. The visible variation, including large swings in some workloads, does not support a timing gate or speedup claim.

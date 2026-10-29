@@ -1,0 +1,43 @@
+$ /tmp/agent-bench-60qaezo3/tmpukxx112o/agent_loop --bench --noplot '^(engine/minimal|sqlite/durable_four_tool_rounds|recovery/restart_to_completion/(0|512))$'
+Gnuplot not found, using plotters backend
+Benchmarking engine/minimal
+Benchmarking engine/minimal: Warming up for 1.0000 s
+Benchmarking engine/minimal: Collecting 30 samples in estimated 2.0008 s (180k iterations)
+Benchmarking engine/minimal: Analyzing
+engine/minimal          time:   [9.1475 µs 9.2012 µs 9.2759 µs]
+                        thrpt:  [107.81 Kelem/s 108.68 Kelem/s 109.32 Kelem/s]
+
+Benchmarking sqlite/durable_four_tool_rounds
+Benchmarking sqlite/durable_four_tool_rounds: Warming up for 1.0000 s
+Benchmarking sqlite/durable_four_tool_rounds: Collecting 30 samples in estimated 2.7151 s (90 iterations)
+Benchmarking sqlite/durable_four_tool_rounds: Analyzing
+sqlite/durable_four_tool_rounds
+                        time:   [12.034 ms 12.425 ms 13.027 ms]
+                        thrpt:  [76.765  elem/s 80.483  elem/s 83.095  elem/s]
+Found 2 outliers among 30 measurements (6.67%)
+  1 (3.33%) high mild
+  1 (3.33%) high severe
+
+Benchmarking recovery/restart_to_completion/0
+Benchmarking recovery/restart_to_completion/0: Warming up for 1.0000 s
+Benchmarking recovery/restart_to_completion/0: Collecting 30 samples in estimated 2.0323 s (180 iterations)
+Benchmarking recovery/restart_to_completion/0: Analyzing
+recovery/restart_to_completion/0
+                        time:   [9.3862 ms 9.6482 ms 10.070 ms]
+                        thrpt:  [99.308  elem/s 103.65  elem/s 106.54  elem/s]
+Found 2 outliers among 30 measurements (6.67%)
+  1 (3.33%) high mild
+  1 (3.33%) high severe
+Benchmarking recovery/restart_to_completion/512
+Benchmarking recovery/restart_to_completion/512: Warming up for 1.0000 s
+
+Warning: Unable to complete 30 samples in 2.0s. You may wish to increase target time to 6.2s, or reduce sample count to 10.
+Benchmarking recovery/restart_to_completion/512: Collecting 30 samples in estimated 6.2264 s (30 iterations)
+Benchmarking recovery/restart_to_completion/512: Analyzing
+recovery/restart_to_completion/512
+                        time:   [29.406 ms 31.559 ms 34.513 ms]
+                        thrpt:  [28.975  elem/s 31.686  elem/s 34.007  elem/s]
+Found 4 outliers among 30 measurements (13.33%)
+  1 (3.33%) high mild
+  3 (10.00%) high severe
+

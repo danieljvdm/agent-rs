@@ -1,0 +1,517 @@
+{
+  "status": "complete",
+  "case": "durable_four_tool_rounds",
+  "measurement": "normal uninstrumented-allocation diagnostics only",
+  "thresholds": "elapsed >=50 ms and >=90 ms, inclusive",
+  "excluded": "cancelled-v1",
+  "reference_recovery_job": "40961976724",
+  "source_checks": {
+    "7a4b5e0cd2c896ed951b41f2929f4a822c9a36a5": {
+      "sqlite_source_sha256": "d587d77d30317e8db76072cf46c51f0faf5408bcede38829b2f58047ff5d1f9b",
+      "canonical_decoder_fast_path_present": false
+    },
+    "83b187ca9423f429fd46990d693aba23fd60768b": {
+      "sqlite_source_sha256": "d587d77d30317e8db76072cf46c51f0faf5408bcede38829b2f58047ff5d1f9b",
+      "canonical_decoder_fast_path_present": false
+    }
+  },
+  "summary": {
+    "comparison-v2": {
+      "samples": 120,
+      "at_least_50ms_count": 0,
+      "at_least_90ms_count": 0,
+      "tail_elapsed_range_ms": null,
+      "tail_cpu_range_ms": null,
+      "all_elapsed_range_ms": [
+        15.848299,
+        22.891311
+      ],
+      "all_cpu_range_ms": [
+        10.973389,
+        13.20468
+      ]
+    },
+    "calibration-v2": {
+      "samples": 120,
+      "at_least_50ms_count": 0,
+      "at_least_90ms_count": 0,
+      "tail_elapsed_range_ms": null,
+      "tail_cpu_range_ms": null,
+      "all_elapsed_range_ms": [
+        15.815677,
+        27.747021
+      ],
+      "all_cpu_range_ms": [
+        11.170805,
+        13.60454
+      ]
+    }
+  },
+  "captures": [
+    {
+      "capture_path": "benchmark-results/hosted-2026-10-29/comparison-v2/00-base",
+      "metrics_path": "benchmark-results/hosted-2026-10-29/comparison-v2/00-base/metrics.json",
+      "git_revision": "7a4b5e0cd2c896ed951b41f2929f4a822c9a36a5",
+      "same_source_calibration": false,
+      "environment": {
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+        "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+        "os": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "logical_cpus": 2,
+        "processor": "AMD EPYC 7763 64-Core Processor",
+        "memory_bytes": 8317935616,
+        "tokio_workers": 4,
+        "runner_name": "GitHub Actions 1000025427",
+        "runner_image": "20261026.354.1",
+        "github_run_id": "40953367110",
+        "github_run_attempt": "1"
+      },
+      "environment_fields_different_from_recovery_job40961976724": {
+        "processor": {
+          "historical": "AMD EPYC 7763 64-Core Processor",
+          "recovery_job": "AMD EPYC 9V45 96-Core Processor"
+        },
+        "runner_name": {
+          "historical": "GitHub Actions 1000025427",
+          "recovery_job": "GitHub Actions 1000025432"
+        },
+        "github_run_id": {
+          "historical": "40953367110",
+          "recovery_job": "40961976724"
+        }
+      },
+      "samples": 30,
+      "at_least_50ms_count": 0,
+      "at_least_90ms_count": 0,
+      "elapsed_ms": {
+        "min": 16.391903,
+        "median": 17.746519999999997,
+        "mean": 18.049386933333334,
+        "p95_descriptive": 20.582564,
+        "max": 21.500215
+      },
+      "process_cpu_ms": {
+        "min": 11.392339,
+        "median": 11.9160045,
+        "max": 12.932121
+      },
+      "tail_samples": [],
+      "work_counts_each": {
+        "completed_runs": 1,
+        "model_calls": 5,
+        "tool_calls": 4,
+        "events": 40,
+        "transactions": 32,
+        "writes": 52
+      }
+    },
+    {
+      "capture_path": "benchmark-results/hosted-2026-10-29/comparison-v2/00-candidate",
+      "metrics_path": "benchmark-results/hosted-2026-10-29/comparison-v2/00-candidate/metrics.json",
+      "git_revision": "83b187ca9423f429fd46990d693aba23fd60768b",
+      "same_source_calibration": false,
+      "environment": {
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+        "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+        "os": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "logical_cpus": 2,
+        "processor": "AMD EPYC 7763 64-Core Processor",
+        "memory_bytes": 8317935616,
+        "tokio_workers": 4,
+        "runner_name": "GitHub Actions 1000025427",
+        "runner_image": "20261026.354.1",
+        "github_run_id": "40953367110",
+        "github_run_attempt": "1"
+      },
+      "environment_fields_different_from_recovery_job40961976724": {
+        "processor": {
+          "historical": "AMD EPYC 7763 64-Core Processor",
+          "recovery_job": "AMD EPYC 9V45 96-Core Processor"
+        },
+        "runner_name": {
+          "historical": "GitHub Actions 1000025427",
+          "recovery_job": "GitHub Actions 1000025432"
+        },
+        "github_run_id": {
+          "historical": "40953367110",
+          "recovery_job": "40961976724"
+        }
+      },
+      "samples": 30,
+      "at_least_50ms_count": 0,
+      "at_least_90ms_count": 0,
+      "elapsed_ms": {
+        "min": 15.848299,
+        "median": 17.6653585,
+        "mean": 18.20581406666667,
+        "p95_descriptive": 22.541799,
+        "max": 22.891311
+      },
+      "process_cpu_ms": {
+        "min": 11.100545,
+        "median": 11.627201,
+        "max": 12.624986
+      },
+      "tail_samples": [],
+      "work_counts_each": {
+        "completed_runs": 1,
+        "model_calls": 5,
+        "tool_calls": 4,
+        "events": 40,
+        "transactions": 32,
+        "writes": 52
+      }
+    },
+    {
+      "capture_path": "benchmark-results/hosted-2026-10-29/comparison-v2/01-candidate",
+      "metrics_path": "benchmark-results/hosted-2026-10-29/comparison-v2/01-candidate/metrics.json",
+      "git_revision": "83b187ca9423f429fd46990d693aba23fd60768b",
+      "same_source_calibration": false,
+      "environment": {
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+        "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+        "os": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "logical_cpus": 2,
+        "processor": "AMD EPYC 7763 64-Core Processor",
+        "memory_bytes": 8317935616,
+        "tokio_workers": 4,
+        "runner_name": "GitHub Actions 1000025427",
+        "runner_image": "20261026.354.1",
+        "github_run_id": "40953367110",
+        "github_run_attempt": "1"
+      },
+      "environment_fields_different_from_recovery_job40961976724": {
+        "processor": {
+          "historical": "AMD EPYC 7763 64-Core Processor",
+          "recovery_job": "AMD EPYC 9V45 96-Core Processor"
+        },
+        "runner_name": {
+          "historical": "GitHub Actions 1000025427",
+          "recovery_job": "GitHub Actions 1000025432"
+        },
+        "github_run_id": {
+          "historical": "40953367110",
+          "recovery_job": "40961976724"
+        }
+      },
+      "samples": 30,
+      "at_least_50ms_count": 0,
+      "at_least_90ms_count": 0,
+      "elapsed_ms": {
+        "min": 16.314364,
+        "median": 18.782949000000002,
+        "mean": 19.148709333333333,
+        "p95_descriptive": 21.555192,
+        "max": 22.096404
+      },
+      "process_cpu_ms": {
+        "min": 11.158479,
+        "median": 12.512284000000001,
+        "max": 13.20468
+      },
+      "tail_samples": [],
+      "work_counts_each": {
+        "completed_runs": 1,
+        "model_calls": 5,
+        "tool_calls": 4,
+        "events": 40,
+        "transactions": 32,
+        "writes": 52
+      }
+    },
+    {
+      "capture_path": "benchmark-results/hosted-2026-10-29/comparison-v2/01-base",
+      "metrics_path": "benchmark-results/hosted-2026-10-29/comparison-v2/01-base/metrics.json",
+      "git_revision": "7a4b5e0cd2c896ed951b41f2929f4a822c9a36a5",
+      "same_source_calibration": false,
+      "environment": {
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+        "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+        "os": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "logical_cpus": 2,
+        "processor": "AMD EPYC 7763 64-Core Processor",
+        "memory_bytes": 8317935616,
+        "tokio_workers": 4,
+        "runner_name": "GitHub Actions 1000025427",
+        "runner_image": "20261026.354.1",
+        "github_run_id": "40953367110",
+        "github_run_attempt": "1"
+      },
+      "environment_fields_different_from_recovery_job40961976724": {
+        "processor": {
+          "historical": "AMD EPYC 7763 64-Core Processor",
+          "recovery_job": "AMD EPYC 9V45 96-Core Processor"
+        },
+        "runner_name": {
+          "historical": "GitHub Actions 1000025427",
+          "recovery_job": "GitHub Actions 1000025432"
+        },
+        "github_run_id": {
+          "historical": "40953367110",
+          "recovery_job": "40961976724"
+        }
+      },
+      "samples": 30,
+      "at_least_50ms_count": 0,
+      "at_least_90ms_count": 0,
+      "elapsed_ms": {
+        "min": 16.279953,
+        "median": 17.215269499999998,
+        "mean": 17.560032733333333,
+        "p95_descriptive": 20.595383,
+        "max": 20.913604
+      },
+      "process_cpu_ms": {
+        "min": 10.973389,
+        "median": 11.635706,
+        "max": 12.446416
+      },
+      "tail_samples": [],
+      "work_counts_each": {
+        "completed_runs": 1,
+        "model_calls": 5,
+        "tool_calls": 4,
+        "events": 40,
+        "transactions": 32,
+        "writes": 52
+      }
+    },
+    {
+      "capture_path": "benchmark-results/hosted-2026-10-29/calibration-v2/00-base",
+      "metrics_path": "benchmark-results/hosted-2026-10-29/calibration-v2/00-base/metrics.json",
+      "git_revision": "83b187ca9423f429fd46990d693aba23fd60768b",
+      "same_source_calibration": true,
+      "environment": {
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+        "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+        "os": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "logical_cpus": 2,
+        "processor": "AMD EPYC 7763 64-Core Processor",
+        "memory_bytes": 8317935616,
+        "tokio_workers": 4,
+        "runner_name": "GitHub Actions 1000025429",
+        "runner_image": "20261026.354.1",
+        "github_run_id": "40953797286",
+        "github_run_attempt": "1"
+      },
+      "environment_fields_different_from_recovery_job40961976724": {
+        "processor": {
+          "historical": "AMD EPYC 7763 64-Core Processor",
+          "recovery_job": "AMD EPYC 9V45 96-Core Processor"
+        },
+        "runner_name": {
+          "historical": "GitHub Actions 1000025429",
+          "recovery_job": "GitHub Actions 1000025432"
+        },
+        "github_run_id": {
+          "historical": "40953797286",
+          "recovery_job": "40961976724"
+        }
+      },
+      "samples": 30,
+      "at_least_50ms_count": 0,
+      "at_least_90ms_count": 0,
+      "elapsed_ms": {
+        "min": 15.815677,
+        "median": 16.78107,
+        "mean": 17.002973833333332,
+        "p95_descriptive": 18.638147,
+        "max": 21.348844
+      },
+      "process_cpu_ms": {
+        "min": 11.176379,
+        "median": 11.649821,
+        "max": 12.040429
+      },
+      "tail_samples": [],
+      "work_counts_each": {
+        "completed_runs": 1,
+        "model_calls": 5,
+        "tool_calls": 4,
+        "events": 40,
+        "transactions": 32,
+        "writes": 52
+      }
+    },
+    {
+      "capture_path": "benchmark-results/hosted-2026-10-29/calibration-v2/00-candidate",
+      "metrics_path": "benchmark-results/hosted-2026-10-29/calibration-v2/00-candidate/metrics.json",
+      "git_revision": "83b187ca9423f429fd46990d693aba23fd60768b",
+      "same_source_calibration": true,
+      "environment": {
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+        "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+        "os": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "logical_cpus": 2,
+        "processor": "AMD EPYC 7763 64-Core Processor",
+        "memory_bytes": 8317935616,
+        "tokio_workers": 4,
+        "runner_name": "GitHub Actions 1000025429",
+        "runner_image": "20261026.354.1",
+        "github_run_id": "40953797286",
+        "github_run_attempt": "1"
+      },
+      "environment_fields_different_from_recovery_job40961976724": {
+        "processor": {
+          "historical": "AMD EPYC 7763 64-Core Processor",
+          "recovery_job": "AMD EPYC 9V45 96-Core Processor"
+        },
+        "runner_name": {
+          "historical": "GitHub Actions 1000025429",
+          "recovery_job": "GitHub Actions 1000025432"
+        },
+        "github_run_id": {
+          "historical": "40953797286",
+          "recovery_job": "40961976724"
+        }
+      },
+      "samples": 30,
+      "at_least_50ms_count": 0,
+      "at_least_90ms_count": 0,
+      "elapsed_ms": {
+        "min": 16.013906,
+        "median": 16.512304,
+        "mean": 17.055947866666667,
+        "p95_descriptive": 18.553066,
+        "max": 27.105683
+      },
+      "process_cpu_ms": {
+        "min": 11.170805,
+        "median": 11.506987500000001,
+        "max": 12.140076
+      },
+      "tail_samples": [],
+      "work_counts_each": {
+        "completed_runs": 1,
+        "model_calls": 5,
+        "tool_calls": 4,
+        "events": 40,
+        "transactions": 32,
+        "writes": 52
+      }
+    },
+    {
+      "capture_path": "benchmark-results/hosted-2026-10-29/calibration-v2/01-candidate",
+      "metrics_path": "benchmark-results/hosted-2026-10-29/calibration-v2/01-candidate/metrics.json",
+      "git_revision": "83b187ca9423f429fd46990d693aba23fd60768b",
+      "same_source_calibration": true,
+      "environment": {
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+        "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+        "os": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "logical_cpus": 2,
+        "processor": "AMD EPYC 7763 64-Core Processor",
+        "memory_bytes": 8317935616,
+        "tokio_workers": 4,
+        "runner_name": "GitHub Actions 1000025429",
+        "runner_image": "20261026.354.1",
+        "github_run_id": "40953797286",
+        "github_run_attempt": "1"
+      },
+      "environment_fields_different_from_recovery_job40961976724": {
+        "processor": {
+          "historical": "AMD EPYC 7763 64-Core Processor",
+          "recovery_job": "AMD EPYC 9V45 96-Core Processor"
+        },
+        "runner_name": {
+          "historical": "GitHub Actions 1000025429",
+          "recovery_job": "GitHub Actions 1000025432"
+        },
+        "github_run_id": {
+          "historical": "40953797286",
+          "recovery_job": "40961976724"
+        }
+      },
+      "samples": 30,
+      "at_least_50ms_count": 0,
+      "at_least_90ms_count": 0,
+      "elapsed_ms": {
+        "min": 16.630479,
+        "median": 18.244763,
+        "mean": 18.423382633333333,
+        "p95_descriptive": 19.680966,
+        "max": 25.980184
+      },
+      "process_cpu_ms": {
+        "min": 11.40443,
+        "median": 12.478233,
+        "max": 13.60454
+      },
+      "tail_samples": [],
+      "work_counts_each": {
+        "completed_runs": 1,
+        "model_calls": 5,
+        "tool_calls": 4,
+        "events": 40,
+        "transactions": 32,
+        "writes": 52
+      }
+    },
+    {
+      "capture_path": "benchmark-results/hosted-2026-10-29/calibration-v2/01-base",
+      "metrics_path": "benchmark-results/hosted-2026-10-29/calibration-v2/01-base/metrics.json",
+      "git_revision": "83b187ca9423f429fd46990d693aba23fd60768b",
+      "same_source_calibration": true,
+      "environment": {
+        "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+        "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+        "os": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+        "machine": "x86_64",
+        "logical_cpus": 2,
+        "processor": "AMD EPYC 7763 64-Core Processor",
+        "memory_bytes": 8317935616,
+        "tokio_workers": 4,
+        "runner_name": "GitHub Actions 1000025429",
+        "runner_image": "20261026.354.1",
+        "github_run_id": "40953797286",
+        "github_run_attempt": "1"
+      },
+      "environment_fields_different_from_recovery_job40961976724": {
+        "processor": {
+          "historical": "AMD EPYC 7763 64-Core Processor",
+          "recovery_job": "AMD EPYC 9V45 96-Core Processor"
+        },
+        "runner_name": {
+          "historical": "GitHub Actions 1000025429",
+          "recovery_job": "GitHub Actions 1000025432"
+        },
+        "github_run_id": {
+          "historical": "40953797286",
+          "recovery_job": "40961976724"
+        }
+      },
+      "samples": 30,
+      "at_least_50ms_count": 0,
+      "at_least_90ms_count": 0,
+      "elapsed_ms": {
+        "min": 16.152662,
+        "median": 17.966700000000003,
+        "mean": 18.5352053,
+        "p95_descriptive": 23.383445,
+        "max": 27.747021
+      },
+      "process_cpu_ms": {
+        "min": 11.306928,
+        "median": 12.312335000000001,
+        "max": 12.684921
+      },
+      "tail_samples": [],
+      "work_counts_each": {
+        "completed_runs": 1,
+        "model_calls": 5,
+        "tool_calls": 4,
+        "events": 40,
+        "transactions": 32,
+        "writes": 52
+      }
+    }
+  ],
+  "interpretation": "No >=50ms or >=90ms durable normal-diagnostic stalls were found in any of the 240 retained historical v2 samples. All sampled revisions use the same SQLite source hash as the new comparison baseline and predate the canonical decoder fast path. These historical jobs used AMD EPYC7763 runners and full-suite process layout, versus the new focused job on AMD EPYC9V45; absence of historical stalls is not matched causal evidence for the optimization and does not settle the new candidate-only tails."
+}

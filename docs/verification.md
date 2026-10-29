@@ -58,3 +58,11 @@ The subsequent `agent-loop-v2` fixture corrects delayed SQLite batch observation
 [Hosted CI at `83b187c`](https://github.com/danieljvdm/agent-rs/actions/runs/40953366853) passed the full 55-test Rust suite, all four reporter tests, the 19 benchmark correctness cases, Clippy with warnings denied, formatting, and the engine-only build on the pinned compiler.
 
 The [full hosted v2 comparison and same-source calibration](../benchmark-results/hosted-2026-10-29/README.md) both passed. All eight captures contain the expected 19 timed workloads and complete CPU/allocation diagnostics, with matching fixtures and explicit source/toolchain identities. The comparison's median changes range from -2.1% to +1.9%; the separate calibration shows workload-dependent noise up to 14.65%. Timing gates remain informational pending independent repeated calibration. Failed setup and superseded/cancelled attempts remain in the evidence ledger.
+
+## Recovery decoder optimization
+
+[CI at `5cd69a7`](https://github.com/danieljvdm/agent-rs/actions/runs/40961977208) passed **59 Rust tests**, including four new checkpoint-format compatibility tests, all eight benchmark-controller integrity tests, and all 19 benchmark correctness cases. Formatting, Clippy with warnings denied, and the engine-only build also passed on Rust 1.99.1. The subprocess helper and opt-in soak remain the two tests ignored by the default command.
+
+A separate [60-second soak](../benchmark-results/recovery-2026-10-29/process-soak.txt) completed **217 SIGKILL/relaunch cycles** with the pending deadline and active-work budget preserved. The three scripted personal-workflow tests passed; live-model evaluation was not rerun for this decoder change. The [recovery optimization report](../benchmark-results/recovery-2026-10-29/README.md) retains the allocation profiles and matched timing evidence.
+
+Two independent hosted comparisons verify eight complete captures with unchanged fixture bytes and work counts. Long-history recovery improves by 28.7% and 30.5% in elapsed time and 36.5% and 37.9% in CPU time. Both show 44.5% less cumulative allocation traffic. The first job's candidate-only durable latency spikes did not recur in the larger repeat (200 normal samples per side); the report retains both findings and the unresolved cause instead of discarding slow samples.

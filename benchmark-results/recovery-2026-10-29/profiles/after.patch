@@ -1,0 +1,22 @@
+diff --git a/src/sqlite.rs b/src/sqlite.rs
+index 4581105..1a34d21 100644
+--- a/src/sqlite.rs
++++ b/src/sqlite.rs
+@@ -65,6 +65,17 @@ fn encode(value: &impl serde::Serialize) -> Result<String> {
+     serde_json::to_string(value).map_err(storage)
+ }
+ fn decode_state(text: &str) -> Result<RunState> {
++    // Our writer emits canonical struct JSON. Decode that directly, avoiding an
++    // intermediate Value tree for the (potentially large) retained context.
++    // Exact re-encoding keeps alternate forms on the compatibility path below:
++    // duplicates, unknown fields, positional arrays and malformed data retain
++    // the same version checks, acceptance rules and diagnostics as before.
++    if let Ok(state) = serde_json::from_str::<RunState>(text)
++        && state.version == STATE_VERSION
++        && serde_json::to_string(&state).is_ok_and(|encoded| encoded == text)
++    {
++        return Ok(state);
++    }
+     let value: Value = serde_json::from_str(text).map_err(storage)?;
+     if value.get("version").and_then(Value::as_u64) != Some(STATE_VERSION.into()) {
+         return Err(Error::Incompatible("checkpoint state version".into()));

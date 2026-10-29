@@ -1,0 +1,224 @@
+{
+  "suite": "recovery",
+  "identical_source": false,
+  "cohorts": 2,
+  "independent_jobs": 1,
+  "timing_gate_enabled": false,
+  "calibration_status": "independent-job variance not established",
+  "work_counts": {
+    "durable_four_tool_rounds": {
+      "runs": 1,
+      "model_calls": 5,
+      "tool_calls": 4
+    },
+    "minimal": {
+      "runs": 1,
+      "model_calls": 1,
+      "tool_calls": 0
+    },
+    "recovery_prior_runs_0": {
+      "runs": 1,
+      "model_calls": 4,
+      "tool_calls": 3
+    },
+    "recovery_prior_runs_512": {
+      "runs": 1,
+      "model_calls": 4,
+      "tool_calls": 3
+    }
+  },
+  "workloads": [
+    {
+      "case": "engine/minimal",
+      "base_cohort_medians_ns": [
+        9573.802570921986,
+        9369.724074775799
+      ],
+      "candidate_cohort_medians_ns": [
+        9129.295911989797,
+        9318.965805457428
+      ],
+      "base_distribution_ns": {
+        "count": 2,
+        "median": 9471.763322848892,
+        "min": 9369.724074775799,
+        "max": 9573.802570921986,
+        "median_absolute_deviation": 102.0392480730934
+      },
+      "candidate_distribution_ns": {
+        "count": 2,
+        "median": 9224.130858723613,
+        "min": 9129.295911989797,
+        "max": 9318.965805457428,
+        "median_absolute_deviation": 94.83494673381574
+      },
+      "percent_change": -2.6144283348794373,
+      "paired_absolute_changes_ns": [
+        -444.50665893218866,
+        -50.75826931837037
+      ],
+      "paired_relative_changes_pct": [
+        -4.642947832267463,
+        -0.5417264042493652
+      ],
+      "paired_absolute_change_distribution_ns": {
+        "count": 2,
+        "median": -247.6324641252795,
+        "min": -444.50665893218866,
+        "max": -50.75826931837037,
+        "median_absolute_deviation": 196.87419480690914
+      },
+      "paired_relative_change_distribution_pct": {
+        "count": 2,
+        "median": -2.5923371182584143,
+        "min": -4.642947832267463,
+        "max": -0.5417264042493652,
+        "median_absolute_deviation": 2.050610714009049
+      }
+    },
+    {
+      "case": "recovery/restart_to_completion/0",
+      "base_cohort_medians_ns": [
+        10053305.583333332,
+        10012714.583333332
+      ],
+      "candidate_cohort_medians_ns": [
+        9522929.357142858,
+        9427206.333333332
+      ],
+      "base_distribution_ns": {
+        "count": 2,
+        "median": 10033010.083333332,
+        "min": 10012714.583333332,
+        "max": 10053305.583333332,
+        "median_absolute_deviation": 20295.5
+      },
+      "candidate_distribution_ns": {
+        "count": 2,
+        "median": 9475067.845238095,
+        "min": 9427206.333333332,
+        "max": 9522929.357142858,
+        "median_absolute_deviation": 47861.51190476306
+      },
+      "percent_change": -5.5610652581928655,
+      "paired_absolute_changes_ns": [
+        -530376.2261904739,
+        -585508.25
+      ],
+      "paired_relative_changes_pct": [
+        -5.275640154316474,
+        -5.847647459906701
+      ],
+      "paired_absolute_change_distribution_ns": {
+        "count": 2,
+        "median": -557942.238095237,
+        "min": -585508.25,
+        "max": -530376.2261904739,
+        "median_absolute_deviation": 27566.011904763058
+      },
+      "paired_relative_change_distribution_pct": {
+        "count": 2,
+        "median": -5.561643807111588,
+        "min": -5.847647459906701,
+        "max": -5.275640154316474,
+        "median_absolute_deviation": 0.2860036527951135
+      }
+    },
+    {
+      "case": "recovery/restart_to_completion/512",
+      "base_cohort_medians_ns": [
+        40320632.5,
+        39024483.0
+      ],
+      "candidate_cohort_medians_ns": [
+        27832770.0,
+        28734764.0
+      ],
+      "base_distribution_ns": {
+        "count": 2,
+        "median": 39672557.75,
+        "min": 39024483.0,
+        "max": 40320632.5,
+        "median_absolute_deviation": 648074.75
+      },
+      "candidate_distribution_ns": {
+        "count": 2,
+        "median": 28283767.0,
+        "min": 27832770.0,
+        "max": 28734764.0,
+        "median_absolute_deviation": 450997.0
+      },
+      "percent_change": -28.70697377710667,
+      "paired_absolute_changes_ns": [
+        -12487862.5,
+        -10289719.0
+      ],
+      "paired_relative_changes_pct": [
+        -30.971395351995035,
+        -26.36734226562335
+      ],
+      "paired_absolute_change_distribution_ns": {
+        "count": 2,
+        "median": -11388790.75,
+        "min": -12487862.5,
+        "max": -10289719.0,
+        "median_absolute_deviation": 1099071.75
+      },
+      "paired_relative_change_distribution_pct": {
+        "count": 2,
+        "median": -28.669368808809192,
+        "min": -30.971395351995035,
+        "max": -26.36734226562335,
+        "median_absolute_deviation": 2.3020265431858427
+      }
+    },
+    {
+      "case": "sqlite/durable_four_tool_rounds",
+      "base_cohort_medians_ns": [
+        13155249.0,
+        12689768.5
+      ],
+      "candidate_cohort_medians_ns": [
+        13292587.5,
+        11995979.666666668
+      ],
+      "base_distribution_ns": {
+        "count": 2,
+        "median": 12922508.75,
+        "min": 12689768.5,
+        "max": 13155249.0,
+        "median_absolute_deviation": 232740.25
+      },
+      "candidate_distribution_ns": {
+        "count": 2,
+        "median": 12644283.583333334,
+        "min": 11995979.666666668,
+        "max": 13292587.5,
+        "median_absolute_deviation": 648303.916666666
+      },
+      "percent_change": -2.1530274968215135,
+      "paired_absolute_changes_ns": [
+        137338.5,
+        -693788.8333333321
+      ],
+      "paired_relative_changes_pct": [
+        1.0439825198291564,
+        -5.467308827054895
+      ],
+      "paired_absolute_change_distribution_ns": {
+        "count": 2,
+        "median": -278225.16666666605,
+        "min": -693788.8333333321,
+        "max": 137338.5,
+        "median_absolute_deviation": 415563.66666666605
+      },
+      "paired_relative_change_distribution_pct": {
+        "count": 2,
+        "median": -2.2116631536128692,
+        "min": -5.467308827054895,
+        "max": 1.0439825198291564,
+        "median_absolute_deviation": 3.2556456734420256
+      }
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+[
+  {
+    "case": "engine/minimal",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 10085.326011080333,
+    "median_interval_lower_ns": 10030.2738402267,
+    "median_interval_upper_ns": 10159.71414721013,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 10085.326011080333,
+      "min": 9855.451708217914,
+      "max": 14187.399543751018,
+      "median_absolute_deviation": 85.56480015829038
+    }
+  },
+  {
+    "case": "recovery/restart_to_completion/0",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 10412824.9,
+    "median_interval_lower_ns": 10149466.0,
+    "median_interval_upper_ns": 10514290.0,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 10412824.9,
+      "min": 9693549.2,
+      "max": 11456155.2,
+      "median_absolute_deviation": 284338.30000000075
+    }
+  },
+  {
+    "case": "recovery/restart_to_completion/512",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 43928720.0,
+    "median_interval_lower_ns": 42881805.0,
+    "median_interval_upper_ns": 44344034.999999985,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 43928720.0,
+      "min": 40701376.0,
+      "max": 158409727.0,
+      "median_absolute_deviation": 1506282.0
+    }
+  },
+  {
+    "case": "sqlite/durable_four_tool_rounds",
+    "runs_per_iteration": 1,
+    "median_ns_per_run": 13556611.166666668,
+    "median_interval_lower_ns": 13373896.333333332,
+    "median_interval_upper_ns": 13698557.666666668,
+    "normalized_iteration_ns_per_run": {
+      "count": 30,
+      "median": 13556611.166666668,
+      "min": 13040667.0,
+      "max": 14554110.0,
+      "median_absolute_deviation": 224425.1666666679
+    }
+  }
+]

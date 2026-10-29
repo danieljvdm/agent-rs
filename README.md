@@ -86,4 +86,6 @@ cargo bench --bench agent_loop --locked
 
 The manual [performance workflow](.github/workflows/performance.yml) runs longer comparisons or same-source calibration on one hosted Linux runner. [Calibration notes](docs/benchmark-calibration.md) explain the paired measurements and why timing gates remain informational until enough independent runs establish useful thresholds.
 
+[Recovery profiling](docs/recovery-profiling.md) describes the allocation-stack capture and the focused recovery comparison suite.
+
 This is a Rust-only initial implementation. There are no distributed leases, Node bindings, Cloudflare adapter, arbitrary active-run input joining, agent graphs, or placeholder subagent/MCP services.

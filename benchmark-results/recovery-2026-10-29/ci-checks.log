@@ -1,0 +1,332 @@
+check	Run rustc --version && cargo clippy --version	﻿2026-10-29T21:57:22.9027276Z ##[group]Run rustc --version && cargo clippy --version
+check	Run rustc --version && cargo clippy --version	2026-10-29T21:57:22.9028219Z ^[[36;1mrustc --version && cargo clippy --version^[[0m
+check	Run rustc --version && cargo clippy --version	2026-10-29T21:57:22.9056831Z shell: /usr/bin/bash -e {0}
+check	Run rustc --version && cargo clippy --version	2026-10-29T21:57:22.9057219Z env:
+check	Run rustc --version && cargo clippy --version	2026-10-29T21:57:22.9057532Z   CARGO_INCREMENTAL: 0
+check	Run rustc --version && cargo clippy --version	2026-10-29T21:57:22.9057893Z   CARGO_PROFILE_DEV_DEBUG: 0
+check	Run rustc --version && cargo clippy --version	2026-10-29T21:57:22.9058269Z   CARGO_TERM_COLOR: always
+check	Run rustc --version && cargo clippy --version	2026-10-29T21:57:22.9058629Z   RUST_BACKTRACE: short
+check	Run rustc --version && cargo clippy --version	2026-10-29T21:57:22.9059193Z   CARGO_BUILD_WARNINGS: deny
+check	Run rustc --version && cargo clippy --version	2026-10-29T21:57:22.9059589Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+check	Run rustc --version && cargo clippy --version	2026-10-29T21:57:22.9060093Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+check	Run rustc --version && cargo clippy --version	2026-10-29T21:57:22.9060628Z   CACHE_ON_FAILURE: true
+check	Run rustc --version && cargo clippy --version	2026-10-29T21:57:22.9061035Z ##[endgroup]
+check	Run rustc --version && cargo clippy --version	2026-10-29T21:57:23.1487295Z rustc 1.99.1 (58cf8f9c3 2026-10-13)
+check	Run rustc --version && cargo clippy --version	2026-10-29T21:57:23.1983508Z clippy 0.1.99 (58cf8f9c35 2026-10-13)
+check	Run cargo fmt --check	﻿2026-10-29T21:57:23.4095861Z ##[group]Run cargo fmt --check
+check	Run cargo fmt --check	2026-10-29T21:57:23.4096541Z ^[[36;1mcargo fmt --check^[[0m
+check	Run cargo fmt --check	2026-10-29T21:57:23.4117149Z shell: /usr/bin/bash -e {0}
+check	Run cargo fmt --check	2026-10-29T21:57:23.4117455Z env:
+check	Run cargo fmt --check	2026-10-29T21:57:23.4117685Z   CARGO_INCREMENTAL: 0
+check	Run cargo fmt --check	2026-10-29T21:57:23.4117971Z   CARGO_PROFILE_DEV_DEBUG: 0
+check	Run cargo fmt --check	2026-10-29T21:57:23.4118263Z   CARGO_TERM_COLOR: always
+check	Run cargo fmt --check	2026-10-29T21:57:23.4118570Z   RUST_BACKTRACE: short
+check	Run cargo fmt --check	2026-10-29T21:57:23.4119077Z   CARGO_BUILD_WARNINGS: deny
+check	Run cargo fmt --check	2026-10-29T21:57:23.4119389Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+check	Run cargo fmt --check	2026-10-29T21:57:23.4119755Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+check	Run cargo fmt --check	2026-10-29T21:57:23.4120114Z   CACHE_ON_FAILURE: true
+check	Run cargo fmt --check	2026-10-29T21:57:23.4120383Z ##[endgroup]
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	﻿2026-10-29T21:57:25.6545221Z ##[group]Run cargo clippy --all-targets --all-features --locked -- -D warnings
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:25.6545924Z ^[[36;1mcargo clippy --all-targets --all-features --locked -- -D warnings^[[0m
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:25.6565685Z shell: /usr/bin/bash -e {0}
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:25.6565987Z env:
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:25.6566219Z   CARGO_INCREMENTAL: 0
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:25.6566494Z   CARGO_PROFILE_DEV_DEBUG: 0
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:25.6566791Z   CARGO_TERM_COLOR: always
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:25.6567073Z   RUST_BACKTRACE: short
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:25.6567348Z   CARGO_BUILD_WARNINGS: deny
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:25.6567652Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:25.6568015Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:25.6568565Z   CACHE_ON_FAILURE: true
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:25.6569146Z ##[endgroup]
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:25.7385194Z ^[[1m^[[92m    Updating^[[0m crates.io index
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:25.8138479Z ^[[1m^[[92m Downloading^[[0m crates ...
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.6251130Z ^[[1m^[[92m  Downloaded^[[0m addr2line v0.27.1
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.6269123Z ^[[1m^[[92m  Downloaded^[[0m adler2 v2.0.1
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.6282190Z ^[[1m^[[92m  Downloaded^[[0m backtrace v0.3.77
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.6332074Z ^[[1m^[[92m  Downloaded^[[0m dhat v0.3.3
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.6353183Z ^[[1m^[[92m  Downloaded^[[0m gimli v0.34.0
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.6427913Z ^[[1m^[[92m  Downloaded^[[0m lazy_static v1.5.1
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.6445709Z ^[[1m^[[92m  Downloaded^[[0m lock_api v0.4.14
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.6459139Z ^[[1m^[[92m  Downloaded^[[0m mintex v0.1.4
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.6467768Z ^[[1m^[[92m  Downloaded^[[0m miniz_oxide v0.9.1
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.6492641Z ^[[1m^[[92m  Downloaded^[[0m object v0.40.0
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.6624830Z ^[[1m^[[92m  Downloaded^[[0m parking_lot_core v0.9.12
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.6645905Z ^[[1m^[[92m  Downloaded^[[0m parking_lot v0.12.5
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.6671086Z ^[[1m^[[92m  Downloaded^[[0m rustc-demangle v0.1.28
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.6688050Z ^[[1m^[[92m  Downloaded^[[0m rustc-hash v1.1.0
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.6697202Z ^[[1m^[[92m  Downloaded^[[0m scopeguard v1.2.0
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.6709770Z ^[[1m^[[92m  Downloaded^[[0m thousands v0.2.0
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.7188032Z ^[[1m^[[92m   Compiling^[[0m parking_lot_core v0.9.12
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.7218550Z ^[[1m^[[92m    Checking^[[0m gimli v0.34.0
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.8581120Z ^[[1m^[[92m    Checking^[[0m scopeguard v1.2.0
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.8940916Z ^[[1m^[[92m    Checking^[[0m adler2 v2.0.1
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:26.9321265Z ^[[1m^[[92m    Checking^[[0m miniz_oxide v0.9.1
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:27.0881366Z ^[[1m^[[92m    Checking^[[0m lock_api v0.4.14
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:27.3584544Z ^[[1m^[[92m    Checking^[[0m object v0.40.0
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:28.9010205Z ^[[1m^[[92m    Checking^[[0m addr2line v0.27.1
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:29.1440202Z ^[[1m^[[92m    Checking^[[0m rustc-demangle v0.1.28
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:29.3340498Z ^[[1m^[[92m    Checking^[[0m parking_lot v0.12.5
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:29.4778478Z ^[[1m^[[92m    Checking^[[0m mintex v0.1.4
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:29.5185106Z ^[[1m^[[92m    Checking^[[0m thousands v0.2.0
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:29.5717820Z ^[[1m^[[92m    Checking^[[0m rustc-hash v1.1.0
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:29.6107616Z ^[[1m^[[92m    Checking^[[0m lazy_static v1.5.1
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:29.6450374Z ^[[1m^[[92m    Checking^[[0m yielded-agent v0.1.0 (/home/runner/work/agent-rs/agent-rs)
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:31.9825255Z ^[[1m^[[92m    Checking^[[0m backtrace v0.3.77
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:32.1561421Z ^[[1m^[[92m    Checking^[[0m dhat v0.3.3
+check	Run cargo clippy --all-targets --all-features --locked -- -D warnings	2026-10-29T21:57:35.3857585Z ^[[1m^[[92m    Finished^[[0m `dev` profile [unoptimized] target(s) in 9.67s
+check	Run cargo test --all-features --locked	﻿2026-10-29T21:57:35.4158662Z ##[group]Run cargo test --all-features --locked
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.4160091Z ^[[36;1mcargo test --all-features --locked^[[0m
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.4187523Z shell: /usr/bin/bash -e {0}
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.4187968Z env:
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.4188329Z   CARGO_INCREMENTAL: 0
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.4188747Z   CARGO_PROFILE_DEV_DEBUG: 0
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.4189594Z   CARGO_TERM_COLOR: always
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.4190017Z   RUST_BACKTRACE: short
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.4190423Z   CARGO_BUILD_WARNINGS: deny
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.4190868Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.4191404Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.4191964Z   CACHE_ON_FAILURE: true
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.4192368Z ##[endgroup]
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.6020606Z ^[[1m^[[92m   Compiling^[[0m scopeguard v1.2.0
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.6021838Z ^[[1m^[[92m   Compiling^[[0m adler2 v2.0.1
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.6405999Z ^[[1m^[[92m   Compiling^[[0m gimli v0.34.0
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.6610196Z ^[[1m^[[92m   Compiling^[[0m miniz_oxide v0.9.1
+check	Run cargo test --all-features --locked	2026-10-29T21:57:35.9053427Z ^[[1m^[[92m   Compiling^[[0m lock_api v0.4.14
+check	Run cargo test --all-features --locked	2026-10-29T21:57:36.0880567Z ^[[1m^[[92m   Compiling^[[0m parking_lot_core v0.9.12
+check	Run cargo test --all-features --locked	2026-10-29T21:57:36.2639389Z ^[[1m^[[92m   Compiling^[[0m object v0.40.0
+check	Run cargo test --all-features --locked	2026-10-29T21:57:38.3420608Z ^[[1m^[[92m   Compiling^[[0m addr2line v0.27.1
+check	Run cargo test --all-features --locked	2026-10-29T21:57:38.6260877Z ^[[1m^[[92m   Compiling^[[0m rustc-demangle v0.1.28
+check	Run cargo test --all-features --locked	2026-10-29T21:57:38.9780866Z ^[[1m^[[92m   Compiling^[[0m parking_lot v0.12.5
+check	Run cargo test --all-features --locked	2026-10-29T21:57:39.2780158Z ^[[1m^[[92m   Compiling^[[0m mintex v0.1.4
+check	Run cargo test --all-features --locked	2026-10-29T21:57:39.3240318Z ^[[1m^[[92m   Compiling^[[0m thousands v0.2.0
+check	Run cargo test --all-features --locked	2026-10-29T21:57:39.4100963Z ^[[1m^[[92m   Compiling^[[0m rustc-hash v1.1.0
+check	Run cargo test --all-features --locked	2026-10-29T21:57:39.4540561Z ^[[1m^[[92m   Compiling^[[0m lazy_static v1.5.1
+check	Run cargo test --all-features --locked	2026-10-29T21:57:39.4911223Z ^[[1m^[[92m   Compiling^[[0m yielded-agent v0.1.0 (/home/runner/work/agent-rs/agent-rs)
+check	Run cargo test --all-features --locked	2026-10-29T21:57:42.1953988Z ^[[1m^[[92m   Compiling^[[0m backtrace v0.3.77
+check	Run cargo test --all-features --locked	2026-10-29T21:57:43.0120428Z ^[[1m^[[92m   Compiling^[[0m dhat v0.3.3
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.8967216Z ^[[1m^[[92m    Finished^[[0m `test` profile [unoptimized] target(s) in 17.43s
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.9114878Z ^[[1m^[[92m     Running^[[0m unittests src/lib.rs (target/debug/deps/yielded_agent-648da8be127c8cb0)
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.9130763Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.9131287Z running 6 tests
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.9176082Z test openai::tests::payload_and_unterminated_wire_data_are_bounded ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.9177223Z test openai::tests::protocol_failures_never_publish_completed_response ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.9178241Z test openai::tests::request_wraps_scalar_schema_and_preserves_tool_groups ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.9180679Z test openai::tests::tool_arguments_collect_in_index_order_and_require_valid_complete_json ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.9225997Z test openai::tests::every_byte_boundary_preserves_unicode_and_complete_response ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.9326266Z test sqlite::tests::failure_during_retirement_rolls_back_history_terminal_state_and_checkpoint ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.9327630Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.9328648Z test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.9329736Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.9340924Z ^[[1m^[[92m     Running^[[0m tests/benchmark_observation.rs (target/debug/deps/benchmark_observation-46bb4500e6eb06f5)
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.9347858Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.9348288Z running 2 tests
+check	Run cargo test --all-features --locked	2026-10-29T21:57:52.9362317Z test observes_early_completion_before_later_admission_finishes ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.1035389Z test every_public_completion_is_observed_once_while_submitting_a_full_batch ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.1035944Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.1036322Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.17s
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.1036811Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.1045846Z ^[[1m^[[92m     Running^[[0m tests/checkpoint_format.rs (target/debug/deps/checkpoint_format-93fceef34a0b9438)
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.1061804Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.1062292Z running 4 tests
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.1293320Z test completed_payload_respects_the_checkpoint_nesting_limit ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.1609829Z test compatible_checkpoint_encodings_preserve_state_and_last_duplicate_values ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.3060569Z test nested_json_numbers_keep_their_types_and_negative_zero ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.3374694Z test invalid_checkpoint_encodings_keep_version_and_storage_errors_distinct ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.3375728Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.3376699Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.3377864Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.3380707Z ^[[1m^[[92m     Running^[[0m tests/durability.rs (target/debug/deps/durability-27b62ede42bbd3bc)
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.3396877Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.3397283Z running 14 tests
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.3579824Z test acceptance_is_durable_idempotent_and_exclusive ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.3828095Z test approval_and_input_waits_survive_restart_and_duplicate_resolution_rejects ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.4026174Z test incompatible_binding_is_visible_and_stays_blocked_until_repaired ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.4290551Z test late_error_cannot_suppress_cancel_resolution_or_repair ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.4490260Z test ordinary_dispatched_effect_recovers_as_unknown_and_can_be_reconciled ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.4755108Z test repaired_binding_retries_abandoned_dispatch_behind_an_input_wait ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5178484Z test safe_dispatched_sibling_with_wait_is_recovered_once_without_busy_loop ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5381268Z test safe_retry_reuses_key_and_completed_batch_members_are_not_repeated ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5475212Z test shutdown_keeps_accepted_work_and_single_host_ownership ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5628440Z test stale_generations_and_cancellation_cannot_overwrite_progress ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5673408Z test due_time_wait_recovers_without_a_notification ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5685868Z test symlink_owner_is_exclusive_and_hardlinked_databases_are_rejected ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5804758Z test terminal_uncertainty_remains_resolvable ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5840105Z test waiting_sibling_does_not_hide_an_abandoned_dispatched_effect ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5840816Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5841866Z ^[[1m^[[92m     Running^[[0m tests/engine.rs (target/debug/deps/engine-8ce97bd91d6344e9)
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5843011Z test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5843976Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5857468Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5857868Z running 21 tests
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5870633Z test approval_and_input_waits_do_not_consume_budget_while_waiting ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5880063Z test approval_grant_still_requires_current_authorization ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5881598Z test cancellation_retains_unknown_mutation_and_allows_reconciliation ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5886636Z test cancelled_idempotent_effect_is_unknown_even_when_cleanup_fails ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5888082Z test context_keeps_whole_groups_and_rejects_an_oversized_newest_group ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5889715Z test convenience_api_requires_reconciliation_before_replacing_cancelled_run ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5893191Z test convenience_api_retains_wait_and_can_resume_without_duplicate_history ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5898463Z test duplicate_ids_and_truncated_streams_dispatch_nothing ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5901992Z test empty_stream_events_have_a_hard_bound ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.5905197Z test failed_intent_commit_never_dispatches ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6101762Z test bounded_parallelism_sequential_barriers_history_order_and_cleanup ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6106798Z test model_cleanup_failure_preserves_received_evidence_and_tokens ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6205218Z test outcome_commit_failure_still_joins_and_cleans_sibling_tools ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6212102Z test recovered_dispatched_work_becomes_resolvable_when_budgets_or_expiry_stop_it ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6215485Z test recovered_model_attempt_does_not_replenish_call_budget ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6222013Z test reused_call_ids_cannot_accept_a_stale_resolution ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6223883Z test idempotent_timeout_keeps_mutation_uncertainty ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6230265Z test settlement_event_is_emitted_only_after_a_successful_commit ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6231674Z test validates_whole_response_before_dispatch_and_preserves_rejected_response ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6546498Z test wall_expiry_interrupts_model_and_keeps_its_cleanup ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6753881Z test wall_expiry_interrupts_mutation_and_retains_uncertainty ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6755004Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6756028Z test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6757358Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6762279Z ^[[1m^[[92m     Running^[[0m tests/openai.rs (target/debug/deps/openai-a867fd47213b2f01)
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6778588Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6779273Z running 4 tests
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6800497Z test pre_cancelled_request_never_connects ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6811028Z test cancellation_discards_buffered_completed_output ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6824725Z test sends_request_and_completes_through_real_http_transport ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6832822Z test truncated_http_body_cannot_publish_a_response ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6834270Z ^[[1m^[[92m     Running^[[0m tests/personal_workflow.rs (target/debug/deps/personal_workflow-59cb25e22dcd2502)
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6835699Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6836523Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6837494Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6852162Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.6852574Z running 3 tests
+check	Run cargo test --all-features --locked	2026-10-29T21:57:55.8427087Z test workflow_grader_rejects_a_failed_calendar_read_even_when_the_guess_is_correct ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:56.0166091Z test workflow_grader_rejects_wrong_schedules_and_invented_success ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:56.0259803Z test personal_agent_reads_asks_restarts_and_obeys_approval ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:56.0260646Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:56.0261338Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+check	Run cargo test --all-features --locked	2026-10-29T21:57:56.0262171Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:56.0269937Z ^[[1m^[[92m     Running^[[0m tests/process_recovery.rs (target/debug/deps/process_recovery-ceeb0a2986734931)
+check	Run cargo test --all-features --locked	2026-10-29T21:57:56.0285711Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:56.0286132Z running 7 tests
+check	Run cargo test --all-features --locked	2026-10-29T21:57:56.1233107Z test day_long_wait_keeps_budget_and_deadline_across_repeated_process_deaths ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:56.1715161Z test durable_acceptance_and_reserved_model_budget_survive_process_death ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:56.2386714Z test killed_idempotent_mutation_reuses_key_and_recorded_results_are_never_repeated ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:56.3285430Z test killed_ordinary_mutations_require_reconciliation_even_before_handler_entry ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:56.3287022Z test persisted_wait_process_restart_soak ... ignored, opt-in real-time wait/restart soak; AGENT_RS_SOAK_SECONDS defaults to 60
+check	Run cargo test --all-features --locked	2026-10-29T21:57:56.3288535Z test process_child ... ignored, subprocess entrypoint; exercised by the process recovery tests
+check	Run cargo test --all-features --locked	2026-10-29T21:57:58.1217727Z test approval_input_and_timer_waits_resume_after_abrupt_process_restarts ... ok
+check	Run cargo test --all-features --locked	2026-10-29T21:57:58.1218386Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:58.1220859Z ^[[1m^[[92m   Doc-tests^[[0m yielded_agent
+check	Run cargo test --all-features --locked	2026-10-29T21:57:58.1221784Z test result: ok. 5 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.09s
+check	Run cargo test --all-features --locked	2026-10-29T21:57:58.1222888Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:58.2813700Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:58.2814634Z running 0 tests
+check	Run cargo test --all-features --locked	2026-10-29T21:57:58.2815258Z 
+check	Run cargo test --all-features --locked	2026-10-29T21:57:58.2816062Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+check	Run cargo test --all-features --locked	2026-10-29T21:57:58.2817183Z 
+check	Run cargo check --no-default-features --locked	﻿2026-10-29T21:57:58.2943233Z ##[group]Run cargo check --no-default-features --locked
+check	Run cargo check --no-default-features --locked	2026-10-29T21:57:58.2944011Z ^[[36;1mcargo check --no-default-features --locked^[[0m
+check	Run cargo check --no-default-features --locked	2026-10-29T21:57:58.2972407Z shell: /usr/bin/bash -e {0}
+check	Run cargo check --no-default-features --locked	2026-10-29T21:57:58.2972872Z env:
+check	Run cargo check --no-default-features --locked	2026-10-29T21:57:58.2973213Z   CARGO_INCREMENTAL: 0
+check	Run cargo check --no-default-features --locked	2026-10-29T21:57:58.2973633Z   CARGO_PROFILE_DEV_DEBUG: 0
+check	Run cargo check --no-default-features --locked	2026-10-29T21:57:58.2974086Z   CARGO_TERM_COLOR: always
+check	Run cargo check --no-default-features --locked	2026-10-29T21:57:58.2974526Z   RUST_BACKTRACE: short
+check	Run cargo check --no-default-features --locked	2026-10-29T21:57:58.2974950Z   CARGO_BUILD_WARNINGS: deny
+check	Run cargo check --no-default-features --locked	2026-10-29T21:57:58.2975421Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+check	Run cargo check --no-default-features --locked	2026-10-29T21:57:58.2975988Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+check	Run cargo check --no-default-features --locked	2026-10-29T21:57:58.2976571Z   CACHE_ON_FAILURE: true
+check	Run cargo check --no-default-features --locked	2026-10-29T21:57:58.2976984Z ##[endgroup]
+check	Run cargo check --no-default-features --locked	2026-10-29T21:57:58.4049712Z ^[[1m^[[92m    Checking^[[0m yielded-agent v0.1.0 (/home/runner/work/agent-rs/agent-rs)
+check	Run cargo check --no-default-features --locked	2026-10-29T21:57:58.9615904Z ^[[1m^[[92m    Finished^[[0m `dev` profile [unoptimized] target(s) in 0.61s
+check	Run cargo bench --bench agent_loop --locked -- --test	﻿2026-10-29T21:57:58.9746034Z ##[group]Run cargo bench --bench agent_loop --locked -- --test
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:58.9746581Z ^[[36;1mcargo bench --bench agent_loop --locked -- --test^[[0m
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:58.9766782Z shell: /usr/bin/bash -e {0}
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:58.9767093Z env:
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:58.9767323Z   CARGO_INCREMENTAL: 0
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:58.9767603Z   CARGO_PROFILE_DEV_DEBUG: 0
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:58.9767897Z   CARGO_TERM_COLOR: always
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:58.9768188Z   RUST_BACKTRACE: short
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:58.9768465Z   CARGO_BUILD_WARNINGS: deny
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:58.9768999Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:58.9769383Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:58.9769958Z   CACHE_ON_FAILURE: true
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:58.9770229Z ##[endgroup]
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:59.1320530Z ^[[1m^[[92m   Compiling^[[0m parking_lot_core v0.9.12
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:59.1353147Z ^[[1m^[[92m   Compiling^[[0m gimli v0.34.0
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:59.2577096Z ^[[1m^[[92m   Compiling^[[0m scopeguard v1.2.0
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:59.2990372Z ^[[1m^[[92m   Compiling^[[0m adler2 v2.0.1
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:57:59.4040617Z ^[[1m^[[92m   Compiling^[[0m miniz_oxide v0.9.1
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:00.0980322Z ^[[1m^[[92m   Compiling^[[0m lock_api v0.4.14
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:00.5580661Z ^[[1m^[[92m   Compiling^[[0m object v0.40.0
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:03.2160204Z ^[[1m^[[92m   Compiling^[[0m addr2line v0.27.1
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:03.6510936Z ^[[1m^[[92m   Compiling^[[0m rustc-demangle v0.1.28
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:04.7801204Z ^[[1m^[[92m   Compiling^[[0m parking_lot v0.12.5
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:05.6870258Z ^[[1m^[[92m   Compiling^[[0m mintex v0.1.4
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:05.7302028Z ^[[1m^[[92m   Compiling^[[0m thousands v0.2.0
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:05.9770259Z ^[[1m^[[92m   Compiling^[[0m rustc-hash v1.1.0
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:06.0270320Z ^[[1m^[[92m   Compiling^[[0m lazy_static v1.5.1
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:06.0711341Z ^[[1m^[[92m   Compiling^[[0m yielded-agent v0.1.0 (/home/runner/work/agent-rs/agent-rs)
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:08.1342606Z ^[[1m^[[92m   Compiling^[[0m backtrace v0.3.77
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:13.3900532Z ^[[1m^[[92m   Compiling^[[0m dhat v0.3.3
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:31.6451157Z ^[[1m^[[92m    Finished^[[0m `bench` profile [optimized] target(s) in 32.63s
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:31.6577525Z ^[[1m^[[92m     Running^[[0m benches/agent_loop.rs (target/release/deps/agent_loop-08c870a45bae509a)
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:31.6596005Z Gnuplot not found, using plotters backend
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4870682Z Testing engine/minimal
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4871545Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4872211Z Testing engine/four_tool_rounds
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4872959Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4873542Z Testing engine/tools_8_bound_1
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4874178Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4874742Z Testing engine/tools_8_bound_4
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4875400Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4875958Z Testing engine/tools_8_bound_8
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4876567Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4877131Z Testing engine/stream_chunks_1
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4877775Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4878337Z Testing engine/stream_chunks_64
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4879251Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4879842Z Testing engine/stream_chunks_1024
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4880522Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4881081Z Testing engine/context_entries_0
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4881718Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4882289Z Testing engine/context_entries_1024
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4899486Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4899910Z 
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.4900310Z Testing conversations/engine_workers_4/1
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.5029676Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.5119755Z Testing conversations/engine_workers_4/16
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.5124027Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.5139966Z Testing conversations/engine_workers_4/64
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.5140843Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.5141634Z 
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.5142238Z Testing sqlite/durable_four_tool_rounds
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.5528213Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.5529008Z 
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:32.5530047Z Testing sqlite_conversations/host_workers_4/1
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:33.4192895Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:33.4193917Z Testing sqlite_conversations/host_workers_4/16
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:34.1652344Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:34.1653204Z Testing sqlite_conversations/host_workers_4/64
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:34.9643678Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:34.9644282Z 
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:34.9722381Z Testing recovery/restart_to_completion/0
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:34.9860169Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:37.2691416Z Testing recovery/restart_to_completion/512
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:37.3337679Z Success
+check	Run cargo bench --bench agent_loop --locked -- --test	2026-10-29T21:58:37.3386785Z 
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	﻿2026-10-29T21:58:37.3523747Z ##[group]Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:37.3525114Z ^[[36;1mPYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py^[[0m
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:37.3553713Z shell: /usr/bin/bash -e {0}
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:37.3554412Z env:
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:37.3554750Z   CARGO_INCREMENTAL: 0
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:37.3555173Z   CARGO_PROFILE_DEV_DEBUG: 0
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:37.3572302Z   CARGO_TERM_COLOR: always
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:37.3572787Z   RUST_BACKTRACE: short
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:37.3573186Z   CARGO_BUILD_WARNINGS: deny
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:37.3573633Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:37.3574241Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:37.3574808Z   CACHE_ON_FAILURE: true
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:37.3575230Z ##[endgroup]
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:38.5949230Z ........
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:38.5950392Z ----------------------------------------------------------------------
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:38.5951284Z Ran 8 tests in 1.118s
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:38.5951776Z 
+check	Run PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py	2026-10-29T21:58:38.5952097Z OK

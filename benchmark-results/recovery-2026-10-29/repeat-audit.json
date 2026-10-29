@@ -1,0 +1,767 @@
+{
+  "status": "passed",
+  "integrity_status": "passed",
+  "performance_status": "initial_durable_tail_pattern_not_reproduced",
+  "workflow_run_id": "40963163553",
+  "artifact": "/tmp/agent-rs-recovery-repeat",
+  "refs": {
+    "base": "82839973a01b86db8e57bb700b47184760401472",
+    "candidate": "5cd69a71c09d3987532904c3162899c5023a838b"
+  },
+  "suite": "recovery",
+  "fixture": "agent-loop-v2",
+  "checks_passed": 13149,
+  "captures_complete": 4,
+  "criterion_samples_by_case": {
+    "00-base/engine/minimal": 30,
+    "00-base/sqlite/durable_four_tool_rounds": 30,
+    "00-base/recovery/restart_to_completion/0": 30,
+    "00-base/recovery/restart_to_completion/512": 30,
+    "00-candidate/engine/minimal": 30,
+    "00-candidate/sqlite/durable_four_tool_rounds": 30,
+    "00-candidate/recovery/restart_to_completion/0": 30,
+    "00-candidate/recovery/restart_to_completion/512": 30,
+    "01-candidate/engine/minimal": 30,
+    "01-candidate/sqlite/durable_four_tool_rounds": 30,
+    "01-candidate/recovery/restart_to_completion/0": 30,
+    "01-candidate/recovery/restart_to_completion/512": 30,
+    "01-base/engine/minimal": 30,
+    "01-base/sqlite/durable_four_tool_rounds": 30,
+    "01-base/recovery/restart_to_completion/0": 30,
+    "01-base/recovery/restart_to_completion/512": 30
+  },
+  "normal_samples_total": 1600,
+  "allocation_samples_total": 1600,
+  "capture_order": [
+    "00-base",
+    "00-candidate",
+    "01-candidate",
+    "01-base"
+  ],
+  "capture_durations_seconds": {
+    "00-base": 81.33890867233276,
+    "00-candidate": 72.60207486152649,
+    "01-candidate": 75.00518321990967,
+    "01-base": 81.2818443775177
+  },
+  "environment": {
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+    "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+    "os": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+    "machine": "x86_64",
+    "logical_cpus": 2,
+    "processor": "AMD EPYC 9V45 96-Core Processor",
+    "memory_bytes": 8317935616,
+    "tokio_workers": 4,
+    "concurrency": [
+      1,
+      16,
+      64
+    ],
+    "fixed_conversation_batch": 64,
+    "build_profile": "release",
+    "features": "default",
+    "rustflags": "",
+    "tracing": "normal tracing calls; no subscriber",
+    "quick": false,
+    "runner_name": "GitHub Actions 1000025433",
+    "runner_image": "20261026.354.1",
+    "github_run_id": "40963163553",
+    "github_run_attempt": "1"
+  },
+  "environment_difference_from_first_job": {
+    "runner_name": {
+      "first": "GitHub Actions 1000025432",
+      "repeat": "GitHub Actions 1000025433"
+    },
+    "github_run_id": {
+      "first": "40961976724",
+      "repeat": "40963163553"
+    }
+  },
+  "source_and_recorded_binary_hashes_identical_to_first_job": true,
+  "fixture_hashes": {
+    "benches/agent_loop.rs": "2b52be771161228117cb1b54cf244b2a8b1871b8e57d544f50a1b695a6358c75",
+    "benches/support/mod.rs": "9513a5ade945970df808dd5538747e126f261a8b342942c3462471dd3f1271bc",
+    "examples/benchmark_metrics.rs": "9c1d68bfd7446aa31257f040076a17f241a69b3c16d734fa434bf6e8a08bec08"
+  },
+  "work_counts": {
+    "minimal": {
+      "completed_runs": 1,
+      "model_calls": 1,
+      "tool_calls": 0,
+      "events": 4,
+      "transactions": null,
+      "writes": null
+    },
+    "durable_four_tool_rounds": {
+      "completed_runs": 1,
+      "model_calls": 5,
+      "tool_calls": 4,
+      "events": 40,
+      "transactions": 32,
+      "writes": 52
+    },
+    "recovery_prior_runs_0": {
+      "completed_runs": 1,
+      "model_calls": 4,
+      "tool_calls": 3,
+      "events": 40,
+      "transactions": 24,
+      "writes": 38
+    },
+    "recovery_prior_runs_512": {
+      "completed_runs": 1,
+      "model_calls": 4,
+      "tool_calls": 3,
+      "events": 40,
+      "transactions": 24,
+      "writes": 38
+    }
+  },
+  "results": {
+    "minimal": {
+      "criterion_ns_per_run": {
+        "base_cohort_medians": [
+          10085.326011080333,
+          9988.56367403315
+        ],
+        "candidate_cohort_medians": [
+          10039.631777263374,
+          10041.019911626623
+        ],
+        "base_median": 10036.944842556743,
+        "candidate_median": 10040.325844444998,
+        "percent_change": 0.0336855680816317,
+        "paired_percent_changes": [
+          -0.4530764178248381,
+          0.5251629694251303
+        ]
+      },
+      "elapsed_ns": {
+        "base_cohort_medians": [
+          10206.0,
+          10250.5
+        ],
+        "candidate_cohort_medians": [
+          15258.0,
+          9639.5
+        ],
+        "base_median": 10228.25,
+        "candidate_median": 12448.75,
+        "percent_change": 21.709481094028792,
+        "paired_percent_changes": [
+          49.50029394473838,
+          -5.960684844641728
+        ]
+      },
+      "process_cpu_ns": {
+        "base_cohort_medians": [
+          10941.0,
+          10981.5
+        ],
+        "candidate_cohort_medians": [
+          16094.0,
+          10355.0
+        ],
+        "base_median": 10961.25,
+        "candidate_median": 13224.5,
+        "percent_change": 20.64773634393888,
+        "paired_percent_changes": [
+          47.098071474271094,
+          -5.705049401265761
+        ]
+      },
+      "allocations": {
+        "base_cohort_medians": [
+          275.0,
+          275.0
+        ],
+        "candidate_cohort_medians": [
+          275.0,
+          275.0
+        ],
+        "base_median": 275.0,
+        "candidate_median": 275.0,
+        "percent_change": 0.0,
+        "paired_percent_changes": [
+          0.0,
+          0.0
+        ]
+      },
+      "allocated_bytes": {
+        "base_cohort_medians": [
+          30320.0,
+          30320.0
+        ],
+        "candidate_cohort_medians": [
+          30320.0,
+          30320.0
+        ],
+        "base_median": 30320.0,
+        "candidate_median": 30320.0,
+        "percent_change": 0.0,
+        "paired_percent_changes": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "durable_four_tool_rounds": {
+      "criterion_ns_per_run": {
+        "base_cohort_medians": [
+          13556611.166666668,
+          13624368.166666668
+        ],
+        "candidate_cohort_medians": [
+          12733185.25,
+          13230842.0
+        ],
+        "base_median": 13590489.666666668,
+        "candidate_median": 12982013.625,
+        "percent_change": -4.477219412918387,
+        "paired_percent_changes": [
+          -6.073980484822994,
+          -2.8883993874260327
+        ]
+      },
+      "elapsed_ns": {
+        "base_cohort_medians": [
+          13112916.5,
+          13315444.5
+        ],
+        "candidate_cohort_medians": [
+          13510881.0,
+          12590005.5
+        ],
+        "base_median": 13214180.5,
+        "candidate_median": 13050443.25,
+        "percent_change": -1.239102568638295,
+        "paired_percent_changes": [
+          3.0349045538420105,
+          -5.448102014168588
+        ]
+      },
+      "process_cpu_ns": {
+        "base_cohort_medians": [
+          7006748.0,
+          6837968.5
+        ],
+        "candidate_cohort_medians": [
+          7060430.5,
+          6338531.5
+        ],
+        "base_median": 6922358.25,
+        "candidate_median": 6699481.0,
+        "percent_change": -3.2196722843692793,
+        "paired_percent_changes": [
+          0.7661542844126901,
+          -7.303879799972757
+        ]
+      },
+      "allocations": {
+        "base_cohort_medians": [
+          14574.0,
+          14576.0
+        ],
+        "candidate_cohort_medians": [
+          10680.0,
+          10678.0
+        ],
+        "base_median": 14575.0,
+        "candidate_median": 10679.0,
+        "percent_change": -26.73070325900515,
+        "paired_percent_changes": [
+          -26.71881432688349,
+          -26.742590559824365
+        ]
+      },
+      "allocated_bytes": {
+        "base_cohort_medians": [
+          2415142.0,
+          2415254.0
+        ],
+        "candidate_cohort_medians": [
+          1828183.0,
+          1828027.5
+        ],
+        "base_median": 2415198.0,
+        "candidate_median": 1828105.25,
+        "percent_change": -24.30826582334037,
+        "paired_percent_changes": [
+          -24.303291483482127,
+          -24.31323993252884
+        ]
+      }
+    },
+    "recovery_prior_runs_0": {
+      "criterion_ns_per_run": {
+        "base_cohort_medians": [
+          10412824.9,
+          10683983.083333332
+        ],
+        "candidate_cohort_medians": [
+          9708267.583333332,
+          9863217.5
+        ],
+        "base_median": 10548403.991666667,
+        "candidate_median": 9785742.541666666,
+        "percent_change": -7.230112257764398,
+        "paired_percent_changes": [
+          -6.7662456963688005,
+          -7.682205942591769
+        ]
+      },
+      "elapsed_ns": {
+        "base_cohort_medians": [
+          9915211.0,
+          10277537.5
+        ],
+        "candidate_cohort_medians": [
+          9678447.5,
+          9841378.0
+        ],
+        "base_median": 10096374.25,
+        "candidate_median": 9759912.75,
+        "percent_change": -3.3324982975943107,
+        "paired_percent_changes": [
+          -2.387881609377751,
+          -4.243813267526386
+        ]
+      },
+      "process_cpu_ns": {
+        "base_cohort_medians": [
+          4253387.5,
+          4364985.5
+        ],
+        "candidate_cohort_medians": [
+          3922371.5,
+          3949550.5
+        ],
+        "base_median": 4309186.5,
+        "candidate_median": 3935961.0,
+        "percent_change": -8.661159130615491,
+        "paired_percent_changes": [
+          -7.782408727161583,
+          -9.517442841448155
+        ]
+      },
+      "allocations": {
+        "base_cohort_medians": [
+          11128.0,
+          11128.0
+        ],
+        "candidate_cohort_medians": [
+          7981.0,
+          7981.0
+        ],
+        "base_median": 11128.0,
+        "candidate_median": 7981.0,
+        "percent_change": -28.280014378145225,
+        "paired_percent_changes": [
+          -28.280014378145225,
+          -28.280014378145225
+        ]
+      },
+      "allocated_bytes": {
+        "base_cohort_medians": [
+          1865478.0,
+          1865478.0
+        ],
+        "candidate_cohort_medians": [
+          1391750.0,
+          1391750.0
+        ],
+        "base_median": 1865478.0,
+        "candidate_median": 1391750.0,
+        "percent_change": -25.394456541433353,
+        "paired_percent_changes": [
+          -25.394456541433353,
+          -25.394456541433353
+        ]
+      }
+    },
+    "recovery_prior_runs_512": {
+      "criterion_ns_per_run": {
+        "base_cohort_medians": [
+          43928720.0,
+          43023313.0
+        ],
+        "candidate_cohort_medians": [
+          30186908.5,
+          30284598.5
+        ],
+        "base_median": 43476016.5,
+        "candidate_median": 30235753.5,
+        "percent_change": -30.45417695984175,
+        "paired_percent_changes": [
+          -31.282066720814996,
+          -29.60886461719022
+        ]
+      },
+      "elapsed_ns": {
+        "base_cohort_medians": [
+          44766613.5,
+          45311798.5
+        ],
+        "candidate_cohort_medians": [
+          30703562.5,
+          30279543.5
+        ],
+        "base_median": 45039206.0,
+        "candidate_median": 30491553.0,
+        "percent_change": -32.299976602607074,
+        "paired_percent_changes": [
+          -31.41414974353599,
+          -33.175145321146324
+        ]
+      },
+      "process_cpu_ns": {
+        "base_cohort_medians": [
+          37610965.0,
+          38130523.0
+        ],
+        "candidate_cohort_medians": [
+          23686445.5,
+          23363111.0
+        ],
+        "base_median": 37870744.0,
+        "candidate_median": 23524778.25,
+        "percent_change": -37.8813940122222,
+        "paired_percent_changes": [
+          -37.02249995446807,
+          -38.7285849711529
+        ]
+      },
+      "allocations": {
+        "base_cohort_medians": [
+          381175.0,
+          381175.0
+        ],
+        "candidate_cohort_medians": [
+          181516.0,
+          181516.0
+        ],
+        "base_median": 381175.0,
+        "candidate_median": 181516.0,
+        "percent_change": -52.379878008788616,
+        "paired_percent_changes": [
+          -52.379878008788616,
+          -52.379878008788616
+        ]
+      },
+      "allocated_bytes": {
+        "base_cohort_medians": [
+          109322998.0,
+          109322998.0
+        ],
+        "candidate_cohort_medians": [
+          60686451.0,
+          60686451.0
+        ],
+        "base_median": 109322998.0,
+        "candidate_median": 60686451.0,
+        "percent_change": -44.488852199241734,
+        "paired_percent_changes": [
+          -44.488852199241734,
+          -44.488852199241734
+        ]
+      }
+    }
+  },
+  "durable_tail_details": {
+    "sample_indexes": "zero based within each metrics-durable_four_tool_rounds.json or allocations-durable_four_tool_rounds.json samples array",
+    "by_capture": {
+      "00-base": {
+        "metrics": {
+          "elapsed_ms": {
+            "n": 100,
+            "min": 12.249664,
+            "median": 13.1129165,
+            "mean": 13.84987584,
+            "p95_descriptive": 14.610336,
+            "max": 62.895192
+          },
+          "process_cpu_ms": {
+            "n": 100,
+            "min": 6.649731,
+            "median": 7.006748,
+            "mean": 7.06196623,
+            "p95_descriptive": 7.461611,
+            "max": 9.26132
+          },
+          "at_least_50ms_indexes": [
+            24
+          ],
+          "at_least_90ms_indexes": [],
+          "at_least_30ms_samples": [
+            {
+              "sample_index_zero_based": 24,
+              "elapsed_ms": 62.895192,
+              "process_cpu_ms": 9.26132,
+              "work": {
+                "completed_runs": 1,
+                "model_calls": 5,
+                "tool_calls": 4,
+                "events": 40,
+                "transactions": 32,
+                "writes": 52
+              }
+            }
+          ]
+        },
+        "allocations": {
+          "elapsed_ms": {
+            "n": 100,
+            "min": 12.307078,
+            "median": 13.19634,
+            "mean": 13.53591312,
+            "p95_descriptive": 14.829414,
+            "max": 31.841353
+          },
+          "process_cpu_ms": {
+            "n": 100,
+            "min": 6.429085,
+            "median": 6.8723030000000005,
+            "mean": 7.01137721,
+            "p95_descriptive": 7.219488,
+            "max": 14.478205
+          },
+          "at_least_50ms_indexes": [],
+          "at_least_90ms_indexes": [],
+          "at_least_30ms_samples": [
+            {
+              "sample_index_zero_based": 77,
+              "elapsed_ms": 31.841353,
+              "process_cpu_ms": 14.478205,
+              "work": {
+                "completed_runs": 1,
+                "model_calls": 5,
+                "tool_calls": 4,
+                "events": 40,
+                "transactions": 32,
+                "writes": 52
+              }
+            }
+          ]
+        }
+      },
+      "00-candidate": {
+        "metrics": {
+          "elapsed_ms": {
+            "n": 100,
+            "min": 11.805161,
+            "median": 13.510881000000001,
+            "mean": 13.44721739,
+            "p95_descriptive": 14.557302,
+            "max": 19.956112
+          },
+          "process_cpu_ms": {
+            "n": 100,
+            "min": 5.87168,
+            "median": 7.060430500000001,
+            "mean": 6.93149743,
+            "p95_descriptive": 7.512151,
+            "max": 10.19607
+          },
+          "at_least_50ms_indexes": [],
+          "at_least_90ms_indexes": [],
+          "at_least_30ms_samples": []
+        },
+        "allocations": {
+          "elapsed_ms": {
+            "n": 100,
+            "min": 11.941701,
+            "median": 12.807381,
+            "mean": 12.89600048,
+            "p95_descriptive": 13.629424,
+            "max": 17.937343
+          },
+          "process_cpu_ms": {
+            "n": 100,
+            "min": 6.150675,
+            "median": 6.5336415,
+            "mean": 6.54079216,
+            "p95_descriptive": 6.804463,
+            "max": 7.094657
+          },
+          "at_least_50ms_indexes": [],
+          "at_least_90ms_indexes": [],
+          "at_least_30ms_samples": []
+        }
+      },
+      "01-candidate": {
+        "metrics": {
+          "elapsed_ms": {
+            "n": 100,
+            "min": 11.748033,
+            "median": 12.5900055,
+            "mean": 12.69986767,
+            "p95_descriptive": 13.359939,
+            "max": 24.784391
+          },
+          "process_cpu_ms": {
+            "n": 100,
+            "min": 6.018804,
+            "median": 6.3385315,
+            "mean": 6.4091794,
+            "p95_descriptive": 6.618614,
+            "max": 10.027718
+          },
+          "at_least_50ms_indexes": [],
+          "at_least_90ms_indexes": [],
+          "at_least_30ms_samples": []
+        },
+        "allocations": {
+          "elapsed_ms": {
+            "n": 100,
+            "min": 12.112639,
+            "median": 12.9416095,
+            "mean": 13.06142758,
+            "p95_descriptive": 13.731779,
+            "max": 20.6304
+          },
+          "process_cpu_ms": {
+            "n": 100,
+            "min": 6.197399,
+            "median": 6.531274,
+            "mean": 6.58681769,
+            "p95_descriptive": 6.886974,
+            "max": 10.465504
+          },
+          "at_least_50ms_indexes": [],
+          "at_least_90ms_indexes": [],
+          "at_least_30ms_samples": []
+        }
+      },
+      "01-base": {
+        "metrics": {
+          "elapsed_ms": {
+            "n": 100,
+            "min": 11.947944,
+            "median": 13.3154445,
+            "mean": 13.48129024,
+            "p95_descriptive": 14.257219,
+            "max": 22.959544
+          },
+          "process_cpu_ms": {
+            "n": 100,
+            "min": 6.411109,
+            "median": 6.8379685,
+            "mean": 6.86715114,
+            "p95_descriptive": 7.176506,
+            "max": 8.139006
+          },
+          "at_least_50ms_indexes": [],
+          "at_least_90ms_indexes": [],
+          "at_least_30ms_samples": []
+        },
+        "allocations": {
+          "elapsed_ms": {
+            "n": 100,
+            "min": 12.884767,
+            "median": 13.5941215,
+            "mean": 14.02141611,
+            "p95_descriptive": 15.308515,
+            "max": 28.325893
+          },
+          "process_cpu_ms": {
+            "n": 100,
+            "min": 6.673151,
+            "median": 7.2325775,
+            "mean": 7.24694338,
+            "p95_descriptive": 7.664795,
+            "max": 8.388274
+          },
+          "at_least_50ms_indexes": [],
+          "at_least_90ms_indexes": [],
+          "at_least_30ms_samples": []
+        }
+      }
+    },
+    "aggregate_normal": {
+      "base": {
+        "samples": 200,
+        "at_least_50ms": 1,
+        "at_least_90ms": 0,
+        "elapsed_ms": {
+          "n": 200,
+          "min": 11.947944,
+          "median": 13.220064,
+          "mean": 13.66558304,
+          "p95_descriptive": 14.320475,
+          "max": 62.895192
+        }
+      },
+      "candidate": {
+        "samples": 200,
+        "at_least_50ms": 0,
+        "at_least_90ms": 0,
+        "elapsed_ms": {
+          "n": 200,
+          "min": 11.748033,
+          "median": 12.6786475,
+          "mean": 13.07354253,
+          "p95_descriptive": 14.44548,
+          "max": 24.784391
+        }
+      }
+    },
+    "first_job_aggregate_normal": {
+      "base": {
+        "samples": 60,
+        "over_30ms": 0,
+        "over_50ms": 0,
+        "over_90ms": 0,
+        "elapsed_ms": {
+          "count": 60,
+          "min": 11.581544,
+          "median": 13.6335135,
+          "mean": 13.373808566666666,
+          "p95_descriptive": 14.260896,
+          "max": 15.085245
+        },
+        "process_cpu_ms": {
+          "count": 60,
+          "min": 5.810724,
+          "median": 6.803872,
+          "mean": 6.7020401,
+          "p95_descriptive": 7.280002,
+          "max": 7.503472
+        }
+      },
+      "candidate": {
+        "samples": 60,
+        "over_30ms": 9,
+        "over_50ms": 7,
+        "over_90ms": 5,
+        "elapsed_ms": {
+          "count": 60,
+          "min": 11.604486,
+          "median": 13.437366,
+          "mean": 24.805716833333335,
+          "p95_descriptive": 118.063463,
+          "max": 120.576102
+        },
+        "process_cpu_ms": {
+          "count": 60,
+          "min": 5.695447,
+          "median": 6.4851925,
+          "mean": 6.539248483333333,
+          "p95_descriptive": 7.398989,
+          "max": 8.098402
+        }
+      }
+    }
+  },
+  "conclusion": "The larger fresh matched run does not reproduce the initial candidate-only durable tail pattern: candidate0/200 >=50ms (maximum24.8ms), base1/200 >=50ms (maximum62.9ms), neither side >=90ms. Recovery elapsed/CPU/allocation benefits repeat and durable Criterion medians improve. The first job remains valid retained evidence of unexplained stalls; this result neither identifies their cause nor proves absolute absence of rare tails.",
+  "caveats": [
+    "Two separate hosted jobs with the same processor class and identical recorded binary/source hashes, but distinct runner instances and different diagnostics-per-case counts (30 versus100).",
+    "Timing differences remain descriptive; independent runner variance is not calibrated into a universal gate.",
+    "Only four selected workloads were repeated, not the full matrix.",
+    "Normal CPU/elapsed, allocator diagnostics and Criterion timings remain separate. Allocator elapsed is not used for headline timing.",
+    "Minimal normal diagnostics have a noisy first candidate cohort despite flat Criterion and identical allocation counts; do not interpret that isolated diagnostic CPU change as a stable regression.",
+    "First-job durable stalls are retained and unexplained, not discarded as outliers.",
+    "Recorded executable hashes match across jobs, but executable bytes are absent from artifacts and cannot be independently rehashed."
+  ]
+}
