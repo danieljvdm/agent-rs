@@ -13,3 +13,4 @@ jobs:
       - run: cargo test --all-features --locked
       - run: cargo check --no-default-features --locked
       - run: cargo bench --bench agent_loop --locked -- --test
+      - run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py

@@ -56,6 +56,10 @@ Waits and uncertain operations are visible in `RunState::operations`. Resolve th
 
 See [the durability contract](docs/durability.md) for external-effect guarantees and application responsibilities. Run `cargo run --example durable_workflow` for the restart/wait/reconciliation example.
 
+The [personal-agent workflow eval](docs/personal-workflow-eval.md) exercises a model choosing tools, requesting missing information, surviving host restarts, and creating a reminder only after approval. Run `scripts/eval-personal.sh --trials 3 --out eval-results/my-live-run` to use the existing Infisical credentials. Its deterministic counterpart and negative grading cases run in ordinary tests.
+
+[Process recovery tests](docs/process-recovery.md) also terminate and relaunch real subprocesses at acceptance, dispatch, and outcome-commit boundaries. The opt-in restart soak keeps a persisted future deadline across repeated process deaths.
+
 ## Providers and limits
 
 `ScriptedModel` is a deterministic in-process provider for tests and benchmarks. `openai::OpenAiModel` implements Chat Completions SSE, buffers and validates a complete response before tools start, and accepts explicit credentials. It does not load credentials from the environment or retry HTTP requests implicitly. Supply the model name through `ModelConfig`.
@@ -65,6 +69,8 @@ See [the durability contract](docs/durability.md) for external-effect guarantees
 Progress events are transient and best effort through a caller-supplied bounded Tokio channel; a full channel drops events. Reconnect using durable status/history, not token deltas. Standard `tracing` emits run spans without prompts or credentials.
 
 ## Development
+
+The checked-in `rust-toolchain.toml` pins Rust and the lint/format components. If Homebrew Cargo takes precedence over rustup, use `scripts/rust.sh` in place of `cargo` to select the pinned toolchain explicitly.
 
 ```sh
 cargo test --all-features --locked
@@ -77,5 +83,7 @@ cargo bench --bench agent_loop --locked
 [Benchmark instructions and retained results](benchmark-results/README.md) describe fixed workloads, correctness assertions, process CPU and allocation runs, and revision comparisons. Timings are informational until observed variance supports a timing gate.
 
 [Verification evidence](docs/verification.md) records the 45 passing tests, restart workflow, and [initial AB/BA benchmark comparison](benchmark-results/initial-2026-10-29/COMPARISON.md).
+
+The manual [performance workflow](.github/workflows/performance.yml) runs longer comparisons or same-source calibration on one hosted Linux runner. [Calibration notes](docs/benchmark-calibration.md) explain the paired measurements and why timing gates remain informational until enough independent runs establish useful thresholds.
 
 This is a Rust-only initial implementation. There are no distributed leases, Node bindings, Cloudflare adapter, arbitrary active-run input joining, agent graphs, or placeholder subagent/MCP services.

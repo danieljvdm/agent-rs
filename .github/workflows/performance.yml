@@ -1,0 +1,94 @@
+name: Runtime performance
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Compare revisions, or measure same-source noise
+        type: choice
+        options: [compare, calibrate]
+        default: compare
+      base_ref:
+        description: Base commit or branch (ignored for calibration)
+        required: true
+        default: '6b67138231c6cb27c9b710d4638b24db3d2a9eb7'
+      candidate_ref:
+        description: Candidate commit or branch
+        required: true
+        default: main
+      cohorts:
+        description: Even number of AB/BA cohorts (2 means four captures)
+        required: true
+        default: '2'
+      samples:
+        description: CPU and allocation samples per case (Criterion always uses full 30-sample windows)
+        required: true
+        default: '30'
+
+permissions:
+  contents: read
+
+# Keep complete jobs, rather than cancelling a measurement when another is requested.
+concurrency:
+  group: runtime-performance
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.mode == 'calibrate' && inputs.candidate_ref || inputs.base_ref }}
+          path: base
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_ref }}
+          path: candidate
+      - name: Read the candidate's pinned toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, re, tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('candidate/rust-toolchain.toml').read_text())['toolchain']['channel']
+          if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+              raise SystemExit('Performance measurements require an exact Rust toolchain version')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\n')
+          PY
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.version }}
+      - name: Compare on one runner, after building both revisions
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.toolchain.outputs.version }}
+          BENCH_COHORTS: ${{ inputs.cohorts }}
+          BENCH_SAMPLES: ${{ inputs.samples }}
+        shell: bash
+        run: |
+          # Put rustup proxies first: both checkouts must use the same selected compiler.
+          export PATH="$HOME/.cargo/bin:$PATH"
+          python3 candidate/scripts/benchmark.py \
+            --base "$GITHUB_WORKSPACE/base" \
+            --candidate "$GITHUB_WORKSPACE/candidate" \
+            --out "$RUNNER_TEMP/runtime-performance" \
+            --cohorts "$BENCH_COHORTS" --samples "$BENCH_SAMPLES" --require-clean
+      - name: Publish comparison summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/runtime-performance/COMPARISON.md" ]; then
+            cat "$RUNNER_TEMP/runtime-performance/COMPARISON.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '%s\n' 'Measurement did not complete. Inspect the retained build/capture logs; partial results are not a passing comparison.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runtime-performance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime-performance
+          retention-days: 90
+          if-no-files-found: error
