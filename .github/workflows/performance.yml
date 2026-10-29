@@ -36,7 +36,7 @@ permissions:
 # Each job gets its own hosted VM. Serialize each mode while allowing an independent
 # calibration job alongside a comparison; never overlap captures inside one job.
 concurrency:
-  group: runtime-performance-${{ inputs.mode }}
+  group: runtime-performance-${{ github.ref }}-${{ inputs.mode }}-${{ inputs.candidate_ref }}
   cancel-in-progress: false
 
 jobs:
