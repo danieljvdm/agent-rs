@@ -1,0 +1,611 @@
+#![allow(dead_code)]
+
+use async_trait::async_trait;
+use futures::{StreamExt, stream};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+use std::time::{Duration, Instant};
+use tokio_util::sync::CancellationToken;
+use yielded_agent::*;
+
+pub const FIXTURE_VERSION: &str = "agent-loop-v1";
+pub const WORKERS: usize = 4;
+pub const CONCURRENT_TOTAL: usize = 64;
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Input {
+    pub request: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Output {
+    pub answer: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct Arguments {
+    n: usize,
+}
+
+#[derive(Default)]
+pub struct Counts {
+    pub model: AtomicUsize,
+    pub model_cleanup: AtomicUsize,
+    pub tools: AtomicUsize,
+    pub tool_cleanup: AtomicUsize,
+    pub active: AtomicUsize,
+    pub peak: AtomicUsize,
+    pub chunks: AtomicUsize,
+}
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct Snapshot {
+    pub model: usize,
+    pub model_cleanup: usize,
+    pub tools: usize,
+    pub tool_cleanup: usize,
+    pub active: usize,
+    pub peak: usize,
+    pub chunks: usize,
+}
+impl Counts {
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            model: self.model.load(Ordering::SeqCst),
+            model_cleanup: self.model_cleanup.load(Ordering::SeqCst),
+            tools: self.tools.load(Ordering::SeqCst),
+            tool_cleanup: self.tool_cleanup.load(Ordering::SeqCst),
+            active: self.active.load(Ordering::SeqCst),
+            peak: self.peak.load(Ordering::SeqCst),
+            chunks: self.chunks.load(Ordering::SeqCst),
+        }
+    }
+}
+
+struct CheckedModel {
+    counts: Arc<Counts>,
+    turns: Vec<Vec<ModelEvent>>,
+    rounds: usize,
+    batch: usize,
+}
+#[async_trait]
+impl Model for CheckedModel {
+    async fn stream(&self, request: ModelRequest, _: CancellationToken) -> Result<ModelStream> {
+        self.counts.model.fetch_add(1, Ordering::SeqCst);
+        assert!(
+            (1..=self.turns.len()).contains(&(request.turn as usize)),
+            "unexpected model turn"
+        );
+        let exchanges = request
+            .history
+            .iter()
+            .filter_map(|entry| match entry {
+                HistoryEntry::Exchange { response, results } if !response.tools.is_empty() => {
+                    Some((response, results))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            exchanges.len(),
+            request.turn as usize - 1,
+            "model must receive every completed round"
+        );
+        for (round, (response, results)) in exchanges.iter().enumerate() {
+            assert_eq!(results.len(), self.batch);
+            assert_eq!(response.tools.len(), self.batch);
+            for (index, result) in results.iter().enumerate() {
+                let n = round * self.batch + index;
+                assert_eq!(result.call_id, format!("round-{round}-{index}"));
+                assert_eq!(
+                    response.tools[index].id, result.call_id,
+                    "history order changed"
+                );
+                assert_eq!(result.value, json!(n));
+                assert!(!result.is_error);
+            }
+        }
+        assert!(exchanges.len() <= self.rounds);
+        let counts = self.counts.clone();
+        let events = self.turns[request.turn as usize - 1].clone();
+        Ok(Box::pin(stream::iter(events.into_iter().map(Ok)).inspect(
+            move |event| {
+                if matches!(event, Ok(ModelEvent::TextDelta(_))) {
+                    counts.chunks.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+        )))
+    }
+    async fn cleanup(&self, _: RunId) -> Result<()> {
+        self.counts.model_cleanup.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+struct CheckedTool {
+    inner: Arc<dyn Tool>,
+    counts: Arc<Counts>,
+}
+#[async_trait]
+impl Tool for CheckedTool {
+    fn spec(&self) -> &ToolSpec {
+        self.inner.spec()
+    }
+    fn validate(&self, args: &Value) -> Result<()> {
+        self.inner.validate(args)
+    }
+    async fn execute(&self, args: Value, context: ToolContext) -> Result<ToolOutput<Value>> {
+        self.counts.tools.fetch_add(1, Ordering::SeqCst);
+        let active = self.counts.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.counts.peak.fetch_max(active, Ordering::SeqCst);
+        // A deterministic cooperative suspension makes concurrency observable without sleeps or I/O.
+        tokio::task::yield_now().await;
+        self.inner.execute(args, context).await
+    }
+    async fn cleanup(&self, context: ToolContext) -> Result<()> {
+        self.inner.cleanup(context).await?;
+        self.counts.active.fetch_sub(1, Ordering::SeqCst);
+        self.counts.tool_cleanup.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+pub struct PreparedRun {
+    conversation: String,
+    input: Value,
+    history: Vec<HistoryEntry>,
+}
+impl PreparedRun {
+    pub fn admit(self, agent: &Agent) -> RunState {
+        agent
+            .new_run(self.conversation, self.input, self.history, None)
+            .unwrap()
+    }
+}
+
+pub struct Fixture {
+    pub agent: Agent,
+    pub engine: Arc<Engine>,
+    pub counts: Arc<Counts>,
+    pub rounds: usize,
+    pub batch: usize,
+    pub chunks: usize,
+    pub bound: usize,
+    pub expected: Output,
+    pub history: Vec<HistoryEntry>,
+}
+impl Fixture {
+    pub fn new(
+        rounds: usize,
+        batch: usize,
+        bound: usize,
+        chunks: usize,
+        history_entries: usize,
+    ) -> Self {
+        let counts = Arc::new(Counts::default());
+        let expected = Output {
+            answer: if chunks > 0 {
+                "x".repeat(1024)
+            } else {
+                "done".into()
+            },
+        };
+        let mut turns = (0..rounds)
+            .map(|round| {
+                vec![ModelEvent::Response(ModelResponse::tools(
+                    (0..batch)
+                        .map(|index| ToolCall {
+                            id: format!("round-{round}-{index}"),
+                            name: "echo".into(),
+                            arguments: json!({"n": round * batch + index}),
+                        })
+                        .collect(),
+                ))]
+            })
+            .collect::<Vec<_>>();
+        let mut last = if chunks == 0 {
+            Vec::new()
+        } else {
+            assert_eq!(1024 % chunks, 0);
+            vec![ModelEvent::TextDelta("x".repeat(1024 / chunks)); chunks]
+        };
+        last.push(ModelEvent::Response(ModelResponse::final_output(
+            serde_json::to_value(&expected).unwrap(),
+        )));
+        turns.push(last);
+        let model = Arc::new(CheckedModel {
+            counts: counts.clone(),
+            turns,
+            rounds,
+            batch,
+        });
+        let spec = ToolSpec {
+            name: "echo".into(),
+            description: "Return a deterministic integer".into(),
+            input_schema: json!({}),
+            version: "1".into(),
+            retry: RetryPolicy::ReadOnly,
+            execution: Execution::Parallel,
+            requires_approval: false,
+        };
+        let inner = typed_tool::<Arguments, usize, _, _>(spec, |args, _| async move {
+            Ok(ToolOutput::Complete(args.n))
+        });
+        let tool = Arc::new(CheckedTool {
+            inner,
+            counts: counts.clone(),
+        });
+        let agent = Agent::new::<Input, Output>(
+            "benchmark",
+            "Return the scripted result.",
+            model,
+            ModelConfig::default(),
+            vec![tool],
+            Limits {
+                max_parallel_tools: bound,
+                ..Limits::default()
+            },
+        )
+        .unwrap();
+        let engine = Arc::new(Engine::new(agent.clone()));
+        let history = (0..history_entries)
+            .map(|n| {
+                if n % 2 == 0 {
+                    HistoryEntry::Input(json!({"request": format!("prior question {n}")}))
+                } else {
+                    HistoryEntry::Exchange {
+                        response: ModelResponse::final_output(
+                            json!({"answer": format!("prior answer {n}")}),
+                        ),
+                        results: vec![],
+                    }
+                }
+            })
+            .collect();
+        Self {
+            agent,
+            engine,
+            counts,
+            rounds,
+            batch,
+            chunks,
+            bound,
+            expected,
+            history,
+        }
+    }
+    pub fn prepare(&self) -> PreparedRun {
+        PreparedRun {
+            conversation: uuid::Uuid::new_v4().to_string(),
+            input: self.input(),
+            history: self.history.clone(),
+        }
+    }
+    pub fn input(&self) -> Value {
+        json!({"request": "complete the fixed workload"})
+    }
+    pub async fn execute(&self, prepared: PreparedRun) -> RunState {
+        let mut state = prepared.admit(&self.agent);
+        self.engine
+            .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+            .await
+            .unwrap();
+        state
+    }
+    pub fn verify_state(&self, state: &RunState) {
+        assert_eq!(
+            state.phase,
+            Phase::Settled(Settlement::Completed(
+                serde_json::to_value(&self.expected).unwrap()
+            ))
+        );
+        assert_eq!(state.usage.model_calls as usize, self.rounds + 1);
+        assert_eq!(state.usage.tool_calls as usize, self.rounds * self.batch);
+        assert_eq!(
+            state.history.len(),
+            self.rounds + 2,
+            "input, each tool round, and final output must be retained"
+        );
+        for entry in &state.history {
+            if let HistoryEntry::Exchange { response, results } = entry {
+                assert_eq!(response.tools.len(), results.len());
+                for (call, result) in response.tools.iter().zip(results) {
+                    assert_eq!(call.id, result.call_id);
+                    assert_eq!(call.arguments["n"], result.value);
+                    assert!(!result.is_error);
+                }
+            }
+        }
+    }
+    pub fn verify_counts(&self, before: &Snapshot, runs: usize, concurrent: usize) {
+        let after = self.counts.snapshot();
+        assert_eq!(after.model - before.model, runs * (self.rounds + 1));
+        assert_eq!(
+            after.model_cleanup - before.model_cleanup,
+            runs * (self.rounds + 1)
+        );
+        assert_eq!(after.tools - before.tools, runs * self.rounds * self.batch);
+        assert_eq!(
+            after.tool_cleanup - before.tool_cleanup,
+            runs * self.rounds * self.batch
+        );
+        assert_eq!(after.chunks - before.chunks, runs * self.chunks);
+        assert_eq!(
+            after.active, 0,
+            "all run-owned tool work must be cleaned up"
+        );
+        assert!(after.peak <= self.bound * concurrent);
+    }
+}
+
+pub fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKERS)
+        .enable_all()
+        .build()
+        .unwrap()
+}
+
+/// Fixed total work across concurrency levels, with each run's submission-to-completion latency.
+pub async fn concurrent(
+    fixture: &Fixture,
+    states: Vec<PreparedRun>,
+    active: usize,
+) -> Vec<(RunState, Duration)> {
+    stream::iter(states.into_iter().map(|prepared| {
+        let engine = fixture.engine.clone();
+        async move {
+            let started = Instant::now();
+            let state = tokio::spawn(async move {
+                let mut state = prepared.admit(engine.agent());
+                engine
+                    .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+                    .await
+                    .unwrap();
+                state
+            })
+            .await
+            .unwrap();
+            (state, started.elapsed())
+        }
+    }))
+    .buffer_unordered(active)
+    .collect()
+    .await
+}
+
+pub fn process_cpu_ns() -> u64 {
+    // CLOCK_PROCESS_CPUTIME_ID includes CPU consumed by all Tokio and SQLite workers.
+    let mut value = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let result = unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, &mut value) };
+    assert_eq!(result, 0);
+    value.tv_sec as u64 * 1_000_000_000 + value.tv_nsec as u64
+}
+
+pub fn percentile(values: &[u64], quantile: f64) -> u64 {
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    sorted[((sorted.len() - 1) as f64 * quantile).round() as usize]
+}
+
+#[cfg(feature = "sqlite")]
+pub mod durable {
+    use super::*;
+    use std::path::Path;
+    use yielded_agent::host::{Host, HostOptions};
+    use yielded_agent::sqlite::SqliteStore;
+
+    pub struct Resident {
+        pub store: Arc<SqliteStore>,
+        pub host: Host,
+        pub events: tokio::sync::mpsc::Receiver<ProgressEvent>,
+        _directory: tempfile::TempDir,
+    }
+    impl Resident {
+        pub async fn new(fixture: &Fixture, active: usize) -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let store = Arc::new(
+                SqliteStore::open(directory.path().join("runtime.sqlite"))
+                    .await
+                    .unwrap(),
+            );
+            let (sender, events) = tokio::sync::mpsc::channel(16_384);
+            let host = Host::start(
+                store.clone(),
+                fixture.agent.clone(),
+                HostOptions {
+                    max_concurrent_runs: active,
+                    poll_interval: Duration::from_millis(1),
+                    events: Some(sender),
+                },
+            )
+            .unwrap();
+            let mut resident = Self {
+                store,
+                host,
+                events,
+                _directory: directory,
+            };
+            let warmup = resident.run(fixture).await;
+            fixture.verify_state(&warmup);
+            resident
+        }
+        pub async fn run(&mut self, fixture: &Fixture) -> RunState {
+            let conversation = uuid::Uuid::new_v4().to_string();
+            let id = self
+                .host
+                .submit(&conversation, "input", fixture.input(), None)
+                .await
+                .unwrap();
+            self.wait(id).await
+        }
+        pub async fn wait(&mut self, id: RunId) -> RunState {
+            tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    match self
+                        .events
+                        .recv()
+                        .await
+                        .expect("host progress channel closed")
+                    {
+                        ProgressEvent::Settled { run_id } if run_id == id => {
+                            return self.host.status(id).await.unwrap();
+                        }
+                        _ => {}
+                    }
+                }
+            })
+            .await
+            .expect("durable benchmark failed to settle")
+        }
+        pub async fn batch(
+            &mut self,
+            fixture: &Fixture,
+            count: usize,
+        ) -> Vec<(RunState, Duration)> {
+            let mut starts = std::collections::HashMap::new();
+            for _ in 0..count {
+                let conversation = uuid::Uuid::new_v4().to_string();
+                let started = Instant::now();
+                let id = self
+                    .host
+                    .submit(&conversation, "input", fixture.input(), None)
+                    .await
+                    .unwrap();
+                starts.insert(id, started);
+            }
+            let mut completed = Vec::with_capacity(count);
+            tokio::time::timeout(Duration::from_secs(30), async {
+                while !starts.is_empty() {
+                    if let ProgressEvent::Settled { run_id } = self
+                        .events
+                        .recv()
+                        .await
+                        .expect("host progress channel closed")
+                        && let Some(started) = starts.remove(&run_id)
+                    {
+                        let state = self.host.status(run_id).await.unwrap();
+                        completed.push((state, started.elapsed()));
+                    }
+                }
+            })
+            .await
+            .expect("durable concurrent benchmark failed to settle");
+            completed
+        }
+        pub async fn close(mut self) {
+            self.host.shutdown().await.unwrap();
+            drop(self.host);
+            self.store.close().await.unwrap();
+        }
+    }
+    struct StopAfterRound {
+        store: Arc<SqliteStore>,
+    }
+    #[async_trait]
+    impl Checkpoint for StopAfterRound {
+        async fn commit(&self, state: &mut RunState) -> Result<()> {
+            self.store.commit(state).await?;
+            if matches!(state.phase, Phase::Ready)
+                && state.history.iter().any(|entry| {
+                    matches!(entry,
+                HistoryEntry::Exchange { response, .. } if !response.tools.is_empty())
+                })
+            {
+                return Err(Error::Interrupted);
+            }
+            Ok(())
+        }
+    }
+    pub struct RecoveryTemplate {
+        directory: tempfile::TempDir,
+        pub id: RunId,
+    }
+    impl RecoveryTemplate {
+        pub async fn new(fixture: &Fixture, prior_runs: usize) -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let store = Arc::new(
+                SqliteStore::open(directory.path().join("template.sqlite"))
+                    .await
+                    .unwrap(),
+            );
+            let seed = Fixture::new(0, 0, 4, 0, 0);
+            for index in 0..prior_runs {
+                let id = store
+                    .accept(
+                        &seed.agent,
+                        "recovery",
+                        &format!("seed-{index}"),
+                        seed.input(),
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                let mut state = store.claim(id).await.unwrap();
+                seed.engine
+                    .drive(&mut state, &*store, RunControl::default())
+                    .await
+                    .unwrap();
+                seed.verify_state(&state);
+            }
+            let id = store
+                .accept(
+                    &fixture.agent,
+                    "recovery",
+                    "resume-me",
+                    fixture.input(),
+                    None,
+                )
+                .await
+                .unwrap();
+            let mut state = store.claim(id).await.unwrap();
+            let result = fixture
+                .engine
+                .drive(
+                    &mut state,
+                    &StopAfterRound {
+                        store: store.clone(),
+                    },
+                    RunControl::default(),
+                )
+                .await;
+            assert!(
+                matches!(result, Err(Error::Storage(_))),
+                "recovery fixture must stop at its retained commit boundary: {result:?}"
+            );
+            assert_eq!(state.usage.model_calls, 1);
+            assert_eq!(state.usage.tool_calls, 1);
+            assert!(matches!(state.phase, Phase::Ready));
+            store.close().await.unwrap();
+            Self { directory, id }
+        }
+        pub fn copy_to(&self, path: &Path) {
+            std::fs::copy(self.directory.path().join("template.sqlite"), path).unwrap();
+        }
+        pub async fn resume(&self, fixture: &Fixture, path: &Path) -> (RunState, Arc<SqliteStore>) {
+            let store = Arc::new(SqliteStore::open(path).await.unwrap());
+            let mut state = store.claim(self.id).await.unwrap();
+            fixture
+                .engine
+                .drive(&mut state, &*store, RunControl::default())
+                .await
+                .unwrap();
+            (state, store)
+        }
+        pub fn verify_counts(&self, fixture: &Fixture, before: &Snapshot) {
+            let after = fixture.counts.snapshot();
+            assert_eq!(after.model - before.model, 4);
+            assert_eq!(after.model_cleanup - before.model_cleanup, 4);
+            assert_eq!(after.tools - before.tools, 3);
+            assert_eq!(after.tool_cleanup - before.tool_cleanup, 3);
+            assert_eq!(after.active, 0);
+        }
+    }
+}

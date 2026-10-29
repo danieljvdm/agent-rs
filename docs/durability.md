@@ -1,0 +1,56 @@
+# Execution and durability contract
+
+The engine owns a serializable `RunState`, with phases `Ready`, `ModelInFlight`, `Tools`, and `Settled`. The durable host drives that same engine. SQLite is an optional adapter implementing the engine's atomic `Checkpoint` boundary. Futures are never serialized.
+
+## Commit protocol
+
+1. Acceptance atomically stores the immutable input/binding/limits, initial history, idempotency mapping, and active checkpoint. The caller receives a RunId only after commit. Idempotency keys are scoped to conversations; conflicting payloads are rejected, including changed binding or expiry. Only one run may be active per conversation.
+2. Before model work, the engine commits its phase, charged attempt count, and active-time reservation. A complete response is retained before tools can start. All calls in the response must pass argument, identity, and tool validation.
+3. Before tool work, the engine commits the declared contract, stable external idempotency key, and dispatched intent. Parallel tools execute in bounded segments separated by sequential barriers. Each outcome commits as it arrives; the next model turn sees a complete batch in declaration order.
+4. Every checkpoint transaction appends new history and updates operation evidence together with checkpoint advancement. Terminal state and removal of the active checkpoint commit together. Operations survive settlement for inspection and reconciliation.
+
+A failed checkpoint stops that execution. Callers must reload authoritative state before resuming. A committed state can outlive loss of its acknowledgement; acceptance retries are safe through the caller's key.
+
+## Recovery and external effects
+
+The host claims a new internal generation before driving a checkpoint. Commits require the expected generation and revision. Cancellation and resolutions also advance revisions, so late results cannot overwrite them. A single process owns the database; this is not a distributed lease protocol.
+
+The SQLite adapter uses WAL with full synchronization and a process lock beside the canonical database path. Symlink aliases share that lock. Hard-linked database files are rejected because their distinct WAL paths are unsafe after a crash. Keep the database and sidecars together on a local filesystem, and do not remove the lock file while an owner is running.
+
+Recorded tool outcomes are reused. Incomplete model attempts may repeat, with prior attempt charges retained. For an interrupted tool:
+
+| Original contract | Recovery |
+| --- | --- |
+| `Never` | Retain `Unknown`; wait for application reconciliation. |
+| `ReadOnly` | May retry under the same tool contract. |
+| `Idempotent { contract }` | May retry with the original stable idempotency key, under the exact same contract. |
+
+`Idempotent` is an application assertion about its external system. The handler must actually pass `ToolContext::idempotency_key` to a system that deduplicates the effect. The runtime does not manufacture external exactly-once behavior. Even the gap after intent commit but before actual dispatch is conservatively uncertain for ordinary mutations.
+
+Resolve unknown outcomes with the factual result discovered by the application. Do not invent success simply to unblock the run. Explicit cancellation cannot undo an effect, and outstanding uncertainty remains inspectable and resolvable after cancellation.
+
+Tool-call IDs must be unique throughout a run. This makes a delayed approval or input reply unable to resolve a different later operation with the same ID.
+
+## Waiting and time
+
+Approval is persisted before dispatch. Tool handlers may return `WaitRequest::Input` or `WaitRequest::Until`. The host releases the execution slot while the run waits. Replies target a specific operation; due deadlines are UTC Unix milliseconds stored in SQLite. Startup and periodic indexed discovery resume eligible work without relying on notifications.
+
+Each operation or parallel segment reserves its operation timeout plus cleanup allowance against the cumulative active budget **before external work**. On orderly completion it refunds unused time. An interrupted process keeps the entire reservation charged. This conservative policy prevents crashes from replenishing the budget. Awaiting approval, input, or a deadline consumes no active budget. Optional run expiry is a separate wall-clock deadline.
+
+Model/tool attempts and token use accumulate across recovery. Attempts can be charged without external dispatch when authorization, a commit, or shutdown intervenes. Provider usage unavailable after a broken stream cannot be reconstructed; model attempts and the conservative active reservation still bound retry work. Live provider billing may include repeated requests.
+
+## Ownership and shutdown
+
+Use `Host::shutdown().await` and then `SqliteStore::close().await`. Shutdown stops admission, signals operations, and joins owned tasks; accepted work remains available to a later host. `Host::cancel` first persists explicit cancellation and then signals active work. Dropping the host signals shutdown but is not an asynchronous cleanup barrier.
+
+Model/tool implementations must not detach child tasks. If they own asynchronous resources, implement `cleanup`, which the engine invokes after each attempt, including interruptions. Cleanup has an explicit timeout; Rust cannot force an uncooperative external operation to undo itself. Handlers must yield to Tokio, honor cancellation, and bound CPU work; substantial blocking work belongs on an application-owned bounded blocking executor. SQLite uses its own bounded worker.
+
+## Compatibility and observation
+
+Schema/state versions and immutable agent bindings are checked explicitly. Instructions, model configuration, schemas, tool versions, retry contracts, and limits are retained. Change the agent/tool version when implementation semantics change; function bodies and credentials are not serialized. An incompatible binding leaves the accepted obligation retained with a visible host/store error until the application repairs the binding and retries it.
+
+Status and history are authoritative after reconnect. Progress events and text deltas are bounded, transient, and may be dropped. The active checkpoint carries bounded prior context and current-run evidence; recovery does not replay the conversation's entire lifetime. Context retains whole model/tool exchanges and the current input; an oversized newest group fails explicitly.
+
+## Deliberate differences from Yielded Agent
+
+This implementation takes its behavioral reference from `yielded-dev/agent` at `549daa3c7aa65dfbaeded9dccc6dd342f1706bd7`, without TypeScript API or data-format compatibility. It uses one public RunId, one active run per conversation, ordinary tools and typed final output, straightforward budgets, and constructors/traits at real boundaries. It omits arbitrary steering, input joining, multiple completion protocols, detached observation modes, ambient service graphs, distributed ownership, advanced compaction, subagents, and MCP.

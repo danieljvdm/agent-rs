@@ -1,0 +1,33 @@
+[package]
+name = "yielded-agent"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A resumable agent engine with an optional SQLite durable host"
+license = "MIT"
+[features]
+default = ["sqlite", "openai"]
+sqlite = ["dep:rusqlite", "dep:fs2"]
+openai = ["dep:reqwest"]
+allocation-metrics = []
+[dependencies]
+async-trait = "0.1.89"
+futures = "0.3.32"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0"
+schemars = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-util = "0.7"
+tracing = "0.1"
+uuid = { version = "1.20", features = ["v4", "serde"] }
+rusqlite = { version = "0.37", features = ["bundled"], optional = true }
+fs2 = { version = "0.4", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"], optional = true }
+[dev-dependencies]
+criterion = { version = "0.6", features = ["async_tokio"] }
+tempfile = "3"
+libc = "0.2"
+[[bench]]
+name = "agent_loop"
+harness = false
