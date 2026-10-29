@@ -72,6 +72,7 @@ struct CheckedModel {
     turns: Vec<Vec<ModelEvent>>,
     rounds: usize,
     batch: usize,
+    expected_seed_entries: usize,
 }
 #[async_trait]
 impl Model for CheckedModel {
@@ -80,6 +81,24 @@ impl Model for CheckedModel {
         assert!(
             (1..=self.turns.len()).contains(&(request.turn as usize)),
             "unexpected model turn"
+        );
+        let seed_entries = request
+            .history
+            .iter()
+            .filter(|entry| match entry {
+                HistoryEntry::Input(value) => value["request"]
+                    .as_str()
+                    .is_some_and(|text| text.starts_with("prior question ")),
+                HistoryEntry::Exchange { response, .. } => response
+                    .output
+                    .as_ref()
+                    .and_then(|value| value["answer"].as_str())
+                    .is_some_and(|text| text.starts_with("prior answer ")),
+            })
+            .count();
+        assert_eq!(
+            seed_entries, self.expected_seed_entries,
+            "model must receive all seeded context"
         );
         let exchanges = request
             .history
@@ -222,6 +241,7 @@ impl Fixture {
             turns,
             rounds,
             batch,
+            expected_seed_entries: history_entries,
         });
         let spec = ToolSpec {
             name: "echo".into(),
@@ -527,6 +547,7 @@ pub mod durable {
     pub struct RecoveryTemplate {
         directory: tempfile::TempDir,
         pub id: RunId,
+        prior_runs: usize,
     }
     impl RecoveryTemplate {
         pub async fn new(fixture: &Fixture, prior_runs: usize) -> Self {
@@ -584,7 +605,11 @@ pub mod durable {
             assert_eq!(state.usage.tool_calls, 1);
             assert!(matches!(state.phase, Phase::Ready));
             store.close().await.unwrap();
-            Self { directory, id }
+            Self {
+                directory,
+                id,
+                prior_runs,
+            }
         }
         pub fn copy_to(&self, path: &Path) {
             std::fs::copy(self.directory.path().join("template.sqlite"), path).unwrap();
@@ -592,6 +617,11 @@ pub mod durable {
         pub async fn resume(&self, fixture: &Fixture, path: &Path) -> (RunState, Arc<SqliteStore>) {
             let store = Arc::new(SqliteStore::open(path).await.unwrap());
             let mut state = store.claim(self.id).await.unwrap();
+            assert_eq!(
+                state.prior_context.len(),
+                self.prior_runs * 2,
+                "recovery must retain the full bounded seed context"
+            );
             fixture
                 .engine
                 .drive(&mut state, &*store, RunControl::default())
