@@ -29,6 +29,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
+    sync::Arc,
     time::Duration,
 };
 use tokio_util::sync::CancellationToken;
@@ -169,7 +170,7 @@ fn request_body(request: ModelRequest) -> Result<Value> {
     if request.config.model.trim().is_empty() {
         return Err(Error::Invalid("empty model name".into()));
     }
-    let mut messages = vec![json!({"role":"developer", "content": request.instructions})];
+    let mut messages = vec![json!({"role":"developer", "content": &*request.instructions})];
     for entry in request.history {
         match entry {
             HistoryEntry::Input(value) => {
@@ -215,7 +216,7 @@ fn request_body(request: ModelRequest) -> Result<Value> {
             }
         }
     }
-    let mut output_schema = request.output_schema;
+    let mut output_schema = Arc::unwrap_or_clone(request.output_schema);
     rebase_refs(&mut output_schema);
     let schema = json!({"type":"object", "properties":{"value":output_schema}, "required":["value"], "additionalProperties":false});
     let mut body = json!({
@@ -233,7 +234,7 @@ fn request_body(request: ModelRequest) -> Result<Value> {
         body["temperature"] = json!(temperature);
     }
     if !request.tools.is_empty() {
-        body["tools"] = request.tools.into_iter().map(|tool| json!({"type":"function", "function": {
+        body["tools"] = request.tools.iter().map(|tool| json!({"type":"function", "function": {
             "name":tool.name,"description":tool.description,"parameters":tool.input_schema,"strict":false
         }})).collect();
         body["parallel_tool_calls"] = json!(true);
@@ -684,8 +685,10 @@ mod tests {
                     }],
                 },
             ],
-            tools: vec![],
-            output_schema: json!({"$defs":{"Answer":{"type":"integer"}},"$ref":"#/$defs/Answer"}),
+            tools: Arc::new([]),
+            output_schema: Arc::new(
+                json!({"$defs":{"Answer":{"type":"integer"}},"$ref":"#/$defs/Answer"}),
+            ),
             turn: 1,
             max_response_bytes: 1024,
             remaining_tokens: 256,

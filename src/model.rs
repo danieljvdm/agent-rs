@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     pin::Pin,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 use tokio_util::sync::CancellationToken;
 
@@ -23,13 +26,15 @@ impl Default for ModelConfig {
     }
 }
 #[derive(Clone, Debug)]
+/// One model turn. Instructions, tools and the output schema are the agent's own, shared rather
+/// than copied on every turn.
 pub struct ModelRequest {
     pub run_id: RunId,
-    pub instructions: String,
+    pub instructions: Arc<str>,
     pub config: ModelConfig,
     pub history: Vec<HistoryEntry>,
-    pub tools: Vec<ToolSpec>,
-    pub output_schema: Value,
+    pub tools: Arc<[ToolSpec]>,
+    pub output_schema: Arc<Value>,
     pub turn: u32,
     pub max_response_bytes: usize,
     /// Remaining cumulative token allowance; providers should cap generated output accordingly.

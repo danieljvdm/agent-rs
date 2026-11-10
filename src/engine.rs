@@ -15,13 +15,15 @@ type Validator = Arc<dyn Fn(&Value) -> Result<()> + Send + Sync>;
 #[derive(Clone)]
 pub struct Agent {
     id: String,
-    instructions: String,
+    // Shared with every `ModelRequest` instead of copied into each one.
+    instructions: Arc<str>,
     model: Arc<dyn Model>,
     config: ModelConfig,
     tools: Vec<Arc<dyn Tool>>,
+    tool_specs: Arc<[ToolSpec]>,
     limits: Limits,
     input_schema: Value,
-    output_schema: Value,
+    output_schema: Arc<Value>,
     validate_input: Validator,
     validate_output: Validator,
     authorizer: Arc<dyn Authorizer>,
@@ -74,13 +76,16 @@ impl Agent {
         }
         Ok(Self {
             id,
-            instructions: instructions.into(),
+            instructions: instructions.into().into(),
             model,
             config,
+            tool_specs: tools.iter().map(|tool| tool.spec().clone()).collect(),
             tools,
             limits,
             input_schema: serde_json::to_value(schema_for!(I)).expect("schema serialization"),
-            output_schema: serde_json::to_value(schema_for!(O)).expect("schema serialization"),
+            output_schema: Arc::new(
+                serde_json::to_value(schema_for!(O)).expect("schema serialization"),
+            ),
             validate_input: Arc::new(|value| {
                 serde_json::from_value::<I>(value.clone())
                     .map(|_| ())
@@ -105,8 +110,8 @@ impl Agent {
         &self.limits
     }
     pub fn binding(&self) -> Value {
-        json!({"id":self.id,"instructions":self.instructions,"model":self.config,"tools":self.tools.iter().map(|t|t.spec()).collect::<Vec<_>>(),
-            "input_schema":self.input_schema,"output_schema":self.output_schema,"limits":self.limits})
+        json!({"id":self.id,"instructions":&*self.instructions,"model":self.config,"tools":&*self.tool_specs,
+            "input_schema":self.input_schema,"output_schema":&*self.output_schema,"limits":self.limits})
     }
     /// Accepts `input`, retaining the bounded suffix of `conversation` that fits the context limit.
     pub fn new_run(
@@ -401,7 +406,7 @@ impl Engine {
             instructions: self.agent.instructions.clone(),
             config: self.agent.config.clone(),
             history: model_context(state)?,
-            tools: self.agent.tools.iter().map(|t| t.spec().clone()).collect(),
+            tools: self.agent.tool_specs.clone(),
             output_schema: self.agent.output_schema.clone(),
             turn: state.usage.model_calls + 1,
             max_response_bytes: state.limits.max_response_bytes,
