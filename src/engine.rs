@@ -5,11 +5,21 @@ use futures::{StreamExt, stream::FuturesUnordered};
 use schemars::{JsonSchema, schema_for};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use std::{collections::HashSet, future::Future, sync::Arc, time::Duration};
+use std::{any::TypeId, collections::HashSet, future::Future, sync::Arc, time::Duration};
 use tokio::{sync::mpsc, time::Instant};
 use tokio_util::sync::CancellationToken;
 
-type Validator = Arc<dyn Fn(&Value) -> Result<()> + Send + Sync>;
+type Validator = fn(&Value) -> Result<()>;
+/// Checks that `value` deserializes as `T`. `&Value` is a deserializer, so this never copies it,
+/// and any JSON is a `Value`, so an untyped agent checks nothing.
+fn validate<T: DeserializeOwned + 'static>(value: &Value) -> Result<()> {
+    if TypeId::of::<T>() == TypeId::of::<Value>() {
+        return Ok(());
+    }
+    T::deserialize(value)
+        .map(|_| ())
+        .map_err(|e| Error::Invalid(e.to_string()))
+}
 
 /// Immutable agent definition. Product policy and clients are supplied by its caller.
 #[derive(Clone)]
@@ -87,16 +97,8 @@ impl Agent {
             output_schema: Arc::new(
                 serde_json::to_value(schema_for!(O)).expect("schema serialization"),
             ),
-            validate_input: Arc::new(|value| {
-                serde_json::from_value::<I>(value.clone())
-                    .map(|_| ())
-                    .map_err(|e| Error::Invalid(e.to_string()))
-            }),
-            validate_output: Arc::new(|value| {
-                serde_json::from_value::<O>(value.clone())
-                    .map(|_| ())
-                    .map_err(|e| Error::Invalid(e.to_string()))
-            }),
+            validate_input: validate::<I>,
+            validate_output: validate::<O>,
             authorizer: Arc::new(AllowAll),
             context_policy: None,
         })

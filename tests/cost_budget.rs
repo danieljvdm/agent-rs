@@ -40,27 +40,27 @@ const TOOL_SCHEDULE_VIRTUAL_MS: u64 = 310;
 
 // Heap allocations on the driving thread: (count, requested bytes), with headroom.
 /// `Engine::run` of a final-only response in an empty conversation.
-const ALLOC_RUN_EMPTY_CONVERSATION: Budget = Budget::new(398, 36_326);
+const ALLOC_RUN_EMPTY_CONVERSATION: Budget = Budget::new(396, 36_320);
 /// The same run in a conversation holding 1,024 prior entries: one copy into the run's prior
 /// context and one into the model request.
-const ALLOC_RUN_1024_PRIOR_ENTRIES: Budget = Budget::new(6_543, 1_771_450);
+const ALLOC_RUN_1024_PRIOR_ENTRIES: Budget = Budget::new(6_541, 1_771_444);
 /// `Engine::run` of four rounds of one tool each in an empty conversation.
-const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(804, 88_768);
+const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(794, 86_230);
 /// `Engine::drive` of a final response streamed as 64 text deltas of 16 bytes, observed through
 /// an attached progress channel that a receiver drains concurrently. Includes the scripted
 /// model's copy of each delta, so the engine itself must add no allocation per delta. Bytes
 /// include the channel's two 32-slot blocks of 40-byte `ProgressEvent`s, a per-channel cost.
-const ALLOC_STREAM_64_DELTAS_OBSERVED: Budget = Budget::new(169, 17_986);
+const ALLOC_STREAM_64_DELTAS_OBSERVED: Budget = Budget::new(167, 17_980);
 /// `Engine::run` of a final-only response for an agent with typed input and output, in an empty
 /// conversation: includes validating the input and the output against their types.
-const ALLOC_RUN_TYPED_EMPTY_CONVERSATION: Budget = Budget::new(489, 50_818);
+const ALLOC_RUN_TYPED_EMPTY_CONVERSATION: Budget = Budget::new(484, 49_536);
 /// `Agent::clone` with four typed tools (once per spawned durable run and per `accept`).
 const ALLOC_AGENT_CLONE: Budget = Budget::new(7, 764);
 /// `Engine::drive` of a settled run decoded from storage, with four typed tools: only the
 /// compatibility check every `drive` performs against the agent's binding.
 const ALLOC_DRIVE_BINDING_CHECK: Budget = Budget::new(182, 17_101);
 /// `Tool::validate` then `Tool::execute` of one typed tool call with a string argument.
-const ALLOC_TYPED_TOOL_CALL: Budget = Budget::new(8, 1_022);
+const ALLOC_TYPED_TOOL_CALL: Budget = Budget::new(5, 382);
 
 /// Allowance above a measured allocation or record-byte budget.
 const HEADROOM_PERCENT: u64 = 2;
