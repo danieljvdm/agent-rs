@@ -48,8 +48,9 @@ const ALLOC_RUN_1024_PRIOR_ENTRIES: Budget = Budget::new(6_543, 1_771_450);
 const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(804, 88_768);
 /// `Engine::drive` of a final response streamed as 64 text deltas of 16 bytes, observed through
 /// an attached progress channel that a receiver drains concurrently. Includes the scripted
-/// model's copy of each delta, so the engine itself must add no allocation per delta.
-const ALLOC_STREAM_64_DELTAS_OBSERVED: Budget = Budget::new(169, 17_474);
+/// model's copy of each delta, so the engine itself must add no allocation per delta. Bytes
+/// include the channel's two 32-slot blocks of 40-byte `ProgressEvent`s, a per-channel cost.
+const ALLOC_STREAM_64_DELTAS_OBSERVED: Budget = Budget::new(169, 17_986);
 /// `Agent::clone` with four typed tools (once per spawned durable run and per `accept`).
 const ALLOC_AGENT_CLONE: Budget = Budget::new(7, 764);
 /// `Agent::binding` with four typed tools (rebuilt on every `drive` and `accept`).
@@ -373,6 +374,7 @@ async fn observed_stream_allocation_budget() {
                 .agent()
                 .new_run("cost", json!("go"), &[], None)
                 .unwrap();
+            let run_id = state.id;
             // Room for every event, so nothing is dropped and the count stays deterministic.
             let (sender, mut receiver) = tokio::sync::mpsc::channel(2 * STREAM_DELTAS);
             let drive = engine.drive(
@@ -386,7 +388,8 @@ async fn observed_stream_allocation_budget() {
             let drain = async {
                 let mut deltas = 0;
                 while let Some(event) = receiver.recv().await {
-                    if let ProgressEvent::TextDelta(text) = event {
+                    assert_eq!(event.run_id, run_id);
+                    if let ProgressKind::TextDelta(text) = event.kind {
                         assert_eq!(text.len(), 16);
                         deltas += 1;
                     }

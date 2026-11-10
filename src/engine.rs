@@ -203,7 +203,8 @@ impl Checkpoint for MemoryCheckpoint {
 pub struct RunControl {
     pub cancel: CancellationToken,
     pub shutdown: CancellationToken,
-    /// Best-effort transient events. A full channel drops events, never blocks execution.
+    /// Best-effort transient events, each naming its run, so one channel may serve many runs.
+    /// A full channel drops events and never blocks execution.
     pub events: Option<mpsc::Sender<ProgressEvent>>,
 }
 #[derive(Default, Debug)]
@@ -425,7 +426,7 @@ impl Engine {
         let (reservation, work_ms) = reserve(state)?;
         state.usage.model_calls += 1;
         state.phase = Phase::ModelInFlight;
-        emit(control, ProgressEvent::ModelStarted { run_id: state.id });
+        emit(state, control, ProgressKind::ModelStarted);
         commit(checkpoint, state, control).await?;
         let started = Instant::now();
         let operation_cancel = CancellationToken::new();
@@ -479,9 +480,7 @@ impl Engine {
                                     "stream exceeds response byte limit".into(),
                                 ));
                             }
-                            if let Some(sender) = &control.events {
-                                let _ = sender.try_send(ProgressEvent::TextDelta(text));
-                            }
+                            emit(state, control, ProgressKind::TextDelta(text));
                         }
                         ModelEvent::Response(value) => {
                             if encoded_len(&value)? > state.limits.max_response_bytes {
@@ -726,7 +725,7 @@ impl Engine {
             {
                 if !admitted.is_empty() {
                     let count = admitted.len();
-                    emit(control, ProgressEvent::ToolsStarted { count });
+                    emit(state, control, ProgressKind::ToolsStarted { count });
                 }
                 match commit(checkpoint, state, control).await {
                     Ok(()) => window.unsaved = false,
@@ -1310,9 +1309,12 @@ fn refund(state: &mut RunState, reservation: u64, elapsed: Duration) {
 }
 /// Best-effort and non-blocking: a closed or full channel drops the event. Events are not
 /// counted or retained in run state.
-fn emit(control: &RunControl, event: ProgressEvent) {
+fn emit(state: &RunState, control: &RunControl, kind: ProgressKind) {
     if let Some(sender) = &control.events {
-        let _ = sender.try_send(event);
+        let _ = sender.try_send(ProgressEvent {
+            run_id: state.id,
+            kind,
+        });
     }
 }
 async fn commit(
@@ -1327,12 +1329,13 @@ async fn commit(
             Error::Stale | Error::Storage(_) | Error::Incompatible(_) => error,
             _ => Error::Storage(error.to_string()),
         })?;
-    if let Some(sender) = &control.events {
-        let _ = sender.try_send(ProgressEvent::Committed {
-            run_id: state.id,
+    emit(
+        state,
+        control,
+        ProgressKind::Committed {
             revision: state.revision,
-        });
-    }
+        },
+    );
     Ok(())
 }
 async fn settle(
@@ -1344,9 +1347,7 @@ async fn settle(
     uncertain_dispatched(state, "execution settled without a recorded tool outcome");
     state.phase = Phase::Settled(settlement);
     commit(checkpoint, state, control).await?;
-    if let Some(sender) = &control.events {
-        let _ = sender.try_send(ProgressEvent::Settled { run_id: state.id });
-    }
+    emit(state, control, ProgressKind::Settled);
     Ok(())
 }
 enum WorkOutcome<T> {

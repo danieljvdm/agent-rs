@@ -486,16 +486,13 @@ pub mod durable {
         pub async fn wait(&mut self, id: RunId) -> RunState {
             tokio::time::timeout(Duration::from_secs(30), async {
                 loop {
-                    match self
+                    let event = self
                         .events
                         .recv()
                         .await
-                        .expect("host progress channel closed")
-                    {
-                        ProgressEvent::Settled { run_id } if run_id == id => {
-                            return self.host.status(id).await.unwrap();
-                        }
-                        _ => {}
+                        .expect("host progress channel closed");
+                    if event.run_id == id && matches!(event.kind, ProgressKind::Settled) {
+                        return self.host.status(id).await.unwrap();
                     }
                 }
             })
@@ -530,7 +527,9 @@ pub mod durable {
                 while completed.len() < count {
                     tokio::select! {
                         event = events.recv() => {
-                            if let ProgressEvent::Settled { run_id } = event.expect("host progress channel closed") {
+                            let event = event.expect("host progress channel closed");
+                            if matches!(event.kind, ProgressKind::Settled) {
+                                let run_id = event.run_id;
                                 assert!(seen.insert(run_id), "duplicate settlement event");
                                 assert!(seen.len() <= count, "unexpected settlement event");
                                 statuses.push(async move {

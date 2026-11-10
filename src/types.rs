@@ -264,13 +264,34 @@ pub enum Resolution {
     Input(Value),
     Reconcile(ToolResult),
 }
+/// A transient, best-effort progress notification attributed to the run that produced it.
+///
+/// Every event names its run, so one channel can carry events from many concurrent runs, as a
+/// `Host` does. Events are never persisted and a full channel drops them; durable status and
+/// history remain authoritative. Fields may be added (for example, linkage to a parent run),
+/// so match with `..`.
 #[derive(Clone, Debug)]
-pub enum ProgressEvent {
-    ModelStarted { run_id: RunId },
+#[non_exhaustive]
+pub struct ProgressEvent {
+    pub run_id: RunId,
+    pub kind: ProgressKind,
+}
+/// What happened. Kinds may be added, and fields may be added to struct-like kinds.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum ProgressKind {
+    /// A model call was reserved; its intent is committed next.
+    ModelStarted,
+    /// Streamed model text, delivered as received and never retained.
     TextDelta(String),
+    /// `count` tool operations were admitted together; their dispatch intent is committed next.
+    #[non_exhaustive]
     ToolsStarted { count: usize },
-    Committed { run_id: RunId, revision: u64 },
-    Settled { run_id: RunId },
+    /// A checkpoint commit succeeded at this revision.
+    #[non_exhaustive]
+    Committed { revision: u64 },
+    /// The run's settlement was committed; it is terminal.
+    Settled,
 }
 pub fn now_ms() -> u64 {
     SystemTime::now()

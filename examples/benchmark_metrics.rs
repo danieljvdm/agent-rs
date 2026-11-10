@@ -172,7 +172,7 @@ async fn collect(samples: usize, filter: &str) -> Vec<Sample> {
                         let mut text = String::new();
                         let mut observed_chunks = 0;
                         while let Some(event) = receiver.recv().await {
-                            if let ProgressEvent::TextDelta(delta) = event {
+                            if let ProgressKind::TextDelta(delta) = event.kind {
                                 first.get_or_insert(started.elapsed().as_nanos() as u64);
                                 text.push_str(&delta);
                                 observed_chunks += 1;
