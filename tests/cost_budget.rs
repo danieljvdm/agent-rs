@@ -91,6 +91,23 @@ const RESPONSES_REQUEST_BODY_BYTES: usize = 2_122;
 /// `size_of::<Error>()`.
 const ERROR_SIZE_BYTES: usize = 16;
 
+// Steering. Unused, it adds nothing to any budget above.
+/// SQLite transactions for `SteeringStore::steer` of one new instruction (exact).
+const SQLITE_TRANSACTIONS_STEER: u64 = 1;
+/// SQLite transactions for a final-only run steered once before its first dispatch, from claim
+/// through settlement plus the acceptance (exact): application rides on the dispatch commit.
+const SQLITE_TRANSACTIONS_STEERED_BEFORE_DISPATCH: u64 = 4;
+/// The same, steered from inside its first model call (exact): the final response reopens to
+/// `Ready`, and a second dispatch applies the instruction. The rolled-back completion attempt
+/// that found it queued commits nothing.
+const SQLITE_TRANSACTIONS_STEERED_DURING_MODEL: u64 = 6;
+/// Record bytes one 64-byte instruction adds to the run steered before dispatch, over the same
+/// run unsteered: its queue row, its history row and its applied marker (with headroom).
+const SQLITE_RECORD_BYTES_PER_STEERING: u64 = 480;
+/// `Agent::drive` of a final-only run whose history holds 16 applied steering instructions,
+/// all pinned in context.
+const ALLOC_DRIVE_16_STEERING_ENTRIES: Budget = Budget::new(32, 6_522);
+
 /// Allowance above a measured allocation or record-byte budget.
 const HEADROOM_PERCENT: u64 = 2;
 
@@ -780,9 +797,9 @@ mod sqlite {
     /// Sums the bytes of every record SQLite inserts or rewrites, through triggers created on a
     /// separate connection. SQLite stores whole records, so an update writes the full new row.
     /// Triggers cover every table that exists when installed, including tables added later.
-    struct RecordMeter(rusqlite::Connection);
+    pub(super) struct RecordMeter(rusqlite::Connection);
     impl RecordMeter {
-        fn install(path: &Path) -> Self {
+        pub(super) fn install(path: &Path) -> Self {
             let connection = rusqlite::Connection::open(path).unwrap();
             connection
                 .execute_batch(
@@ -820,7 +837,7 @@ mod sqlite {
             }
             Self(connection)
         }
-        fn bytes(&self) -> u64 {
+        pub(super) fn bytes(&self) -> u64 {
             self.0
                 .query_row("SELECT bytes FROM cost_meter", [], |row| row.get(0))
                 .unwrap()
@@ -964,5 +981,186 @@ mod sqlite {
             );
             assert_eq!(copies, SQLITE_CONTEXT_COPIES_CLAIM_TO_SETTLEMENT);
         }
+    }
+}
+
+#[tokio::test]
+async fn steering_allocation_budget() {
+    let agent = agent(0, 0);
+    let mut prepared = agent.new_run("cost", json!("go"), &[], None).unwrap();
+    prepared
+        .history
+        .extend((0..16).map(|n| HistoryEntry::Steering {
+            id: RunId::from_u128(n),
+            instruction: format!("{n:02} {}", "steer".repeat(12)),
+        }));
+    let control = RunControl::default();
+    stable(
+        "drive_16_steering_entries",
+        ALLOC_DRIVE_16_STEERING_ENTRIES,
+        || {
+            let (mut state, control, agent) = (prepared.clone(), control.clone(), &agent);
+            async move {
+                agent
+                    .drive(&mut state, &MemoryCheckpoint, control)
+                    .await
+                    .unwrap();
+                assert!(state.is_terminal());
+            }
+        },
+    )
+    .await;
+}
+
+#[cfg(feature = "sqlite")]
+mod steering {
+    use super::*;
+    use std::sync::OnceLock;
+    use yielded_agent::sqlite::SqliteStore;
+
+    /// 64 bytes, so the per-instruction budget is per a fixed size.
+    const INSTRUCTION: &str = "Use metric units for every measurement in the answer, please. OK";
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Steer {
+        Never,
+        BeforeDispatch,
+        DuringModel,
+    }
+    /// Answers at once, steering its own run from inside the first call when asked to. A second
+    /// call must see the instruction.
+    struct SteeringModel {
+        store: OnceLock<Arc<SqliteStore>>,
+        during: bool,
+    }
+    #[async_trait::async_trait]
+    impl Model for SteeringModel {
+        async fn stream(
+            &self,
+            request: ModelRequest,
+            _: tokio_util::sync::CancellationToken,
+        ) -> Result<ModelStream> {
+            let steered = request
+                .history
+                .iter()
+                .any(|entry| matches!(entry, HistoryEntry::Steering { .. }));
+            if self.during && request.turn == 1 {
+                assert!(!steered);
+                let store = self.store.get().unwrap();
+                store
+                    .steer(request.run_id, "steer", INSTRUCTION.into())
+                    .await
+                    .unwrap();
+            } else if self.during {
+                assert!(steered);
+            }
+            let response = ModelResponse::final_output(json!("done"));
+            Ok(Box::pin(futures::stream::once(async {
+                Ok(ModelEvent::Response(response))
+            })))
+        }
+    }
+    struct SteeredCost {
+        transactions: u64,
+        record_bytes: u64,
+    }
+    async fn steered_run(steer: Steer) -> SteeredCost {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("steering.sqlite");
+        let store = Arc::new(SqliteStore::open(&path).await.unwrap());
+        let model = Arc::new(SteeringModel {
+            store: OnceLock::new(),
+            during: steer == Steer::DuringModel,
+        });
+        let _ = model.store.set(store.clone());
+        let agent = Agent::builder("cost", model)
+            .instructions("Answer with the scripted result.")
+            .tools(tools())
+            .build()
+            .unwrap();
+        let meter = sqlite::RecordMeter::install(&path);
+        let bytes_before = meter.bytes();
+        let id = store
+            .accept(&agent, "conversation", "measured", json!("go"), None)
+            .await
+            .unwrap();
+        let transactions_before = store.metrics().transactions;
+        if steer == Steer::BeforeDispatch {
+            store.steer(id, "steer", INSTRUCTION.into()).await.unwrap();
+        }
+        let mut state = store.claim(id).await.unwrap();
+        agent
+            .drive(&mut state, store.as_ref(), RunControl::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            state.phase,
+            Phase::Settled(Settlement::Completed(json!("done")))
+        );
+        let steered = usize::from(steer != Steer::Never);
+        assert_eq!(
+            state.usage.model_calls as usize,
+            1 + usize::from(steer == Steer::DuringModel)
+        );
+        assert_eq!(
+            store.steering(id).await.unwrap().len(),
+            steered,
+            "every instruction applied once"
+        );
+        let cost = SteeredCost {
+            transactions: store.metrics().transactions - transactions_before,
+            record_bytes: meter.bytes() - bytes_before,
+        };
+        drop(meter);
+        store.close().await.unwrap();
+        cost
+    }
+
+    #[tokio::test]
+    async fn sqlite_steering_transactions_and_record_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SqliteStore::open(directory.path().join("steer.sqlite"))
+            .await
+            .unwrap();
+        let agent = agent(0, 0);
+        let id = store
+            .accept(&agent, "conversation", "run", json!("go"), None)
+            .await
+            .unwrap();
+        let before = store.metrics().transactions;
+        store.steer(id, "steer", INSTRUCTION.into()).await.unwrap();
+        let steer = store.metrics().transactions - before;
+        eprintln!("sqlite_transactions_steer: {steer}");
+        assert_eq!(steer, SQLITE_TRANSACTIONS_STEER);
+        store.close().await.unwrap();
+
+        let unsteered = steered_run(Steer::Never).await;
+        assert_eq!(unsteered.transactions, SQLITE_TRANSACTIONS_NO_TOOLS);
+        let before_dispatch = steered_run(Steer::BeforeDispatch).await;
+        eprintln!(
+            "sqlite_transactions_steered_before_dispatch: {}",
+            before_dispatch.transactions
+        );
+        assert_eq!(
+            before_dispatch.transactions,
+            SQLITE_TRANSACTIONS_STEERED_BEFORE_DISPATCH
+        );
+        let during_model = steered_run(Steer::DuringModel).await;
+        eprintln!(
+            "sqlite_transactions_steered_during_model: {}",
+            during_model.transactions
+        );
+        assert_eq!(
+            during_model.transactions,
+            SQLITE_TRANSACTIONS_STEERED_DURING_MODEL
+        );
+        let added = before_dispatch.record_bytes - unsteered.record_bytes;
+        eprintln!(
+            "sqlite_record_bytes_per_steering: {added} (budget {SQLITE_RECORD_BYTES_PER_STEERING})"
+        );
+        assert!(
+            added <= with_headroom(SQLITE_RECORD_BYTES_PER_STEERING),
+            "record bytes per steering exceed budget plus {HEADROOM_PERCENT}%"
+        );
     }
 }
