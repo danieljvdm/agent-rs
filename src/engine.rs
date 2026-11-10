@@ -266,6 +266,7 @@ impl<I: Serialize + 'static, O: DeserializeOwned> Agent<I, O> {
     /// # Ok(()) }
     /// ```
     pub async fn run(&self, conversation: &mut Conversation, input: impl Into<I>) -> Result<O> {
+        conversation.check_owns_last_run()?;
         if conversation.last_run.as_ref().is_some_and(|run| {
             !run.is_terminal()
                 || run.operations.iter().any(|operation| {
@@ -278,7 +279,7 @@ impl<I: Serialize + 'static, O: DeserializeOwned> Agent<I, O> {
             return Err(Error::ConversationBusy);
         }
         let input = into_json(input.into())?;
-        let state = self.new_run("memory", input, &conversation.history, None)?;
+        let state = self.new_run(conversation.id(), input, &conversation.history, None)?;
         conversation.last_run = Some(state);
         self.resume_from(conversation, RunControl::default(), 0)
             .await
@@ -300,6 +301,7 @@ impl<I: Serialize + 'static, O: DeserializeOwned> Agent<I, O> {
         control: RunControl,
         old_len: usize,
     ) -> Result<O> {
+        conversation.check_owns_last_run()?;
         let state = conversation.last_run.as_mut().ok_or(Error::NotFound)?;
         let result = self.drive(state, &MemoryCheckpoint, control).await;
         conversation
@@ -595,8 +597,13 @@ impl RunControl {
         self
     }
 }
-/// An in-memory conversation for [`Agent::run`] and [`Agent::resume`]: its history and its latest
-/// run. Start an empty one with [`Conversation::default`].
+/// An in-memory conversation for [`Agent::run`] and [`Agent::resume`]: its ID, its history and
+/// its latest run. Start an empty one with [`Conversation::default`].
+///
+/// Every run of the conversation records its [`id`](Self::id) as `RunState::conversation_id`,
+/// and a [`ContextPolicy`] receives it to scope per-conversation state. A default conversation
+/// has a fresh, unique ID; name one with [`Conversation::new`] when that state outlives the
+/// process.
 #[derive(Default, Debug)]
 #[non_exhaustive]
 pub struct Conversation {
@@ -604,16 +611,68 @@ pub struct Conversation {
     /// limit; `run` and `resume` append the run's new entries when they return.
     pub history: Vec<HistoryEntry>,
     /// The latest run, retained even when `run` or `resume` returns an error, so its waits and
-    /// uncertain outcomes stay visible and resolvable with [`RunState::resolve`].
+    /// uncertain outcomes stay visible and resolvable with [`RunState::resolve`]. `run` and
+    /// `resume` fail with [`Error::Input`] if it belongs to another conversation ID.
     pub last_run: Option<RunState>,
+    id: ConversationId,
 }
 impl Conversation {
-    /// A conversation that continues from `history`, with no run in progress.
+    /// An empty conversation named `id`, which must be 1..=1024 bytes for a run to start.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            history: Vec::new(),
+            last_run: None,
+            id: ConversationId::Named(id.into()),
+        }
+    }
+    /// A conversation with a fresh, unique ID that continues from `history`, with no run in
+    /// progress.
     pub fn with_history(history: Vec<HistoryEntry>) -> Self {
         Self {
             history,
             last_run: None,
+            id: ConversationId::default(),
         }
+    }
+    /// The conversation ID every run of it records. It never changes.
+    pub fn id(&self) -> &str {
+        self.id.as_str()
+    }
+    /// Refuses a retained run accepted under another ID, so per-conversation state stays scoped.
+    fn check_owns_last_run(&self) -> Result<()> {
+        match &self.last_run {
+            Some(run) if run.conversation_id != self.id() => Err(Error::input(
+                "the retained run belongs to another conversation ID",
+            )),
+            _ => Ok(()),
+        }
+    }
+}
+/// A conversation's ID. A generated one is kept inline, so a default conversation allocates
+/// nothing until a run copies its ID.
+enum ConversationId {
+    Named(String),
+    /// A hyphenated, lowercase v4 UUID.
+    Generated([u8; 36]),
+}
+impl Default for ConversationId {
+    fn default() -> Self {
+        let mut id = [0; 36];
+        RunId::new_v4().hyphenated().encode_lower(&mut id);
+        Self::Generated(id)
+    }
+}
+impl ConversationId {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Named(id) => id,
+            Self::Generated(id) => std::str::from_utf8(id).expect("a hyphenated UUID is ASCII"),
+        }
+    }
+}
+impl std::fmt::Debug for ConversationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.as_str().fmt(f)
     }
 }
 /// The state machine runs on the shared definition of the agent being driven.

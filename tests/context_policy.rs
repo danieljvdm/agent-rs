@@ -440,3 +440,126 @@ async fn preparation_obeys_cancellation_and_deadline_then_cleans_up() {
         assert_eq!(state.usage.model_calls, 1);
     }
 }
+
+#[tokio::test]
+async fn in_memory_conversations_give_policies_a_stable_id_of_their_own() {
+    let policy = Arc::new(Derived::default());
+    let agent = agent(
+        Capture::new(vec![ModelResponse::final_output(json!("done")); 4]),
+        1024,
+    )
+    .context_policy(policy.clone(), 64)
+    .build()
+    .unwrap();
+    let (mut first, mut second) = (Conversation::default(), Conversation::default());
+    let mut named = Conversation::new("trip-1");
+    assert_ne!(first.id(), second.id());
+    assert_eq!(first.id().len(), 36);
+    assert_eq!(named.id(), "trip-1");
+    for turn in 0..4 {
+        let conversation = match turn {
+            0 | 2 => &mut first,
+            1 => &mut second,
+            _ => &mut named,
+        };
+        let _: Value = agent.run(conversation, "go").await.unwrap();
+        let run = conversation.last_run.as_ref().unwrap();
+        assert_eq!(run.conversation_id, conversation.id());
+    }
+    let seen: Vec<_> = policy
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, conversation, _, _)| conversation.clone())
+        .collect();
+    assert_eq!(seen, [first.id(), second.id(), first.id(), "trip-1"]);
+
+    // A retained run cannot move to another conversation and pick up its state.
+    second.last_run = first.last_run.take();
+    assert!(matches!(
+        agent.run(&mut second, "go").await,
+        Err(Error::Input(message)) if message.to_string().contains("another conversation ID")
+    ));
+    assert!(matches!(
+        agent.resume(&mut second, RunControl::default()).await,
+        Err(Error::Input(_))
+    ));
+    assert_eq!(policy.requests.lock().unwrap().len(), 4);
+}
+
+/// Prepares with each inner policy in turn, rebuilding the engine's request for each.
+struct Both(Arc<Derived>, Arc<Derived>);
+#[async_trait]
+impl ContextPolicy for Both {
+    fn binding(&self) -> Value {
+        json!([self.0.binding(), self.1.binding()])
+    }
+    async fn prepare(
+        &self,
+        request: ContextRequest<'_>,
+        cancel: CancellationToken,
+    ) -> Result<Vec<Value>> {
+        let (run_id, conversation_id, input) =
+            (request.run_id, request.conversation_id, request.input);
+        let half = request.max_bytes / 2;
+        let mut items = self
+            .0
+            .prepare(
+                ContextRequest::new(run_id, conversation_id, input, half),
+                cancel.clone(),
+            )
+            .await?;
+        items.extend(
+            self.1
+                .prepare(
+                    ContextRequest::new(run_id, conversation_id, input, half),
+                    cancel,
+                )
+                .await?,
+        );
+        Ok(items)
+    }
+}
+
+#[tokio::test]
+async fn policies_can_be_called_and_composed_outside_the_engine() {
+    let (a, b) = (
+        Arc::new(Derived {
+            items: vec![json!("a")],
+            ..Derived::default()
+        }),
+        Arc::new(Derived {
+            items: vec![json!("b")],
+            ..Derived::default()
+        }),
+    );
+    let both = Both(a.clone(), b.clone());
+    let input = json!("go");
+    let items = both
+        .prepare(
+            ContextRequest::new(RunId::nil(), "c", &input, 64),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(items, [json!("a"), json!("b")]);
+    let expected = (RunId::nil(), "c".to_owned(), input.clone(), 32);
+    assert_eq!(*a.requests.lock().unwrap(), std::slice::from_ref(&expected));
+    assert_eq!(*b.requests.lock().unwrap(), [expected]);
+
+    // Driven by the engine, the composite sees the engine's request.
+    let model = Capture::new(vec![ModelResponse::final_output(json!("done"))]);
+    let agent = agent(model.clone(), 1024)
+        .context_policy(Arc::new(Both(a.clone(), b)), 64)
+        .build()
+        .unwrap();
+    let mut conversation = Conversation::new("c");
+    let _: Value = agent.run(&mut conversation, "go").await.unwrap();
+    assert_eq!(model.seen()[0].1, [json!("a"), json!("b")]);
+    let run_id = conversation.last_run.as_ref().unwrap().id;
+    assert_eq!(
+        a.requests.lock().unwrap()[1],
+        (run_id, "c".to_owned(), input, 32)
+    );
+}
