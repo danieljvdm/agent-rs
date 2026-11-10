@@ -1,9 +1,5 @@
-//! A resumable agent engine. SQLite and HTTP dependencies are optional features.
-//!
-//! Everything except the optional adapters is exported from the crate root, so
-//! `use yielded_agent::*;` brings in the whole engine, the durable host and the storage contract.
-//! The adapters live in their own modules: [`sqlite`] behind the `sqlite` feature and [`openai`]
-//! behind the `openai` feature.
+// The README is the crate documentation, so its examples compile as doctests.
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 mod context;
