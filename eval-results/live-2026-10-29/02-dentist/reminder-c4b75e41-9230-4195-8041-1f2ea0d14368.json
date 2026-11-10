@@ -1,6 +1,0 @@
-{
-  "reminder_id": "reminder-c4b75e41-9230-4195-8041-1f2ea0d14368",
-  "title": "Book dentist appointment",
-  "at": "2026-11-02T09:00:00-08:00",
-  "idempotency_key": "c4b75e41-9230-4195-8041-1f2ea0d14368:3:call_GxUpN54coXuInCnxXwj6Dgqt"
-}

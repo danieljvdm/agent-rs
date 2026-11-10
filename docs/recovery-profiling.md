@@ -4,7 +4,7 @@ Recovery after 512 completed runs in one conversation retains 1,024 context entr
 
 The decoder now tries `RunState` directly. It accepts that result only when the state version matches and serializing it reproduces the original bytes exactly. Other representations still use the previous decoder. This preserves handling of duplicate keys, unknown fields, alternate formatting, invalid versions, and malformed data without changing the checkpoint format or transaction protocol. The compatibility tests exercise these behaviors through a reopened SQLite store.
 
-The [retained profiles and matched comparison](../benchmark-results/recovery-2026-10-29/README.md) record the results. Allocation profiles identify where work happens; ordinary uninstrumented benchmarks establish elapsed-time changes.
+The [recorded results](benchmark-results.md#recovery-allocation-optimization) summarize the profiles and matched comparison. Allocation profiles identify where work happens; ordinary uninstrumented benchmarks establish elapsed-time changes.
 
 ## Capture an allocation profile
 

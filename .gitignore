@@ -3,3 +3,6 @@
 *.sqlite-wal
 *.sqlite-shm
 *.sqlite.lock
+# Generated benchmark and eval output; see docs/benchmark-results.md for recorded conclusions.
+/benchmark-results/
+/eval-results/

@@ -18,7 +18,6 @@ The application closes and reopens the durable host/database at both the input a
 
 ```sh
 scripts/rust.sh test --locked --test personal_workflow
-mkdir -p eval-results
 scripts/rust.sh run --locked --example personal_workflow_eval -- \
   --mode scripted --trials 1 --out eval-results/scripted-local
 ```
@@ -43,4 +42,20 @@ Each attempt allows at most eight model calls, twelve tool calls, 20,000 cumulat
 
 `report.json` records every attempted case, including failures, alongside mode, model, fixture version, source blob, and revision. Each case retains `result.json`, the synthetic input files, and any reminder effect. Runtime state contains model/tool counts, token usage, and committed history. Failed checks cause a nonzero exit status. SQLite files remain local and are ignored by Git; the JSON evidence contains the retained state needed to inspect the result.
 
+Each invocation writes a new directory, and `eval-results/` is ignored by Git. Keep failed attempts when comparing prompts or runtime changes, and retain reports you want to cite outside the repository. Reports contain synthetic calendar/reminder data, model outputs, counts, and grading results, never credentials.
+
 A passing run demonstrates this bounded workflow, not general assistant quality or reliability across all prompts. Repeat trials expose variability; no retry is silently discarded. The separate process-recovery suite tests abrupt process death, while this eval tests model-driven behavior through persisted waits and clean host restarts.
+
+## Recorded results
+
+The 2026-10-29 live evaluation used `gpt-4.1-2025-04-14` with the `personal-reminder-v2` fixture and passed all nine attempts (three cases, three trials). No failed attempts were discarded.
+
+| Case | Passed | Model calls per attempt | Tool calls per attempt | Input / output tokens per attempt |
+| --- | ---: | ---: | ---: | --- |
+| Dentist | 3 of 3 | 4 | 4 | 2,733–2,745 / 191–196 |
+| Passport | 3 of 3 | 4 | 4 | 2,827–2,837 / 186–189 |
+| Denied approval | 3 of 3 | 4 | 3 | 2,690 / 150 |
+
+Totals: 36 model calls, 33 tool calls, 24,782 input tokens, and 1,593 output tokens. Every attempt restarted the durable host twice. Six approved reminder files were created, and the three denied cases created none. An earlier three-case smoke run also passed under the v1 grader, before it was strengthened to require successful source reads in the model context.
+
+The [reports for both runs](https://github.com/danieljvdm/agent-rs/tree/evidence-2026-10-29/eval-results), including every check, model context, committed state, effect record, and the exact eval source used, are preserved at the `evidence-2026-10-29` tag.

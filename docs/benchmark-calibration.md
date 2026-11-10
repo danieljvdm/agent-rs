@@ -2,9 +2,9 @@
 
 The scripted benchmark is the correctness and runtime-cost loop. The live personal-agent evaluation is a separate measure of provider behavior; it does not replace these deterministic workloads.
 
-The [completed hosted v2 comparison and calibration](../benchmark-results/hosted-2026-10-29/README.md) retain full-window results, raw samples, and the complete attempt ledger.
+The [completed hosted v2 comparison and calibration](benchmark-results.md#full-hosted-comparison-and-calibration) summarize full-window results; their raw samples and complete attempt ledger are [retained at the `evidence-2026-10-29` tag](https://github.com/danieljvdm/agent-rs/tree/evidence-2026-10-29/benchmark-results/hosted-2026-10-29).
 
-The [initial local capture](../benchmark-results/initial-2026-10-29/COMPARISON.md) used short exploratory windows. It retained substantial same-source variation, so it does not justify a timing gate. The hosted workflow adds full-window measurements, paired cohort variability, explicit work-count checks, and a repeatable runner.
+The [initial local capture](benchmark-results.md#initial-local-capture) used short exploratory windows. It retained substantial same-source variation, so it does not justify a timing gate. The hosted workflow adds full-window measurements, paired cohort variability, explicit work-count checks, and a repeatable runner.
 
 The current fixture is `agent-loop-v2`. It observes SQLite settlements and reads each run's public status concurrently with later admissions, recording the timestamp immediately when that status read completes. Version 1 drained settlements only after submitting the entire batch, so its SQLite per-operation latency includes artificial observer delay. Retained v1 elapsed/throughput measurements remain useful within matched v1 comparisons, but its per-operation latency is not a precise settlement distribution. Version 2 changes observation work during execution; do not compare v1 and v2 timings directly. Both sides of a v2 comparison must contain identical fixture bytes, including when benchmarking an older runtime revision.
 
