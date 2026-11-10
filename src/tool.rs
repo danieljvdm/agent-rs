@@ -16,6 +16,9 @@ pub struct ToolContext {
 #[derive(Clone, Debug)]
 pub enum ToolOutput<T> {
     Complete(T),
+    /// A complete, reported tool failure. Unlike an execution error, its outcome is known.
+    /// The engine records the payload with `ToolResult::is_error`, without retrying it.
+    Failed(T),
     Wait(WaitRequest),
 }
 #[async_trait]
@@ -53,6 +56,9 @@ where
         let input = serde_json::from_value(arguments).map_err(|e| Error::Invalid(e.to_string()))?;
         match (self.handler)(input, context).await? {
             ToolOutput::Complete(output) => Ok(ToolOutput::Complete(
+                serde_json::to_value(output).map_err(|e| Error::Tool(e.to_string()))?,
+            )),
+            ToolOutput::Failed(output) => Ok(ToolOutput::Failed(
                 serde_json::to_value(output).map_err(|e| Error::Tool(e.to_string()))?,
             )),
             ToolOutput::Wait(wait) => Ok(ToolOutput::Wait(wait)),

@@ -838,6 +838,15 @@ impl Engine {
                             is_error: false,
                         })
                     }
+                    Ok(ToolOutput::Failed(value))
+                        if encoded_len(&value)? <= state.limits.max_tool_output_bytes =>
+                    {
+                        OperationStatus::Complete(ToolResult {
+                            call_id: op.call.id.clone(),
+                            value,
+                            is_error: true,
+                        })
+                    }
                     Ok(ToolOutput::Wait(wait))
                         if encoded_len(&wait)? <= state.limits.max_tool_output_bytes =>
                     {
