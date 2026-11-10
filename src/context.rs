@@ -28,9 +28,11 @@ pub struct ContextRequest<'a> {
 ///
 /// **History.** A turn sends whole entries of the run's prior context followed by its own
 /// history, in their original order; an exchange always keeps its tool calls with their results.
-/// - Pinned, always sent: the run's current input, its latest exchange, and each entry of the
-///   run's own history for which [`pinned`](Self::pinned) returns true. Prior context is never
-///   pinned and `pinned` is not consulted for it.
+/// - Pinned, always sent: the run's current input, its latest exchange, each
+///   [`HistoryEntry::Steering`] instruction of the run's own history, and each entry of the run's
+///   own history for which [`pinned`](Self::pinned) returns true. Prior context is never pinned
+///   and `pinned` is not consulted for it. Steering is pinned with or without a policy, so a
+///   policy never needs to pin it.
 /// - Everything else may be dropped. Unpinned entries are taken newest first while they fit; the
 ///   first that does not fit ends the selection, so an older entry never displaces a newer one.
 /// - If the pinned entries alone exceed `max_context_bytes`, the turn fails with
@@ -153,8 +155,8 @@ pub(crate) fn suffix_start(history: &[HistoryEntry], max_bytes: usize) -> Result
 
 /// One turn's history, selected in a single pass and cloned once, as [`ContextPolicy`] describes.
 ///
-/// Pinned: the run's current input (`history[0]`), its latest exchange, and each entry of the
-/// run's own history for which `pinned` holds. Every other entry of `prior ++ history` is
+/// Pinned: the run's current input (`history[0]`), its latest exchange, its steering
+/// instructions, and each entry of the run's own history for which `pinned` holds. Every other entry of `prior ++ history` is
 /// optional and is added newest first until the next one does not fit, so optional entries form
 /// one contiguous suffix. The result keeps chronological order. `derived` is trimmed to its cap
 /// and to the room the pinned entries leave, and the rest of that room bounds optional entries.
@@ -169,8 +171,12 @@ fn select_history(
     let latest_exchange = history
         .iter()
         .rposition(|entry| matches!(entry, HistoryEntry::Exchange { .. }));
-    let is_pinned =
-        |index: usize| index == 0 || Some(index) == latest_exchange || pinned(&history[index]);
+    let is_pinned = |index: usize| {
+        index == 0
+            || Some(index) == latest_exchange
+            || matches!(history[index], HistoryEntry::Steering { .. })
+            || pinned(&history[index])
+    };
     let mut window = Window::new(max_bytes)?;
     for (index, entry) in history.iter().enumerate() {
         if is_pinned(index) && !window.add(entry) {

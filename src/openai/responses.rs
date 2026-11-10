@@ -7,6 +7,7 @@
 
 use super::{
     output_schema, output_value, protocol, protocol_caused_by, push_derived_context,
+    steering_message,
     transport::{EventParser, Transport},
     validate_request,
 };
@@ -121,6 +122,9 @@ pub(super) fn request_body(request: ModelRequest) -> Result<Value> {
         match entry {
             HistoryEntry::Input(value) => {
                 input.push(json!({"role":"user", "content":value.to_string()}));
+            }
+            HistoryEntry::Steering { instruction, .. } => {
+                input.push(steering_message(instruction));
             }
             HistoryEntry::Exchange { response, results } => {
                 if response.tools.is_empty() {

@@ -291,6 +291,7 @@ fn fails_run_separates_failed_runs_from_resumable_ones() {
         Error::StoreBusy,
         Error::NotFound,
         Error::NotWaiting,
+        Error::RunNotActive,
         Error::Waiting,
         Error::Stopped(StopReason::Tokens),
         Error::Cancelled,
@@ -308,6 +309,7 @@ fn only_stale_and_interrupted_runs_resume_without_a_retry() {
         Error::storage("disk full"),
         Error::incompatible("agent is not registered"),
         Error::NotFound,
+        Error::RunNotActive,
     ] {
         assert!(error.needs_retry(), "{error:?}");
     }

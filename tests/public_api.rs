@@ -22,6 +22,8 @@ use yielded_agent::{
     CheckpointPosition, DurableStore, Host, HostOptions, HostSlot, MemoryStore, RunUpdate,
     StoreLease, UpdateEffect,
 };
+// Steering of active runs, for stores that support it.
+use yielded_agent::{SteeringId, SteeringInput, SteeringReceipt, SteeringStatus, SteeringStore};
 // Optional adapters, each behind its feature.
 #[cfg(feature = "openai")]
 use yielded_agent::openai::{OpenAiModel, OpenAiResponsesModel};

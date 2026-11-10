@@ -1,9 +1,11 @@
 //! A process-local [`DurableStore`]: the reference implementation of the store contract.
 //! Nothing survives the process, so it suits tests, examples and ephemeral hosts.
 use super::{advance, check_acceptance};
+use crate::steering::{self, Boundary};
 use crate::{
     Agent, Checkpoint, CheckpointPosition, DurableStore, Error, HistoryEntry, HostSlot, Operation,
-    Result, RunId, RunState, RunUpdate, StoreLease,
+    Phase, Result, RunId, RunState, RunUpdate, SteeringInput, SteeringReceipt, SteeringStore,
+    StoreLease,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -31,6 +33,14 @@ struct Run {
     wake_at: Option<u64>,
     last_error: Option<String>,
     operations: Vec<Operation>,
+    /// Accepted steering in acceptance order.
+    steering: Vec<Steered>,
+}
+struct Steered {
+    key: String,
+    receipt: SteeringReceipt,
+    accepted: steering::Accepted,
+    applied: Option<u64>,
 }
 
 fn encode(value: &impl serde::Serialize) -> Result<String> {
@@ -106,7 +116,22 @@ impl Checkpoint for MemoryStore {
             return Err(Error::input("history is append-only"));
         }
         let revision = advance(state.revision, "revision")?;
-        let appended = sizes(&state.history[stored.history.len()..])?;
+        let mut appended = sizes(&state.history[stored.history.len()..])?;
+        // The steering changes `Checkpoint` allows, after the last step that can fail.
+        let boundary = Boundary::of(state);
+        let mut queued = run.steering.iter_mut().filter(|s| s.applied.is_none());
+        match boundary {
+            Boundary::Apply => {
+                for steered in queued {
+                    let entry = steered.accepted.entry();
+                    steered.applied = Some(revision);
+                    appended.push((entry.clone(), steered.accepted.bytes));
+                    state.history.push(entry);
+                }
+            }
+            Boundary::Reopen if queued.next().is_some() => state.phase = Phase::Ready,
+            Boundary::Reopen | Boundary::None => (),
+        }
         // Copy progress only: acceptance fields in the caller's state are never persisted.
         let stored = &mut run.state;
         stored.revision = revision;
@@ -180,6 +205,7 @@ impl DurableStore for MemoryStore {
                 wake_at: None,
                 last_error: None,
                 operations: Vec::new(),
+                steering: Vec::new(),
             },
         );
         inner.persist(id, history, false);
@@ -287,5 +313,49 @@ impl DurableStore for MemoryStore {
             .get(&id)
             .map(|run| run.operations.clone())
             .unwrap_or_default())
+    }
+}
+
+#[async_trait]
+impl SteeringStore for MemoryStore {
+    async fn steer(&self, id: RunId, key: &str, instruction: String) -> Result<SteeringReceipt> {
+        steering::check_request(key, &instruction)?;
+        let mut inner = self.lock()?;
+        let run = inner.run(id)?;
+        if let Some(steered) = run.steering.iter().find(|s| s.key == key) {
+            return if steered.accepted.instruction == instruction {
+                Ok(steered.receipt.clone())
+            } else {
+                Err(Error::IdempotencyConflict)
+            };
+        }
+        let bytes = run.steering.iter().map(|s| s.accepted.bytes).sum();
+        let accepted = steering::admit(&run.state, instruction, run.steering.len(), bytes)?;
+        let receipt = SteeringReceipt {
+            id: accepted.id,
+            run_id: id,
+            sequence: run.steering.len() as u32,
+        };
+        run.steering.push(Steered {
+            key: key.to_owned(),
+            receipt: receipt.clone(),
+            accepted,
+            applied: None,
+        });
+        Ok(receipt)
+    }
+    async fn steering(&self, id: RunId) -> Result<Vec<SteeringInput>> {
+        let mut inner = self.lock()?;
+        let run = inner.run(id)?;
+        let settled = run.state.is_terminal();
+        Ok(run
+            .steering
+            .iter()
+            .map(|steered| SteeringInput {
+                receipt: steered.receipt.clone(),
+                instruction: steered.accepted.instruction.clone(),
+                status: steering::status(steered.applied, settled),
+            })
+            .collect())
     }
 }

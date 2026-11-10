@@ -244,6 +244,16 @@ pub struct ToolResult {
 pub enum HistoryEntry {
     /// A run's input.
     Input(Value),
+    /// An instruction a [`SteeringStore`](crate::SteeringStore) accepted for a run that was already
+    /// active, sent to the model as user input. The run's model dispatch commit appends it, so it
+    /// follows the exchanges completed before that turn. Every steering entry of a run's own
+    /// history is pinned in its context.
+    Steering {
+        /// The instruction's [`SteeringReceipt::id`](crate::SteeringReceipt::id).
+        id: crate::SteeringId,
+        /// The instruction as accepted.
+        instruction: String,
+    },
     /// A model turn and, for a tool turn, the results of its calls.
     Exchange {
         /// The model's response.
