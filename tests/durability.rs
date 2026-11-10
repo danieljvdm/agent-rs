@@ -46,7 +46,11 @@ async fn store(dir: &TempDir) -> Arc<SqliteStore> {
             .unwrap(),
     )
 }
-async fn wait_for(host: &Host, id: RunId, predicate: impl Fn(&RunState) -> bool) -> RunState {
+async fn wait_for(
+    host: &Host<SqliteStore>,
+    id: RunId,
+    predicate: impl Fn(&RunState) -> bool,
+) -> RunState {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let state = host.status(id).await.unwrap();
@@ -727,7 +731,7 @@ async fn waiting_sibling_does_not_hide_an_abandoned_dispatched_effect() {
 
 #[tokio::test]
 async fn late_error_cannot_suppress_cancel_resolution_or_repair() {
-    use yielded_agent::sqlite::CheckpointPosition;
+    use yielded_agent::CheckpointPosition;
     let dir = TempDir::new().unwrap();
     let db = store(&dir).await;
     let agent = final_agent();

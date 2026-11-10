@@ -1,7 +1,7 @@
-//! A bounded resident scheduler. Durable database discovery is authoritative; notifications
-//! only reduce latency. Call `shutdown().await` before releasing application resources.
-use crate::sqlite::{CheckpointPosition, SqliteStore};
+//! A bounded resident scheduler over any [`DurableStore`]. Durable discovery is authoritative;
+//! notifications only reduce latency. Call `shutdown().await` before releasing resources.
 use crate::*;
+use async_trait::async_trait;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -28,15 +28,21 @@ impl Default for HostOptions {
         }
     }
 }
-struct HostLease(Arc<SqliteStore>);
-impl Drop for HostLease {
-    fn drop(&mut self) {
-        self.0.release_host();
+/// Commits through the host's store. The wrapper lets an unsized store reach the engine's
+/// `&dyn Checkpoint`, which a generic parameter cannot upcast to directly.
+struct StoreCheckpoint<'a, S: ?Sized>(&'a S);
+#[async_trait]
+impl<S: DurableStore + ?Sized> Checkpoint for StoreCheckpoint<'_, S> {
+    async fn commit(&self, state: &mut RunState) -> Result<()> {
+        self.0.commit(state).await
     }
 }
 
-pub struct Host {
-    store: Arc<SqliteStore>,
+/// The resident host for one store. With a concrete `S`, store-specific extensions can add
+/// host methods through `impl<S: DurableStore + Extension> Host<S>`, and `host.store()`
+/// reaches the store's own API. `Host<dyn DurableStore>` selects storage at run time.
+pub struct Host<S: DurableStore + ?Sized> {
+    store: Arc<S>,
     agent: Agent,
     shutdown: CancellationToken,
     notify: Arc<Notify>,
@@ -44,8 +50,8 @@ pub struct Host {
     fatal_error: Arc<Mutex<Option<String>>>,
     task: Option<JoinHandle<Result<()>>>,
 }
-impl Host {
-    pub fn start(store: Arc<SqliteStore>, agent: Agent, options: HostOptions) -> Result<Self> {
+impl<S: DurableStore + ?Sized + 'static> Host<S> {
+    pub fn start(store: Arc<S>, agent: Agent, options: HostOptions) -> Result<Self> {
         if options.max_concurrent_runs == 0
             || options.max_concurrent_runs > 1024
             || options.poll_interval.is_zero()
@@ -54,8 +60,7 @@ impl Host {
                 "host requires 1..=1024 run workers and a nonzero discovery interval".into(),
             ));
         }
-        store.take_host()?;
-        let lease = HostLease(store.clone());
+        let lease = store.lease()?;
         let shutdown = CancellationToken::new();
         let notify = Arc::new(Notify::new());
         let running = Arc::new(Mutex::new(HashMap::new()));
@@ -85,6 +90,9 @@ impl Host {
             fatal_error,
             task: Some(task),
         })
+    }
+    pub fn store(&self) -> &Arc<S> {
+        &self.store
     }
     pub fn health(&self) -> Result<()> {
         if let Some(error) = self.fatal_error.lock().expect("host status lock").as_ref() {
@@ -144,14 +152,14 @@ impl Host {
         Ok(())
     }
 }
-impl Drop for Host {
+impl<S: DurableStore + ?Sized> Drop for Host<S> {
     fn drop(&mut self) {
         // Rust has no asynchronous Drop. Explicit shutdown is the cleanup completion barrier.
         self.shutdown.cancel();
     }
 }
-async fn schedule(
-    store: Arc<SqliteStore>,
+async fn schedule<S: DurableStore + ?Sized + 'static>(
+    store: Arc<S>,
     agent: Agent,
     options: HostOptions,
     shutdown: CancellationToken,
@@ -219,7 +227,7 @@ async fn schedule(
                     position = Some(store.position(id).await?);
                     let mut state = store.claim(id).await?;
                     let result = Engine::new(agent)
-                        .drive(&mut state, store.as_ref(), control)
+                        .drive(&mut state, &StoreCheckpoint(store.as_ref()), control)
                         .await;
                     position = Some(CheckpointPosition::from(&state));
                     result

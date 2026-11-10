@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     thread,
 };
@@ -22,20 +22,6 @@ type Job = Box<dyn FnOnce(&mut Database) + Send>;
 pub struct StoreMetrics {
     pub transactions: u64,
     pub writes: u64,
-}
-/// Generation and revision identifying one authoritative active checkpoint.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CheckpointPosition {
-    pub generation: u64,
-    pub revision: u64,
-}
-impl From<&RunState> for CheckpointPosition {
-    fn from(state: &RunState) -> Self {
-        Self {
-            generation: state.generation,
-            revision: state.revision,
-        }
-    }
 }
 #[derive(Default)]
 struct Counters {
@@ -55,7 +41,7 @@ struct Worker {
 pub struct SqliteStore {
     worker: Mutex<Worker>,
     counters: Arc<Counters>,
-    host_active: AtomicBool,
+    slot: HostSlot,
 }
 
 fn storage(error: impl std::fmt::Display) -> Error {
@@ -298,7 +284,7 @@ impl SqliteStore {
                     thread: Some(thread),
                 }),
                 counters,
-                host_active: AtomicBool::new(false),
+                slot: HostSlot::default(),
             }),
             Err(error) => {
                 let _ = thread.join();
@@ -326,15 +312,6 @@ impl SqliteStore {
             .map_err(storage)?;
         rx.await.map_err(storage)?
     }
-    pub(crate) fn take_host(&self) -> Result<()> {
-        self.host_active
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| ())
-            .map_err(|_| Error::DatabaseBusy)
-    }
-    pub(crate) fn release_host(&self) {
-        self.host_active.store(false, Ordering::Release);
-    }
     pub fn metrics(&self) -> StoreMetrics {
         StoreMetrics {
             transactions: self.counters.transactions.load(Ordering::Relaxed),
@@ -356,7 +333,13 @@ impl SqliteStore {
         }
         Ok(())
     }
-    pub async fn accept(
+}
+#[async_trait]
+impl DurableStore for SqliteStore {
+    fn lease(&self) -> Result<StoreLease> {
+        self.slot.lease()
+    }
+    async fn accept(
         &self,
         agent: &Agent,
         conversation: &str,
@@ -364,15 +347,7 @@ impl SqliteStore {
         input: Value,
         expires_at_ms: Option<u64>,
     ) -> Result<RunId> {
-        if conversation.is_empty()
-            || conversation.len() > 1024
-            || key.is_empty()
-            || key.len() > 1024
-        {
-            return Err(Error::Invalid(
-                "conversation and idempotency keys must contain 1..=1024 bytes".into(),
-            ));
-        }
+        store::check_keys(conversation, key)?;
         let (agent, conversation, key) = (agent.clone(), conversation.to_owned(), key.to_owned());
         let payload = encode(
             &json!({"input": input, "binding": agent.binding(), "expires_at_ms": expires_at_ms}),
@@ -399,10 +374,10 @@ impl SqliteStore {
             Ok(state.id)
         }).await
     }
-    pub async fn status(&self, id: RunId) -> Result<RunState> {
+    async fn status(&self, id: RunId) -> Result<RunState> {
         self.call(move |db| load(&db.connection, id)).await
     }
-    pub async fn history(&self, conversation: &str) -> Result<Vec<HistoryEntry>> {
+    async fn history(&self, conversation: &str) -> Result<Vec<HistoryEntry>> {
         let conversation = conversation.to_owned();
         self.call(move |db| {
             let mut stmt = db
@@ -418,7 +393,7 @@ impl SqliteStore {
         .await
     }
     /// Retained operations include earlier batches, and survive checkpoint retirement.
-    pub async fn operations(&self, id: RunId) -> Result<Vec<Operation>> {
+    async fn operations(&self, id: RunId) -> Result<Vec<Operation>> {
         self.call(move |db| {
             let mut stmt = db
                 .connection
@@ -433,7 +408,7 @@ impl SqliteStore {
         .await
     }
     /// Claim a fresh execution generation. The host ensures old tasks have been joined first.
-    pub async fn claim(&self, id: RunId) -> Result<RunState> {
+    async fn claim(&self, id: RunId) -> Result<RunState> {
         self.call(move |db| {
             let tx = db.connection.transaction().map_err(storage)?;
             let mut state = load(&tx, id)?;
@@ -455,7 +430,7 @@ impl SqliteStore {
         })
         .await
     }
-    pub async fn due(&self, now: u64, limit: usize) -> Result<Vec<RunId>> {
+    async fn due(&self, now: u64, limit: usize) -> Result<Vec<RunId>> {
         self.call(move |db| {
             let mut stmt = db
                 .connection
@@ -473,38 +448,40 @@ impl SqliteStore {
         })
         .await
     }
-    pub async fn request_cancel(&self, id: RunId) -> Result<()> {
+    async fn update(&self, id: RunId, update: RunUpdate) -> Result<()> {
         self.call(move |db| {
             let tx = db.connection.transaction().map_err(storage)?;
             let mut state = load(&tx, id)?;
-            if state.is_terminal() || state.cancel_requested {
+            let old_history = state.history.len();
+            let effect = update.apply(&mut state)?;
+            if !effect.changed {
                 return Ok(());
             }
-            state.cancel_requested = true;
-            state.revision += 1;
-            let writes = write_state(&tx, &state)?;
+            state.revision = store::advance(state.revision, "revision")?;
+            let mut writes = append_evidence(&tx, &state, old_history)? + write_state(&tx, &state)?;
+            if effect.clear_error {
+                writes += tx
+                    .execute(
+                        "UPDATE runs SET last_error=NULL WHERE id=?1",
+                        [id.to_string()],
+                    )
+                    .map_err(storage)? as u64;
+            }
+            if effect.wake_now {
+                writes += tx
+                    .execute(
+                        "UPDATE active SET wake_at=0 WHERE run_id=?1",
+                        [id.to_string()],
+                    )
+                    .map_err(storage)? as u64;
+            }
             tx.commit().map_err(storage)?;
             db.count(writes);
             Ok(())
         })
         .await
     }
-    pub async fn resolve(&self, id: RunId, call_id: &str, resolution: Resolution) -> Result<()> {
-        let call_id = call_id.to_owned();
-        self.call(move |db| {
-            let tx = db.connection.transaction().map_err(storage)?;
-            let mut state = load(&tx, id)?;
-            crate::resolve(&mut state, &call_id, resolution)?;
-            state.revision += 1;
-            let writes =
-                append_evidence(&tx, &state, state.history.len())? + write_state(&tx, &state)?;
-            tx.commit().map_err(storage)?;
-            db.count(writes);
-            Ok(())
-        })
-        .await
-    }
-    pub async fn position(&self, id: RunId) -> Result<CheckpointPosition> {
+    async fn position(&self, id: RunId) -> Result<CheckpointPosition> {
         self.call(move |db| {
             db.connection
                 .query_row(
@@ -525,11 +502,7 @@ impl SqliteStore {
     }
     /// One startup pass also discovers abandoned dispatched work behind an input wait.
     /// Paging and filtering use only active checkpoints, never retained history.
-    pub(crate) async fn recovery_page(
-        &self,
-        after: Option<RunId>,
-        limit: usize,
-    ) -> Result<Vec<RunId>> {
+    async fn recovery_page(&self, after: Option<RunId>, limit: usize) -> Result<Vec<RunId>> {
         self.call(move |db| {
             let mut stmt = db.connection.prepare("SELECT a.run_id FROM active a JOIN runs r ON r.id=a.run_id
                 WHERE a.run_id>?1 AND r.last_error IS NULL AND EXISTS
@@ -541,7 +514,7 @@ impl SqliteStore {
     }
     /// Suppress automatic retry only if this is still the failed worker's checkpoint.
     /// A late error cannot suppress a newer cancellation, resolution, claim, or repair.
-    pub async fn record_error(
+    async fn record_error(
         &self,
         id: RunId,
         expected: CheckpointPosition,
@@ -558,7 +531,7 @@ impl SqliteStore {
             Ok(true)
         }).await
     }
-    pub async fn last_error(&self, id: RunId) -> Result<Option<String>> {
+    async fn last_error(&self, id: RunId) -> Result<Option<String>> {
         self.call(move |db| {
             db.connection
                 .query_row(
@@ -569,37 +542,6 @@ impl SqliteStore {
                 .optional()
                 .map_err(storage)?
                 .ok_or(Error::NotFound)
-        })
-        .await
-    }
-    /// Explicitly retry a run after its unavailable binding or storage problem is repaired.
-    pub async fn retry(&self, id: RunId) -> Result<()> {
-        self.call(move |db| {
-            let tx = db.connection.transaction().map_err(storage)?;
-            let mut state = load(&tx, id)?;
-            if state.is_terminal() {
-                return Err(Error::Stale);
-            }
-            state.revision += 1;
-            tx.execute(
-                "UPDATE runs SET last_error=NULL WHERE id=?1",
-                [id.to_string()],
-            )
-            .map_err(storage)?;
-            let mut writes = 1 + write_state(&tx, &state)?;
-            if state.needs_recovery() {
-                // Explicit repair must get one recovery pass even when a sibling waits.
-                // Claim recomputes normal eligibility before invoking the engine.
-                writes += tx
-                    .execute(
-                        "UPDATE active SET wake_at=0 WHERE run_id=?1",
-                        [id.to_string()],
-                    )
-                    .map_err(storage)? as u64;
-            }
-            tx.commit().map_err(storage)?;
-            db.count(writes);
-            Ok(())
         })
         .await
     }

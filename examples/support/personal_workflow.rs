@@ -536,7 +536,7 @@ impl Model for ObservedModel {
 
 struct Session {
     store: Arc<SqliteStore>,
-    host: Host,
+    host: Host<SqliteStore>,
 }
 impl Session {
     async fn open(directory: &Path, agent: Agent) -> Result<Self> {
