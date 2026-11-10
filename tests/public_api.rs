@@ -25,6 +25,9 @@ use yielded_agent::{
 // Optional adapters, each behind its feature.
 #[cfg(feature = "openai")]
 use yielded_agent::openai::{OpenAiModel, OpenAiResponsesModel};
+// Hidden and unsupported: probes for `tests/cost_budget.rs`.
+#[cfg(feature = "openai")]
+use yielded_agent::openai::cost_probe::{Api, decode, request_body};
 #[cfg(feature = "sqlite")]
 use yielded_agent::sqlite::{SqliteStore, StoreMetrics};
 

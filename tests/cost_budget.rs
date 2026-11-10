@@ -67,6 +67,25 @@ const ALLOC_STREAM_64_USAGE_SNAPSHOTS: Budget = Budget::new(0, 0);
 /// `drive_binding_check` for an agent whose model contributes an adapter binding.
 const ALLOC_DRIVE_BINDING_CHECK_MODEL_ADAPTER: Budget = Budget::new(0, 0);
 
+// OpenAI adapters, through the hidden `openai::cost_probe`: no network, so only the adapter's
+// own encoding and decoding count. (Allocations as above, with headroom; bytes exact.)
+/// Decoding a Chat Completions answer of 1,024 bytes streamed as 64 content deltas, one SSE
+/// event per network read, through the final response: two allocations per delta (its parsed
+/// chunk and its text) and the growing buffers.
+const ALLOC_CHAT_DECODE_64_DELTAS: Budget = Budget::new(153, 47_463);
+/// The same answer from Responses, with its item lifecycle events around the 64 deltas. Delta
+/// events decode without allocating; only the text they yield and the lifecycle objects do.
+const ALLOC_RESPONSES_DECODE_64_DELTAS: Budget = Budget::new(219, 47_374);
+/// Encoding the Chat Completions request body for a turn with four typed tools and one tool
+/// exchange.
+const ALLOC_CHAT_REQUEST_BODY: Budget = Budget::new(347, 47_557);
+/// The same turn's Responses request body.
+const ALLOC_RESPONSES_REQUEST_BODY: Budget = Budget::new(301, 38_926);
+/// Bytes of those request bodies on the wire (exact).
+const CHAT_REQUEST_BODY_BYTES: usize = 2_260;
+/// See `CHAT_REQUEST_BODY_BYTES`.
+const RESPONSES_REQUEST_BODY_BYTES: usize = 2_122;
+
 // Type sizes (exact bytes). `Result<T, Error>` is returned on every hot path, so the error must
 // stay small: large payloads belong behind a box.
 /// `size_of::<Error>()`.
@@ -579,6 +598,123 @@ async fn typed_allocation_budgets() {
         }
     })
     .await;
+}
+
+#[cfg(feature = "openai")]
+#[path = "support/openai_wire.rs"]
+mod openai_wire;
+#[cfg(feature = "openai")]
+mod openai {
+    use super::*;
+    use crate::openai_wire::Api as Wire;
+    use yielded_agent::openai::cost_probe::{self, Api};
+
+    const ANSWER_BYTES: usize = 1024;
+
+    /// One SSE event per network read: the answer `{"value":"xx…"}` in 64 deltas of 16 bytes.
+    fn chunks(api: Api) -> Vec<Vec<u8>> {
+        let text = format!("{{\"value\":\"{}\"}}", "x".repeat(ANSWER_BYTES - 12));
+        let wire = match api {
+            Api::ChatCompletions => Wire::Chat,
+            Api::Responses => Wire::Responses,
+        };
+        wire.streamed_text(&text, ANSWER_BYTES / 64)
+    }
+
+    #[test]
+    fn decode_allocation_budgets() {
+        for (name, api, budget) in [
+            (
+                "chat_decode_64_deltas",
+                Api::ChatCompletions,
+                ALLOC_CHAT_DECODE_64_DELTAS,
+            ),
+            (
+                "responses_decode_64_deltas",
+                Api::Responses,
+                ALLOC_RESPONSES_DECODE_64_DELTAS,
+            ),
+        ] {
+            let chunks = chunks(api);
+            let chunks: Vec<&[u8]> = chunks.iter().map(Vec::as_slice).collect();
+            futures::executor::block_on(stable(name, budget, || async {
+                let (mut deltas, mut responses) = (0, 0);
+                cost_probe::decode(api, 4096, &chunks, |event| match event {
+                    ModelEvent::TextDelta(_) => deltas += 1,
+                    ModelEvent::Response(response) => {
+                        assert_eq!(response.usage, TokenUsage::new(9, 4));
+                        responses += 1;
+                    }
+                    _ => {}
+                })
+                .unwrap();
+                assert_eq!((deltas, responses), (64, 1), "{name}");
+            }));
+        }
+    }
+
+    fn request() -> ModelRequest {
+        #[derive(Deserialize, JsonSchema)]
+        #[allow(dead_code)]
+        struct Answer {
+            text: String,
+            confidence: u32,
+        }
+        let mut request = ModelRequest::new(
+            RunId::nil(),
+            vec![
+                HistoryEntry::Input(json!("Look up the key, then answer.")),
+                HistoryEntry::Exchange {
+                    response: ModelResponse::tools(vec![ToolCall {
+                        id: "call-0".into(),
+                        name: "search".into(),
+                        arguments: json!({"key": "a key", "limit": 3}),
+                    }]),
+                    results: vec![ToolResult {
+                        call_id: "call-0".into(),
+                        value: json!("a key:3"),
+                        is_error: false,
+                    }],
+                },
+            ],
+        );
+        request.instructions = "Answer with the scripted result.".into();
+        request.config = Arc::new(ModelConfig::new("cost-model"));
+        request.tools = tools().iter().map(|tool| tool.spec().clone()).collect();
+        request.output_schema =
+            Arc::new(serde_json::to_value(schemars::schema_for!(Answer)).unwrap());
+        request
+    }
+
+    #[test]
+    fn request_body_budgets() {
+        let request = request();
+        for (name, api, budget, bytes) in [
+            (
+                "chat_request_body",
+                Api::ChatCompletions,
+                ALLOC_CHAT_REQUEST_BODY,
+                CHAT_REQUEST_BODY_BYTES,
+            ),
+            (
+                "responses_request_body",
+                Api::Responses,
+                ALLOC_RESPONSES_REQUEST_BODY,
+                RESPONSES_REQUEST_BODY_BYTES,
+            ),
+        ] {
+            let body = cost_probe::request_body(api, request.clone()).unwrap();
+            eprintln!("{name}_bytes: {} (budget {bytes})", body.len());
+            assert_eq!(body.len(), bytes, "{name}");
+            futures::executor::block_on(stable(name, budget, || {
+                let request = request.clone();
+                async move {
+                    let body = cost_probe::request_body(api, request).unwrap();
+                    assert_eq!(body.len(), bytes);
+                }
+            }));
+        }
+    }
 }
 
 #[test]

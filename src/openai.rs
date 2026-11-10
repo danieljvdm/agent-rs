@@ -34,6 +34,8 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[doc(hidden)]
+pub mod cost_probe;
 mod responses;
 mod transport;
 pub use responses::OpenAiResponsesModel;
