@@ -17,13 +17,12 @@ use crate::{
     ModelResponse, Operation, Phase, Result, RunId, RunState, RunUpdate, StoreLease, Usage,
 };
 use async_trait::async_trait;
-use fs2::FileExt;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::HashMap,
-    fs::{File, OpenOptions},
+    fs::{File, OpenOptions, TryLockError},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -206,12 +205,11 @@ impl Database {
             .truncate(false)
             .open(PathBuf::from(lock_path))
             .map_err(Error::storage)?;
-        lock.try_lock_exclusive().map_err(|e| {
-            if e.kind() == std::io::ErrorKind::WouldBlock {
-                Error::StoreBusy
-            } else {
-                Error::storage(e)
-            }
+        // An exclusive, non-blocking lock (flock on Unix, LockFileEx on Windows), released when
+        // the file closes: when the store's worker drops the database, or the process exits.
+        lock.try_lock().map_err(|error| match error {
+            TryLockError::WouldBlock => Error::StoreBusy,
+            TryLockError::Error(error) => Error::storage(error),
         })?;
         let connection = Connection::open(canonical).map_err(Error::storage)?;
         connection

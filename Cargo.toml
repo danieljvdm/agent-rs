@@ -2,12 +2,12 @@
 name = "yielded-agent"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 description = "A resumable agent engine with an optional SQLite durable host"
 license = "MIT"
 [features]
 default = ["sqlite", "openai"]
-sqlite = ["dep:rusqlite", "dep:fs2"]
+sqlite = ["dep:rusqlite"]
 openai = ["dep:reqwest"]
 allocation-metrics = []
 [dependencies]
@@ -23,7 +23,6 @@ tokio-util = "0.7"
 tracing = "0.1"
 uuid = { version = "1.20", features = ["v4", "serde"] }
 rusqlite = { version = "0.37", features = ["bundled"], optional = true }
-fs2 = { version = "0.4", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"], optional = true }
 [dev-dependencies]
 criterion = { version = "0.6", features = ["async_tokio"] }
