@@ -166,6 +166,15 @@ class BenchmarkReportTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "diagnostic samples"):
             benchmark.diagnostic_samples(path, False)
 
+    def test_retained_context_cases_are_required_from_v3(self):
+        self.assertEqual(len(benchmark.expected_benchmarks("all", "agent-loop-v2")), 19)
+        self.assertEqual(len(benchmark.expected_benchmarks("all", "agent-loop-v3")), 21)
+        capture = self.output / "00-base"
+        path = capture / "metadata.json"
+        path.write_text(json.dumps(dict(json.loads(path.read_text()), fixture="agent-loop-v3")))
+        with self.assertRaisesRegex(RuntimeError, "Criterion workloads"):
+            benchmark.summarize(capture)
+
     def test_v1_observer_measurements_are_not_accepted_as_v2_evidence(self):
         self.assertEqual(benchmark.FIXTURE_VERSION, "agent-loop-v2")
         path = self.output / "00-base" / "metrics.json"
