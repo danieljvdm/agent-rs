@@ -643,14 +643,7 @@ struct FailedModelCleanup;
 impl Model for FailedModelCleanup {
     async fn stream(&self, _: ModelRequest, _: CancellationToken) -> Result<ModelStream> {
         Ok(Box::pin(stream::iter([Ok(ModelEvent::Response(
-            ModelResponse {
-                output: Some(json!("done")),
-                tools: vec![],
-                usage: TokenUsage {
-                    input: 7,
-                    output: 5,
-                },
-            },
+            ModelResponse::final_output(json!("done")).with_usage(TokenUsage::new(7, 5)),
         ))])))
     }
     async fn cleanup(&self, _: RunId) -> Result<()> {

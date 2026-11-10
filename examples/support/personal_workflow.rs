@@ -940,14 +940,14 @@ pub async fn run_case(
         }),
     )
     .instructions(INSTRUCTIONS)
-    .config(ModelConfig {
-        model: if mode == Mode::Live {
-            model_name.into()
+    .config(
+        ModelConfig::new(if mode == Mode::Live {
+            model_name
         } else {
-            "workflow-script-v1".into()
-        },
-        temperature: Some(0.0),
-    })
+            "workflow-script-v1"
+        })
+        .with_temperature(0.0),
+    )
     .tools(tools(environment.clone()))
     .limits(
         Limits::default()

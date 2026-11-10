@@ -322,10 +322,7 @@ fn binding_encoding_is_stable_for_an_unchanged_definition() {
     }
     let agent = Agent::builder("binding", Capture::new(vec![]))
         .instructions("Answer briefly.")
-        .config(ModelConfig {
-            model: "pinned".into(),
-            temperature: Some(0.5),
-        })
+        .config(ModelConfig::new("pinned").with_temperature(0.5))
         .tools(tools())
         .limits(Limits::default().with_max_context_bytes(4096))
         .input::<Question>()

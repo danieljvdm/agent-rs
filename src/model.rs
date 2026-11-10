@@ -12,17 +12,43 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
+/// Provider settings for every model turn of an agent, set with
+/// [`AgentBuilder::config`](crate::AgentBuilder::config) and passed to the provider in
+/// [`ModelRequest::config`]:
+///
+/// ```
+/// # use yielded_agent::ModelConfig;
+/// let config = ModelConfig::new("gpt-4.1-mini").with_temperature(0.0);
+/// ```
+///
+/// It is part of the agent's [`binding`](crate::Agent::binding), so a stored run resumes only
+/// under the configuration it was accepted with.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub struct ModelConfig {
+    /// The provider's name for the model. Defaults to `"scripted"`, a placeholder for
+    /// [`ScriptedModel`], which ignores the configuration.
     pub model: String,
+    /// Sampling temperature, or `None` for the provider's default. Defaults to `None`.
     pub temperature: Option<f32>,
 }
 impl Default for ModelConfig {
     fn default() -> Self {
+        Self::new("scripted")
+    }
+}
+impl ModelConfig {
+    /// Settings for `model`, with the provider's default temperature.
+    pub fn new(model: impl Into<String>) -> Self {
         Self {
-            model: "scripted".into(),
+            model: model.into(),
             temperature: None,
         }
+    }
+    /// Sets [`temperature`](Self::temperature).
+    pub fn with_temperature(mut self, temperature: f32) -> Self {
+        self.temperature = Some(temperature);
+        self
     }
 }
 /// One model turn. Instructions, model configuration, tools and the output schema are the

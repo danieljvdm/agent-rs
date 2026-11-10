@@ -369,14 +369,9 @@ async fn run_reports_a_waiting_run_and_resume_completes_it() {
 
 #[tokio::test]
 async fn run_reports_a_stopped_run_with_its_reason() {
-    let model = scripted(vec![ModelResponse {
-        output: Some(json!("too long")),
-        tools: vec![],
-        usage: TokenUsage {
-            input: 8,
-            output: 8,
-        },
-    }]);
+    let model = scripted(vec![
+        ModelResponse::final_output(json!("too long")).with_usage(TokenUsage::new(8, 8)),
+    ]);
     let limits = Limits::default().with_max_tokens(10);
     let agent = typed(model, vec![], limits);
     let mut conversation = Conversation::default();

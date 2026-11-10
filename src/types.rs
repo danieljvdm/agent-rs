@@ -143,10 +143,21 @@ pub struct Usage {
     pub output_tokens: u64,
     pub active_ms: u64,
 }
+/// Tokens one model response consumed, as the provider reports them. The engine adds them to
+/// the run's [`Usage`] and checks them against [`Limits::max_tokens`].
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TokenUsage {
+    /// Prompt tokens.
     pub input: u64,
+    /// Generated tokens.
     pub output: u64,
+}
+impl TokenUsage {
+    /// `input` prompt tokens and `output` generated tokens.
+    pub fn new(input: u64, output: u64) -> Self {
+        Self { input, output }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ToolCall {
@@ -154,13 +165,28 @@ pub struct ToolCall {
     pub name: String,
     pub arguments: Value,
 }
+/// One complete model turn: either a final output or the tool calls to make next, never both.
+/// A [`Model`](crate::Model) delivers it as its stream's last
+/// [`ModelEvent::Response`](crate::ModelEvent::Response); it is recorded in history.
+///
+/// ```
+/// # use serde_json::json;
+/// # use yielded_agent::{ModelResponse, TokenUsage};
+/// let response = ModelResponse::final_output(json!("done")).with_usage(TokenUsage::new(12, 3));
+/// ```
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub struct ModelResponse {
+    /// The run's output, checked against the agent's output type, or `None` for a tool turn.
     pub output: Option<Value>,
+    /// Calls to make before the next turn, in the order the model gave them, or empty for a
+    /// final output.
     pub tools: Vec<ToolCall>,
+    /// What the turn consumed. Defaults to zero.
     pub usage: TokenUsage,
 }
 impl ModelResponse {
+    /// A final response that settles the run with `value`.
     pub fn final_output(value: Value) -> Self {
         Self {
             output: Some(value),
@@ -168,12 +194,18 @@ impl ModelResponse {
             usage: TokenUsage::default(),
         }
     }
+    /// A tool turn that makes `tools` before the model is called again.
     pub fn tools(tools: Vec<ToolCall>) -> Self {
         Self {
             output: None,
             tools,
             usage: TokenUsage::default(),
         }
+    }
+    /// Sets [`usage`](Self::usage).
+    pub fn with_usage(mut self, usage: TokenUsage) -> Self {
+        self.usage = usage;
+        self
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

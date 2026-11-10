@@ -13,10 +13,7 @@ use yielded_agent::{Model, ModelConfig, ModelEvent, ModelRequest, openai::OpenAi
 fn request() -> ModelRequest {
     let mut request = ModelRequest::new(uuid::Uuid::nil(), vec![]);
     request.instructions = "Return the number 42".into();
-    request.config = Arc::new(ModelConfig {
-        model: "test-model".into(),
-        temperature: None,
-    });
+    request.config = Arc::new(ModelConfig::new("test-model"));
     request.output_schema = Arc::new(json!({"type":"integer"}));
     request.max_response_bytes = 1024;
     request.remaining_tokens = 256;
