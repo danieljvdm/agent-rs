@@ -1179,3 +1179,36 @@ async fn model_context_fits_truncates_suffix_and_repins_current_input() {
         ]
     );
 }
+
+#[tokio::test]
+async fn input_and_latest_exchange_that_cannot_fit_fail_inside_the_model_operation() {
+    let tool = typed_tool::<usize, String, _, _>(spec("blob"), |n, _| async move {
+        Ok(ToolOutput::Complete("x".repeat(n)))
+    });
+    let model = Arc::new(ScriptedModel::new(vec![
+        ModelResponse::tools(vec![call("big", "blob", json!(1_000))]),
+        ModelResponse::final_output(json!("done")),
+    ]));
+    let agent = agent(
+        model.clone(),
+        vec![tool],
+        Limits {
+            max_context_bytes: 512,
+            ..Limits::default()
+        },
+    );
+    let mut state = state(&agent);
+    Engine::new(agent)
+        .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+        .await
+        .unwrap();
+    assert!(
+        matches!(&state.phase, Phase::Settled(Settlement::Failed(reason)) if reason.contains("exceed context limit")),
+        "{:?}",
+        state.phase
+    );
+    // Context is assembled after the dispatch checkpoint, so the failed attempt is counted but
+    // the model is never called with an incomplete context.
+    assert_eq!(model.calls(), 1);
+    assert_eq!(state.usage.model_calls, 2);
+}

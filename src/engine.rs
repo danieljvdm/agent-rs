@@ -401,22 +401,6 @@ impl Engine {
         checkpoint: &dyn Checkpoint,
         control: &RunControl,
     ) -> Result<()> {
-        let request = ModelRequest {
-            run_id: state.id,
-            instructions: self.agent.instructions.clone(),
-            config: self.agent.config.clone(),
-            history: model_context(state)?,
-            tools: self.agent.tool_specs.clone(),
-            output_schema: self.agent.output_schema.clone(),
-            turn: state.usage.model_calls + 1,
-            max_response_bytes: state.limits.max_response_bytes,
-            remaining_tokens: state.limits.max_tokens.saturating_sub(
-                state
-                    .usage
-                    .input_tokens
-                    .saturating_add(state.usage.output_tokens),
-            ),
-        };
         let (reservation, work_ms) = reserve(state)?;
         state.usage.model_calls += 1;
         state.phase = Phase::ModelInFlight;
@@ -431,6 +415,24 @@ impl Engine {
         let mut delta_events = 0_u64;
         let outcome = {
             let future = async {
+                // Assemble context after the dispatch checkpoint and inside the operation's
+                // deadline, so the checkpoint can contribute history and preparation is bounded.
+                let request = ModelRequest {
+                    run_id: state.id,
+                    instructions: self.agent.instructions.clone(),
+                    config: self.agent.config.clone(),
+                    history: model_context(state)?,
+                    tools: self.agent.tool_specs.clone(),
+                    output_schema: self.agent.output_schema.clone(),
+                    turn: state.usage.model_calls,
+                    max_response_bytes: state.limits.max_response_bytes,
+                    remaining_tokens: state.limits.max_tokens.saturating_sub(
+                        state
+                            .usage
+                            .input_tokens
+                            .saturating_add(state.usage.output_tokens),
+                    ),
+                };
                 let mut stream = self
                     .agent
                     .model
