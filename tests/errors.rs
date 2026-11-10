@@ -383,7 +383,7 @@ async fn run_reports_a_stopped_run_with_its_reason() {
         matches!(error, Error::Stopped(StopReason::Tokens)),
         "{error:?}"
     );
-    assert_eq!(error.to_string(), "run stopped: Tokens");
+    assert_eq!(error.to_string(), "run stopped: token limit reached");
     assert_eq!(
         conversation.last_run.unwrap().phase,
         Phase::Settled(Settlement::Stopped(StopReason::Tokens))

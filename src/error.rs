@@ -211,7 +211,7 @@ impl fmt::Display for Error {
             Self::Waiting => {
                 f.write_str("run is waiting; resolve Conversation::last_run and call Agent::resume")
             }
-            Self::Stopped(reason) => write!(f, "run stopped: {reason:?}"),
+            Self::Stopped(reason) => write!(f, "run stopped: {reason}"),
             Self::Failed(detail) => write!(f, "run failed: {detail}"),
             Self::Cancelled => f.write_str("run cancelled"),
         }

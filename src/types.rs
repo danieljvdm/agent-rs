@@ -2,6 +2,7 @@ use crate::{Error, Result, context::encoded_len};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    fmt,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -142,6 +143,17 @@ pub enum StopReason {
     Tokens,
     ActiveBudget,
     Expired,
+}
+impl fmt::Display for StopReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::ModelCalls => "model call limit reached",
+            Self::ToolCalls => "tool call limit reached",
+            Self::Tokens => "token limit reached",
+            Self::ActiveBudget => "active time budget exhausted",
+            Self::Expired => "run expired",
+        })
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Settlement {
