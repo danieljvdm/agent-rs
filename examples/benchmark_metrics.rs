@@ -147,15 +147,15 @@ async fn collect(samples: usize, filter: &str) -> Vec<Sample> {
         if chunks > 0 {
             for _ in 0..samples {
                 let prepared = fixture.prepare();
-                let engine = fixture.engine.clone();
+                let agent = fixture.agent.clone();
                 let (sender, mut receiver) = tokio::sync::mpsc::channel(2048);
                 let before = fixture.counts.snapshot();
                 let ((state, first, text, observed_chunks), mut sample) =
                     measure(&format!("{name}_observed"), 1, async move {
                         let started = Instant::now();
                         let task = tokio::spawn(async move {
-                            let mut state = prepared.admit(engine.agent());
-                            engine
+                            let mut state = prepared.admit(&agent);
+                            agent
                                 .drive(
                                     &mut state,
                                     &MemoryCheckpoint,

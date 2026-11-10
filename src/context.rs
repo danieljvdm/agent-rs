@@ -14,12 +14,12 @@ pub struct ContextRequest<'a> {
     pub conversation_id: &'a str,
     /// The run's current input.
     pub input: &'a Value,
-    /// The derived-context cap given to `Agent::with_context_policy`.
+    /// The derived-context cap given to `AgentBuilder::context_policy`.
     pub max_bytes: usize,
 }
 
 /// Optional policy for what reaches the model on each turn, set with
-/// [`Agent::with_context_policy`](crate::Agent::with_context_policy). Without one the engine
+/// [`AgentBuilder::context_policy`](crate::AgentBuilder::context_policy). Without one the engine
 /// sends the default context described below and makes no calls through this trait.
 ///
 /// # Contract
@@ -54,8 +54,9 @@ pub struct ContextRequest<'a> {
 /// operation, beside `Model::cleanup` and within `cleanup_timeout_ms`; no work may outlive it.
 ///
 /// **Binding.** [`binding`](Self::binding) and the cap are part of `Agent::binding`, so a
-/// persisted run is never resumed under a different policy. Describe everything that changes what
-/// the policy pins or prepares, stably and without credentials.
+/// persisted run is never resumed under a different policy. It is read once, when the agent is
+/// built. Describe everything that changes what the policy pins or prepares, stably and without
+/// credentials.
 #[async_trait]
 pub trait ContextPolicy: Send + Sync {
     /// Stable, credential-free configuration included in the durable agent binding.

@@ -5,21 +5,101 @@ use futures::{StreamExt, stream::FuturesUnordered};
 use schemars::{JsonSchema, schema_for};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use std::{collections::HashSet, future::Future, sync::Arc, time::Duration};
+use std::{
+    any::{Any, TypeId},
+    collections::{HashMap, HashSet},
+    future::Future,
+    marker::PhantomData,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{sync::mpsc, time::Instant};
 use tokio_util::sync::CancellationToken;
 
-type Validator = Arc<dyn Fn(&Value) -> Result<()> + Send + Sync>;
+type Validator = fn(&Value) -> Result<()>;
+/// Encodes a run's input. Input that already is a `Value` is moved, not copied.
+fn into_json<T: Serialize + 'static>(input: T) -> Result<Value> {
+    let mut input = Some(input);
+    if let Some(value) = (&mut input as &mut dyn Any).downcast_mut::<Option<Value>>() {
+        return Ok(value.take().unwrap_or_default());
+    }
+    serde_json::to_value(input).map_err(|e| Error::Invalid(e.to_string()))
+}
+/// Checks that `value` deserializes as `T`. `&Value` is a deserializer, so this never copies it,
+/// and any JSON is a `Value`, so an untyped agent checks nothing.
+fn validate<T: DeserializeOwned + 'static>(value: &Value) -> Result<()> {
+    if TypeId::of::<T>() == TypeId::of::<Value>() {
+        return Ok(());
+    }
+    T::deserialize(value)
+        .map(|_| ())
+        .map_err(|e| Error::Invalid(e.to_string()))
+}
 
-/// Immutable agent definition. Product policy and clients are supplied by its caller.
-#[derive(Clone)]
-pub struct Agent {
+/// An immutable agent definition, built with [`Agent::builder`]. Product policy and clients are
+/// supplied by its caller. The definition is shared: cloning an agent increments a reference
+/// count.
+///
+/// `I` and `O` are the input and output types named with [`AgentBuilder::input`] and
+/// [`AgentBuilder::output`]. The in-memory [`run`](Self::run) takes an `I` and returns an `O`,
+/// so a mismatch does not compile:
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use serde_json::json;
+/// # use yielded_agent::*;
+/// # async fn example() -> Result<()> {
+/// let model = ScriptedModel::new(vec![ModelResponse::final_output(json!("hi"))]);
+/// let agent: Agent<String, String> = Agent::builder("greeter", Arc::new(model))
+///     .input::<String>()
+///     .output::<String>()
+///     .build()?;
+/// let reply: String = agent.run(&mut Conversation::default(), "hello").await?;
+/// # Ok(()) }
+/// ```
+///
+/// ```compile_fail
+/// # use std::sync::Arc;
+/// # use yielded_agent::*;
+/// # async fn example(agent: Agent<String, String>) -> Result<()> {
+/// // The input must convert into `String`.
+/// let reply: String = agent.run(&mut Conversation::default(), 42_u64).await?;
+/// # Ok(()) }
+/// ```
+///
+/// ```compile_fail
+/// # use std::sync::Arc;
+/// # use yielded_agent::*;
+/// # async fn example(agent: Agent<String, String>) -> Result<()> {
+/// // The output is a `String`.
+/// let reply: u64 = agent.run(&mut Conversation::default(), "hello").await?;
+/// # Ok(()) }
+/// ```
+///
+/// The plain `Agent`, with both types `Value`, is the erased form: a [`Host`](crate::host::Host)
+/// serves agents of different types side by side, and a [`DurableStore`] accepts JSON input for
+/// any of them. [`erased`](Self::erased) converts a typed agent, sharing its definition.
+pub struct Agent<I = Value, O = Value> {
+    definition: Arc<Definition>,
+    types: PhantomData<fn(I) -> O>,
+}
+impl<I, O> Clone for Agent<I, O> {
+    fn clone(&self) -> Self {
+        Self {
+            definition: self.definition.clone(),
+            types: PhantomData,
+        }
+    }
+}
+/// Everything an agent is, built and checked once and then shared by every run.
+struct Definition {
     id: String,
     // Shared with every `ModelRequest` instead of copied into each one.
     instructions: Arc<str>,
     model: Arc<dyn Model>,
     config: Arc<ModelConfig>,
-    tools: Vec<Arc<dyn Tool>>,
+    /// Tools by name. `tool_specs` keeps their declaration order for the model.
+    tools: HashMap<String, Arc<dyn Tool>>,
     tool_specs: Arc<[ToolSpec]>,
     limits: Limits,
     input_schema: Value,
@@ -28,21 +108,294 @@ pub struct Agent {
     validate_output: Validator,
     authorizer: Arc<dyn Authorizer>,
     context_policy: Option<(Arc<dyn ContextPolicy>, usize)>,
+    /// Computed once from the fields above by [`Definition::compose_binding`], shared by every
+    /// run this agent accepts, and compared with each run `drive` resumes.
+    binding: Arc<Value>,
 }
 impl Agent {
-    pub fn new<I, O>(
-        id: impl Into<String>,
-        instructions: impl Into<String>,
-        model: Arc<dyn Model>,
-        config: ModelConfig,
-        tools: Vec<Arc<dyn Tool>>,
-        limits: Limits,
-    ) -> Result<Self>
-    where
-        I: DeserializeOwned + JsonSchema + 'static,
-        O: DeserializeOwned + JsonSchema + 'static,
-    {
-        let id = id.into();
+    /// Starts defining an agent with the two parts every agent needs. Everything else has a
+    /// default and its own [`AgentBuilder`] method; [`AgentBuilder::build`] checks the whole
+    /// definition once.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use yielded_agent::*;
+    /// # fn main() -> Result<()> {
+    /// let agent = Agent::builder("support", Arc::new(ScriptedModel::new(vec![])))
+    ///     .instructions("Answer briefly.")
+    ///     .limits(Limits { max_model_calls: 8, ..Limits::default() })
+    ///     .build()?;
+    /// assert_eq!(agent.id(), "support");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn builder(id: impl Into<String>, model: Arc<dyn Model>) -> AgentBuilder {
+        AgentBuilder {
+            id: id.into(),
+            instructions: String::new(),
+            model,
+            config: ModelConfig::default(),
+            tools: Vec::new(),
+            limits: Limits::default(),
+            authorizer: Arc::new(AllowAll),
+            context_policy: None,
+            types: PhantomData,
+        }
+    }
+}
+impl<I, O> Agent<I, O> {
+    pub fn id(&self) -> &str {
+        &self.definition.id
+    }
+    pub fn limits(&self) -> &Limits {
+        &self.definition.limits
+    }
+    /// The durable identity of this definition. Every run it accepts records it, and a stored
+    /// run resumes only with an agent whose binding is equal.
+    pub fn binding(&self) -> &Value {
+        &self.definition.binding
+    }
+    /// Accepts `input`, retaining the bounded suffix of `conversation` that fits the context limit.
+    pub fn new_run(
+        &self,
+        conversation_id: impl Into<String>,
+        input: Value,
+        conversation: &[HistoryEntry],
+        expires_at_ms: Option<u64>,
+    ) -> Result<RunState> {
+        let definition = &*self.definition;
+        (definition.validate_input)(&input)?;
+        let conversation_id = conversation_id.into();
+        if conversation_id.is_empty() || conversation_id.len() > 1024 {
+            return Err(Error::Invalid(
+                "conversation ID must be 1..1024 bytes".into(),
+            ));
+        }
+        let max_context_bytes = definition.limits.max_context_bytes;
+        let input_entry = HistoryEntry::Input(input.clone());
+        if encoded_len(&input_entry)? + 2 > max_context_bytes {
+            return Err(Error::Invalid("input exceeds context limit".into()));
+        }
+        let prior_context = conversation[suffix_start(conversation, max_context_bytes)?..].to_vec();
+        Ok(RunState {
+            version: STATE_VERSION,
+            id: RunId::new_v4(),
+            conversation_id,
+            agent_id: definition.id.clone(),
+            binding: definition.binding.clone(),
+            input,
+            limits: definition.limits.clone(),
+            expires_at_ms,
+            generation: 0,
+            revision: 0,
+            cancel_requested: false,
+            phase: Phase::Ready,
+            usage: Usage::default(),
+            prior_context,
+            history: vec![input_entry],
+            pending_response: None,
+            operations: vec![],
+        })
+    }
+    /// The same agent with its types erased, to serve beside agents of other types or to
+    /// accept JSON input. Shares the definition, so its binding is the same.
+    pub fn erased(&self) -> Agent {
+        Agent {
+            definition: self.definition.clone(),
+            types: PhantomData,
+        }
+    }
+    /// Drives a run this agent accepted, or one stored with an equal binding, until it settles
+    /// or waits. The same state machine serves memory and durable execution. No child work is
+    /// detached.
+    pub async fn drive(
+        &self,
+        state: &mut RunState,
+        checkpoint: &dyn Checkpoint,
+        control: RunControl,
+    ) -> Result<()> {
+        self.definition.drive(state, checkpoint, control).await
+    }
+}
+impl<I: Serialize + 'static, O: DeserializeOwned> Agent<I, O> {
+    /// Convenience API for runs that finish without application input. Use `drive` for
+    /// resumable waits.
+    pub async fn run(&self, conversation: &mut Conversation, input: impl Into<I>) -> Result<O> {
+        if conversation.last_run.as_ref().is_some_and(|run| {
+            !run.is_terminal()
+                || run.operations.iter().any(|operation| {
+                    matches!(
+                        operation.status,
+                        OperationStatus::Unknown { .. } | OperationStatus::Dispatched
+                    )
+                })
+        }) {
+            return Err(Error::ConversationBusy);
+        }
+        let input = into_json(input.into())?;
+        let state = self.new_run("memory", input, &conversation.history, None)?;
+        conversation.last_run = Some(state);
+        self.resume_from(conversation, RunControl::default(), 0)
+            .await
+    }
+    /// Resume a retained in-memory run after resolving its wait through `last_run`.
+    pub async fn resume(&self, conversation: &mut Conversation, control: RunControl) -> Result<O> {
+        let old_len = conversation
+            .last_run
+            .as_ref()
+            .ok_or(Error::NotFound)?
+            .history
+            .len();
+        self.resume_from(conversation, control, old_len).await
+    }
+    async fn resume_from(
+        &self,
+        conversation: &mut Conversation,
+        control: RunControl,
+        old_len: usize,
+    ) -> Result<O> {
+        let state = conversation.last_run.as_mut().ok_or(Error::NotFound)?;
+        let result = self.drive(state, &MemoryCheckpoint, control).await;
+        conversation
+            .history
+            .extend(state.history[old_len..].iter().cloned());
+        result?;
+        match &state.phase {
+            Phase::Settled(Settlement::Completed(value)) => {
+                O::deserialize(value).map_err(|e| Error::Invalid(e.to_string()))
+            }
+            Phase::Settled(other) => Err(Error::Invalid(format!("run settled: {other:?}"))),
+            _ => Err(Error::Invalid(
+                "run is waiting; resolve Conversation::last_run and call Agent::resume".into(),
+            )),
+        }
+    }
+}
+impl Definition {
+    /// The one place the durable binding is composed, once, by [`AgentBuilder::build`].
+    /// Everything a stored run must agree with to resume contributes here and only here: a new
+    /// part, such as a model adapter's identity or attached subagents, is one more optional key.
+    /// A part that is absent adds no key, so adding one leaves the binding of every existing
+    /// definition byte-identical.
+    fn compose_binding(&self) -> Value {
+        let mut binding = json!({"id":self.id,"instructions":&*self.instructions,"model":&*self.config,"tools":&*self.tool_specs,
+            "input_schema":self.input_schema,"output_schema":&*self.output_schema,"limits":self.limits});
+        if let Some((policy, max_bytes)) = &self.context_policy {
+            binding["context_policy"] = json!({"binding":policy.binding(),"max_bytes":max_bytes});
+        }
+        binding
+    }
+    fn tool(&self, name: &str) -> Result<&Arc<dyn Tool>> {
+        self.tools
+            .get(name)
+            .ok_or_else(|| Error::Invalid(format!("unknown tool {name}")))
+    }
+}
+
+/// Defines an [`Agent`], from [`Agent::builder`]. Options may be set in any order and nothing
+/// is checked until [`build`](Self::build).
+///
+/// `I` and `O` are the agent's input and output types, `Value` until
+/// [`input`](Self::input) or [`output`](Self::output) names them. They fix the schemas the
+/// agent publishes and validates against.
+#[must_use = "an agent builder does nothing until `build` is called"]
+pub struct AgentBuilder<I = Value, O = Value> {
+    id: String,
+    instructions: String,
+    model: Arc<dyn Model>,
+    config: ModelConfig,
+    tools: Vec<Arc<dyn Tool>>,
+    limits: Limits,
+    authorizer: Arc<dyn Authorizer>,
+    context_policy: Option<(Arc<dyn ContextPolicy>, usize)>,
+    types: PhantomData<fn(I) -> O>,
+}
+impl<I, O> AgentBuilder<I, O> {
+    /// System instructions for every model turn. Defaults to none.
+    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = instructions.into();
+        self
+    }
+    /// Provider configuration for every model turn. Defaults to [`ModelConfig::default`].
+    pub fn config(mut self, config: ModelConfig) -> Self {
+        self.config = config;
+        self
+    }
+    /// Adds one tool. Tools are offered to the model in the order they are added.
+    pub fn tool(mut self, tool: Arc<dyn Tool>) -> Self {
+        self.tools.push(tool);
+        self
+    }
+    /// Adds several tools, after any already added.
+    pub fn tools(mut self, tools: impl IntoIterator<Item = Arc<dyn Tool>>) -> Self {
+        self.tools.extend(tools);
+        self
+    }
+    /// Bounds for every run. Defaults to [`Limits::default`].
+    pub fn limits(mut self, limits: Limits) -> Self {
+        self.limits = limits;
+        self
+    }
+    /// Decides whether each tool call may run. Defaults to [`AllowAll`].
+    pub fn authorizer(mut self, authorizer: Arc<dyn Authorizer>) -> Self {
+        self.authorizer = authorizer;
+        self
+    }
+    /// Opt into a [`ContextPolicy`]. `max_derived_bytes` caps the encoded array of its derived
+    /// context within `max_context_bytes`; a policy that only pins entries may pass zero.
+    pub fn context_policy(
+        mut self,
+        policy: Arc<dyn ContextPolicy>,
+        max_derived_bytes: usize,
+    ) -> Self {
+        self.context_policy = Some((policy, max_derived_bytes));
+        self
+    }
+    /// Names the input type. The agent publishes its JSON schema and rejects input that does not
+    /// deserialize as `T`.
+    pub fn input<T>(self) -> AgentBuilder<T, O> {
+        self.retype()
+    }
+    /// Names the output type. The model is given its JSON schema, and a final output that does
+    /// not deserialize as `T` fails the run.
+    pub fn output<T>(self) -> AgentBuilder<I, T> {
+        self.retype()
+    }
+    fn retype<I2, O2>(self) -> AgentBuilder<I2, O2> {
+        AgentBuilder {
+            id: self.id,
+            instructions: self.instructions,
+            model: self.model,
+            config: self.config,
+            tools: self.tools,
+            limits: self.limits,
+            authorizer: self.authorizer,
+            context_policy: self.context_policy,
+            types: PhantomData,
+        }
+    }
+}
+impl<I, O> AgentBuilder<I, O>
+where
+    I: DeserializeOwned + JsonSchema + 'static,
+    O: DeserializeOwned + JsonSchema + 'static,
+{
+    /// Checks the definition and composes its binding. Fails with [`Error::Invalid`] for an ID
+    /// outside 1..=256 bytes, a zero parallelism, byte limit or timeout, a duplicate, unbounded
+    /// or unversioned tool name, an idempotent tool without a retry contract, or a derived
+    /// context cap above `max_context_bytes`.
+    pub fn build(self) -> Result<Agent<I, O>> {
+        let Self {
+            id,
+            instructions,
+            model,
+            config,
+            tools,
+            limits,
+            authorizer,
+            context_policy,
+            types: _,
+        } = self;
         if id.is_empty() || id.len() > 256 {
             return Err(Error::Invalid("agent ID must be 1..256 bytes".into()));
         }
@@ -57,12 +410,12 @@ impl Agent {
                 "parallelism, byte limits, and timeouts must be positive".into(),
             ));
         }
-        let mut names = HashSet::new();
+        let mut by_name = HashMap::with_capacity(tools.len());
         for tool in &tools {
             let spec = tool.spec();
             if spec.name.is_empty()
                 || spec.name.len() > 256
-                || !names.insert(spec.name.clone())
+                || by_name.insert(spec.name.clone(), tool.clone()).is_some()
                 || spec.version.is_empty()
             {
                 return Err(Error::Invalid(
@@ -75,112 +428,37 @@ impl Agent {
                 ));
             }
         }
-        Ok(Self {
+        if context_policy
+            .as_ref()
+            .is_some_and(|(_, max_derived_bytes)| *max_derived_bytes > limits.max_context_bytes)
+        {
+            return Err(Error::Invalid(
+                "derived context cap must fit the context limit".into(),
+            ));
+        }
+        let mut definition = Definition {
             id,
-            instructions: instructions.into().into(),
+            instructions: instructions.into(),
             model,
             config: Arc::new(config),
             tool_specs: tools.iter().map(|tool| tool.spec().clone()).collect(),
-            tools,
+            tools: by_name,
             limits,
             input_schema: serde_json::to_value(schema_for!(I)).expect("schema serialization"),
             output_schema: Arc::new(
                 serde_json::to_value(schema_for!(O)).expect("schema serialization"),
             ),
-            validate_input: Arc::new(|value| {
-                serde_json::from_value::<I>(value.clone())
-                    .map(|_| ())
-                    .map_err(|e| Error::Invalid(e.to_string()))
-            }),
-            validate_output: Arc::new(|value| {
-                serde_json::from_value::<O>(value.clone())
-                    .map(|_| ())
-                    .map_err(|e| Error::Invalid(e.to_string()))
-            }),
-            authorizer: Arc::new(AllowAll),
-            context_policy: None,
+            validate_input: validate::<I>,
+            validate_output: validate::<O>,
+            authorizer,
+            context_policy,
+            binding: Arc::default(),
+        };
+        definition.binding = Arc::new(definition.compose_binding());
+        Ok(Agent {
+            definition: Arc::new(definition),
+            types: PhantomData,
         })
-    }
-    pub fn with_authorizer(mut self, authorizer: Arc<dyn Authorizer>) -> Self {
-        self.authorizer = authorizer;
-        self
-    }
-    /// Opt into a [`ContextPolicy`]. `max_derived_bytes` caps the encoded array of its derived
-    /// context within `max_context_bytes`; a policy that only pins entries may pass zero.
-    pub fn with_context_policy(
-        mut self,
-        policy: Arc<dyn ContextPolicy>,
-        max_derived_bytes: usize,
-    ) -> Result<Self> {
-        if max_derived_bytes > self.limits.max_context_bytes {
-            return Err(Error::Invalid(
-                "derived context cap must fit the context limit".into(),
-            ));
-        }
-        self.context_policy = Some((policy, max_derived_bytes));
-        Ok(self)
-    }
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-    pub fn limits(&self) -> &Limits {
-        &self.limits
-    }
-    pub fn binding(&self) -> Value {
-        let mut binding = json!({"id":self.id,"instructions":&*self.instructions,"model":&*self.config,"tools":&*self.tool_specs,
-            "input_schema":self.input_schema,"output_schema":&*self.output_schema,"limits":self.limits});
-        if let Some((policy, max_bytes)) = &self.context_policy {
-            binding["context_policy"] = json!({"binding":policy.binding(),"max_bytes":max_bytes});
-        }
-        binding
-    }
-    /// Accepts `input`, retaining the bounded suffix of `conversation` that fits the context limit.
-    pub fn new_run(
-        &self,
-        conversation_id: impl Into<String>,
-        input: Value,
-        conversation: &[HistoryEntry],
-        expires_at_ms: Option<u64>,
-    ) -> Result<RunState> {
-        (self.validate_input)(&input)?;
-        let conversation_id = conversation_id.into();
-        if conversation_id.is_empty() || conversation_id.len() > 1024 {
-            return Err(Error::Invalid(
-                "conversation ID must be 1..1024 bytes".into(),
-            ));
-        }
-        let input_entry = HistoryEntry::Input(input.clone());
-        if encoded_len(&input_entry)? + 2 > self.limits.max_context_bytes {
-            return Err(Error::Invalid("input exceeds context limit".into()));
-        }
-        let prior_context =
-            conversation[suffix_start(conversation, self.limits.max_context_bytes)?..].to_vec();
-        Ok(RunState {
-            version: STATE_VERSION,
-            id: RunId::new_v4(),
-            conversation_id,
-            agent_id: self.id.clone(),
-            binding: self.binding(),
-            input,
-            limits: self.limits.clone(),
-            expires_at_ms,
-            generation: 0,
-            revision: 0,
-            cancel_requested: false,
-            phase: Phase::Ready,
-            usage: Usage::default(),
-            prior_context,
-            history: vec![input_entry],
-            pending_response: None,
-            operations: vec![],
-        })
-    }
-    fn tool(&self, name: &str) -> Result<Arc<dyn Tool>> {
-        self.tools
-            .iter()
-            .find(|t| t.spec().name == name)
-            .cloned()
-            .ok_or_else(|| Error::Invalid(format!("unknown tool {name}")))
     }
 }
 
@@ -213,90 +491,20 @@ pub struct Conversation {
     /// Retains waits and uncertain outcomes even when the convenience API returns an error.
     pub last_run: Option<RunState>,
 }
-#[derive(Clone)]
-pub struct Engine {
-    agent: Agent,
-}
-impl Engine {
-    pub fn new(agent: Agent) -> Self {
-        Self { agent }
-    }
-    pub fn agent(&self) -> &Agent {
-        &self.agent
-    }
-    /// Convenience API for runs that finish without application input. Use `drive` for resumable waits.
-    pub async fn run<I: Serialize, O: DeserializeOwned>(
-        &self,
-        conversation: &mut Conversation,
-        input: I,
-    ) -> Result<O> {
-        if conversation.last_run.as_ref().is_some_and(|run| {
-            !run.is_terminal()
-                || run.operations.iter().any(|operation| {
-                    matches!(
-                        operation.status,
-                        OperationStatus::Unknown { .. } | OperationStatus::Dispatched
-                    )
-                })
-        }) {
-            return Err(Error::ConversationBusy);
-        }
-        let input = serde_json::to_value(input).map_err(|e| Error::Invalid(e.to_string()))?;
-        let state = self
-            .agent
-            .new_run("memory", input, &conversation.history, None)?;
-        conversation.last_run = Some(state);
-        self.resume_from(conversation, RunControl::default(), 0)
-            .await
-    }
-    /// Resume a retained in-memory run after resolving its wait through `last_run`.
-    pub async fn resume<O: DeserializeOwned>(
-        &self,
-        conversation: &mut Conversation,
-        control: RunControl,
-    ) -> Result<O> {
-        let old_len = conversation
-            .last_run
-            .as_ref()
-            .ok_or(Error::NotFound)?
-            .history
-            .len();
-        self.resume_from(conversation, control, old_len).await
-    }
-    async fn resume_from<O: DeserializeOwned>(
-        &self,
-        conversation: &mut Conversation,
-        control: RunControl,
-        old_len: usize,
-    ) -> Result<O> {
-        let state = conversation.last_run.as_mut().ok_or(Error::NotFound)?;
-        let result = self.drive(state, &MemoryCheckpoint, control).await;
-        conversation
-            .history
-            .extend(state.history[old_len..].iter().cloned());
-        result?;
-        match &state.phase {
-            Phase::Settled(Settlement::Completed(value)) => {
-                serde_json::from_value(value.clone()).map_err(|e| Error::Invalid(e.to_string()))
-            }
-            Phase::Settled(other) => Err(Error::Invalid(format!("run settled: {other:?}"))),
-            _ => Err(Error::Invalid(
-                "run is waiting; resolve Conversation::last_run and call Engine::resume".into(),
-            )),
-        }
-    }
-    /// Drives the same state machine for memory and durable execution. No child work is detached.
+/// The state machine runs on the shared definition of the agent being driven.
+impl Definition {
     #[tracing::instrument(skip_all, fields(run_id = %state.id))]
-    pub async fn drive(
+    async fn drive(
         &self,
         state: &mut RunState,
         checkpoint: &dyn Checkpoint,
         control: RunControl,
     ) -> Result<()> {
+        // A run accepted by this definition shares its binding; a stored one compares by value.
         if state.version != STATE_VERSION
-            || state.agent_id != self.agent.id
-            || state.binding != self.agent.binding()
-            || state.limits != self.agent.limits
+            || state.agent_id != self.id
+            || !(Arc::ptr_eq(&state.binding, &self.binding) || state.binding == self.binding)
+            || state.limits != self.limits
         {
             return Err(Error::Incompatible(
                 "persisted state or immutable agent definition differs".into(),
@@ -312,7 +520,7 @@ impl Engine {
         }
         for op in &mut state.operations {
             if matches!(op.status, OperationStatus::Dispatched) {
-                let tool = self.agent.tool(&op.call.name)?;
+                let tool = self.tool(&op.call.name)?;
                 if tool.spec() != &op.spec {
                     return Err(Error::Incompatible(format!(
                         "tool contract differs: {}",
@@ -435,15 +643,15 @@ impl Engine {
                 // Assemble context after the dispatch checkpoint and inside the operation's
                 // deadline, so the checkpoint can contribute history and preparation is bounded.
                 let (history, derived_context) =
-                    assemble(state, self.agent.context_policy.as_ref(), &operation_cancel).await?;
+                    assemble(state, self.context_policy.as_ref(), &operation_cancel).await?;
                 let request = ModelRequest {
                     run_id: state.id,
-                    instructions: self.agent.instructions.clone(),
-                    config: self.agent.config.clone(),
+                    instructions: self.instructions.clone(),
+                    config: self.config.clone(),
                     history,
                     derived_context,
-                    tools: self.agent.tool_specs.clone(),
-                    output_schema: self.agent.output_schema.clone(),
+                    tools: self.tool_specs.clone(),
+                    output_schema: self.output_schema.clone(),
                     turn: state.usage.model_calls,
                     max_response_bytes: state.limits.max_response_bytes,
                     remaining_tokens: state.limits.max_tokens.saturating_sub(
@@ -454,7 +662,6 @@ impl Engine {
                     ),
                 };
                 let mut stream = self
-                    .agent
                     .model
                     .stream(request, operation_cancel.clone())
                     .await
@@ -500,8 +707,8 @@ impl Engine {
         let cleanup = tokio::time::timeout(
             Duration::from_millis(state.limits.cleanup_timeout_ms),
             async {
-                let model = self.agent.model.cleanup(state.id);
-                match &self.agent.context_policy {
+                let model = self.model.cleanup(state.id);
+                match &self.context_policy {
                     None => model.await,
                     Some((policy, _)) => {
                         let (model, context) = tokio::join!(model, policy.cleanup(state.id));
@@ -562,7 +769,7 @@ impl Engine {
             .await;
         }
         if let Some(output) = &response.output {
-            (self.agent.validate_output)(output)?;
+            (self.validate_output)(output)?;
             state.history.push(HistoryEntry::Exchange {
                 response: response.clone(),
                 results: vec![],
@@ -581,7 +788,6 @@ impl Engine {
             .iter()
             .map(|call| {
                 let spec = self
-                    .agent
                     .tool(&call.name)
                     .expect("validated tool")
                     .spec()
@@ -632,7 +838,7 @@ impl Engine {
                     "tool call IDs must be unique and 1..256 bytes".into(),
                 ));
             }
-            self.agent.tool(&call.name)?.validate(&call.arguments)?;
+            self.tool(&call.name)?.validate(&call.arguments)?;
         }
         Ok(())
     }
@@ -825,8 +1031,8 @@ impl Engine {
             return Admission::Stop;
         }
         let op = &state.operations[index];
-        let tool = match self.agent.tool(&op.call.name) {
-            Ok(tool) if tool.spec() == &op.spec => tool,
+        let tool = match self.tool(&op.call.name) {
+            Ok(tool) if tool.spec() == &op.spec => tool.clone(),
             Ok(_) => {
                 let error = Error::Incompatible(format!("tool contract differs: {}", op.call.name));
                 window.failure = Some(error);
@@ -842,7 +1048,7 @@ impl Engine {
         };
         let mut finished = Vec::new();
         let authorization = authorize_beside(
-            &*self.agent.authorizer,
+            &*self.authorizer,
             state,
             &state.operations[index].call,
             deadline,

@@ -62,15 +62,11 @@ impl Fixture for Sqlite {
 }
 
 fn agent(responses: Vec<ModelResponse>, tools: Vec<Arc<dyn Tool>>) -> Agent {
-    Agent::new::<Value, Value>(
-        "conformance-v1",
-        "Be deterministic",
-        Arc::new(ScriptedModel::new(responses)),
-        ModelConfig::default(),
-        tools,
-        Limits::default(),
-    )
-    .unwrap()
+    Agent::builder("conformance-v1", Arc::new(ScriptedModel::new(responses)))
+        .instructions("Be deterministic")
+        .tools(tools)
+        .build()
+        .unwrap()
 }
 fn spec(name: &str, retry: RetryPolicy) -> ToolSpec {
     ToolSpec {
@@ -450,18 +446,14 @@ async fn history_is_ordered_and_context_is_bounded(fixture: &impl Fixture) {
     assert_eq!(state.prior_context, expected);
     state.phase = Phase::Settled(Settlement::Cancelled);
     store.commit(&mut state).await.unwrap();
-    let bounded = Agent::new::<Value, Value>(
-        "bounded",
-        "test",
-        Arc::new(ScriptedModel::new(vec![])),
-        ModelConfig::default(),
-        vec![],
-        Limits {
+    let bounded = Agent::builder("bounded", Arc::new(ScriptedModel::new(vec![])))
+        .instructions("test")
+        .limits(Limits {
             max_context_bytes: 512,
             ..Limits::default()
-        },
-    )
-    .unwrap();
+        })
+        .build()
+        .unwrap();
     let id = store
         .accept(
             &bounded,
@@ -540,16 +532,14 @@ async fn due_order_waits_and_expiry(fixture: &impl Fixture) {
 async fn several_agents_share_one_store(fixture: &impl Fixture) {
     let store = fixture.open().await;
     let named = |id: &str| {
-        Agent::new::<Value, Value>(
+        Agent::builder(
             id,
-            "Answer with your name",
             Arc::new(ScriptedModel::new(vec![ModelResponse::final_output(
                 json!(id),
             )])),
-            ModelConfig::default(),
-            vec![],
-            Limits::default(),
         )
+        .instructions("Answer with your name")
+        .build()
         .unwrap()
     };
     assert!(matches!(

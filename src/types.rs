@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use thiserror::Error;
 use uuid::Uuid;
 pub const STATE_VERSION: u32 = 1;
@@ -189,7 +192,8 @@ pub struct RunState {
     pub id: RunId,
     pub conversation_id: String,
     pub agent_id: String,
-    pub binding: Value,
+    /// The accepting agent's [`binding`](crate::Agent::binding), shared with it in memory.
+    pub binding: Arc<Value>,
     pub input: Value,
     pub limits: Limits,
     pub expires_at_ms: Option<u64>,

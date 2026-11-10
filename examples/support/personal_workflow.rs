@@ -539,7 +539,7 @@ struct Session {
     host: Host<SqliteStore>,
 }
 impl Session {
-    async fn open(directory: &Path, agent: Agent) -> Result<Self> {
+    async fn open(directory: &Path, agent: Agent<WorkflowInput, WorkflowOutput>) -> Result<Self> {
         let store = Arc::new(SqliteStore::open(directory.join("runtime.sqlite")).await?);
         match Host::start(
             store.clone(),
@@ -565,7 +565,7 @@ impl Session {
 }
 struct Runner {
     session: Option<Session>,
-    agent: Agent,
+    agent: Agent<WorkflowInput, WorkflowOutput>,
     environment: Arc<Environment>,
     id: Option<RunId>,
     restarts: Vec<Restart>,
@@ -941,32 +941,35 @@ pub async fn run_case(
             }
         }
     };
-    let agent = Agent::new::<WorkflowInput, WorkflowOutput>(
+    let agent = Agent::builder(
         FIXTURE_VERSION,
-        INSTRUCTIONS,
         Arc::new(ObservedModel {
             inner: model,
             environment: environment.clone(),
         }),
-        ModelConfig {
-            model: if mode == Mode::Live {
-                model_name.into()
-            } else {
-                "workflow-script-v1".into()
-            },
-            temperature: Some(0.0),
+    )
+    .instructions(INSTRUCTIONS)
+    .config(ModelConfig {
+        model: if mode == Mode::Live {
+            model_name.into()
+        } else {
+            "workflow-script-v1".into()
         },
-        tools(environment.clone()),
-        Limits {
-            max_model_calls: 8,
-            max_tool_calls: 12,
-            max_tokens: 20_000,
-            max_parallel_tools: 2,
-            operation_timeout_ms: 60_000,
-            active_budget_ms: 240_000,
-            ..Limits::default()
-        },
-    )?;
+        temperature: Some(0.0),
+    })
+    .tools(tools(environment.clone()))
+    .limits(Limits {
+        max_model_calls: 8,
+        max_tool_calls: 12,
+        max_tokens: 20_000,
+        max_parallel_tools: 2,
+        operation_timeout_ms: 60_000,
+        active_budget_ms: 240_000,
+        ..Limits::default()
+    })
+    .input::<WorkflowInput>()
+    .output::<WorkflowOutput>()
+    .build()?;
     let mut runner = Runner {
         session: None,
         agent,

@@ -74,7 +74,8 @@ where
         &self.spec
     }
     fn validate(&self, arguments: &Value) -> Result<()> {
-        serde_json::from_value::<A>(arguments.clone())
+        // `&Value` is a deserializer, so checking the arguments never copies them.
+        A::deserialize(arguments)
             .map(|_| ())
             .map_err(|e| Error::Invalid(e.to_string()))
     }

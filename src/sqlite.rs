@@ -493,7 +493,7 @@ fn accept_in(
     if let Some((id, old_input, old_binding, old_expiry)) = existing {
         if old_input != encode(&input)?
             || old_expiry != sql_time(expires_at_ms)
-            || old_binding != encode(&agent.binding())?
+            || old_binding != encode(agent.binding())?
         {
             return Err(Error::IdempotencyConflict);
         }
@@ -930,15 +930,10 @@ mod tests {
         let db = SqliteStore::open(directory.path().join("atomic.sqlite"))
             .await
             .unwrap();
-        let agent = Agent::new::<Value, Value>(
-            "test",
-            "test",
-            Arc::new(ScriptedModel::new(vec![])),
-            ModelConfig::default(),
-            vec![],
-            Limits::default(),
-        )
-        .unwrap();
+        let agent = Agent::builder("test", Arc::new(ScriptedModel::new(vec![])))
+            .instructions("test")
+            .build()
+            .unwrap();
         let id = db.accept(&agent, "c", "k", json!(1), None).await.unwrap();
         let mut state = db.claim(id).await.unwrap();
         let old_revision = state.revision;
@@ -989,15 +984,10 @@ mod tests {
         let db = SqliteStore::open(directory.path().join("hint.sqlite"))
             .await
             .unwrap();
-        let agent = Agent::new::<Value, Value>(
-            "test",
-            "test",
-            Arc::new(ScriptedModel::new(vec![])),
-            ModelConfig::default(),
-            vec![],
-            Limits::default(),
-        )
-        .unwrap();
+        let agent = Agent::builder("test", Arc::new(ScriptedModel::new(vec![])))
+            .instructions("test")
+            .build()
+            .unwrap();
         let id = db.accept(&agent, "c", "k", json!(1), None).await.unwrap();
         let mut state = db.claim(id).await.unwrap();
         let exchange = |n: u64| HistoryEntry::Exchange {

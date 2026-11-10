@@ -37,20 +37,28 @@ fn sleeps(ms: &[u64]) -> Vec<ToolCall> {
         .collect()
 }
 /// An agent whose model asks for each batch of calls in turn, then answers "done".
-fn agent(batches: Vec<Vec<ToolCall>>, tools: Vec<Arc<dyn Tool>>, limits: Limits) -> Agent {
+fn agent(
+    batches: Vec<Vec<ToolCall>>,
+    tools: Vec<Arc<dyn Tool>>,
+    limits: Limits,
+) -> Agent<String, String> {
+    builder(batches, tools, limits).build().unwrap()
+}
+fn builder(
+    batches: Vec<Vec<ToolCall>>,
+    tools: Vec<Arc<dyn Tool>>,
+    limits: Limits,
+) -> AgentBuilder<String, String> {
     let mut responses: Vec<_> = batches.into_iter().map(ModelResponse::tools).collect();
     responses.push(ModelResponse::final_output(json!("done")));
-    Agent::new::<String, String>(
-        "test",
-        "test",
-        Arc::new(ScriptedModel::new(responses)),
-        ModelConfig::default(),
-        tools,
-        limits,
-    )
-    .unwrap()
+    Agent::builder("test", Arc::new(ScriptedModel::new(responses)))
+        .instructions("test")
+        .tools(tools)
+        .limits(limits)
+        .input::<String>()
+        .output::<String>()
 }
-fn state(agent: &Agent) -> RunState {
+fn state(agent: &Agent<String, String>) -> RunState {
     agent.new_run("test", json!("go"), &[], None).unwrap()
 }
 fn results(state: &RunState) -> &[ToolResult] {
@@ -235,7 +243,7 @@ async fn next_call_starts_when_a_slot_frees_and_results_keep_declaration_order()
         },
     );
     let mut state = state(&agent);
-    Engine::new(agent)
+    agent
         .drive(&mut state, &journal, RunControl::default())
         .await
         .unwrap();
@@ -281,7 +289,7 @@ async fn each_call_times_out_from_its_own_start() {
         },
     );
     let mut state = state(&agent);
-    Engine::new(agent)
+    agent
         .drive(&mut state, &journal, RunControl::default())
         .await
         .unwrap();
@@ -324,7 +332,7 @@ async fn sequential_call_waits_for_running_calls_and_runs_alone() {
         },
     );
     let mut state = state(&agent);
-    Engine::new(agent)
+    agent
         .drive(&mut state, &journal, RunControl::default())
         .await
         .unwrap();
@@ -371,7 +379,7 @@ async fn failed_commit_never_starts_the_next_call_and_still_drains_running_calls
         },
     );
     let mut state = state(&agent);
-    let result = Engine::new(agent)
+    let result = agent
         .drive(
             &mut state,
             &FailAfterOutcome {
@@ -406,7 +414,7 @@ async fn intent_and_active_time_are_committed_before_each_call_starts() {
         limits,
     );
     let mut state = state(&agent);
-    Engine::new(agent)
+    agent
         .drive(&mut state, &journal, RunControl::default())
         .await
         .unwrap();
@@ -451,7 +459,7 @@ async fn calls_behind_a_wait_are_never_committed_as_dispatched() {
         },
     );
     let mut state = state(&agent);
-    Engine::new(agent)
+    agent
         .drive(&mut state, &journal, RunControl::default())
         .await
         .unwrap();
@@ -476,7 +484,7 @@ async fn denial_stops_dispatch_and_keeps_outcomes_already_recorded() {
     for (slots, started) in [(1, ids(&["c0"])), (2, vec![])] {
         let journal = Journal::default();
         let sleeper = Sleeper::new(&journal);
-        let agent = agent(
+        let agent = builder(
             vec![sleeps(&[10, 10])],
             vec![sleeper.tool(spec("sleep"))],
             Limits {
@@ -484,9 +492,11 @@ async fn denial_stops_dispatch_and_keeps_outcomes_already_recorded() {
                 ..Limits::default()
             },
         )
-        .with_authorizer(Arc::new(DenyCall("c1")));
+        .authorizer(Arc::new(DenyCall("c1")))
+        .build()
+        .unwrap();
         let mut state = state(&agent);
-        Engine::new(agent)
+        agent
             .drive(&mut state, &journal, RunControl::default())
             .await
             .unwrap();
@@ -524,7 +534,7 @@ async fn shutdown_drains_running_calls_and_leaves_unstarted_calls_pending() {
         tokio::time::sleep(Duration::from_millis(20)).await;
         trigger.cancel();
     });
-    let result = Engine::new(agent)
+    let result = agent
         .drive(
             &mut state,
             &journal,
@@ -575,7 +585,7 @@ async fn tool_call_limit_stops_a_batch_before_any_of_it_starts() {
         },
     );
     let mut state = state(&agent);
-    Engine::new(agent)
+    agent
         .drive(&mut state, &journal, RunControl::default())
         .await
         .unwrap();
@@ -597,7 +607,7 @@ async fn parallel_calls_charge_their_shared_wall_time_once() {
         Limits::default(),
     );
     let mut state = state(&agent);
-    Engine::new(agent)
+    agent
         .drive(&mut state, &journal, RunControl::default())
         .await
         .unwrap();
@@ -621,7 +631,7 @@ async fn active_budget_caps_the_last_call_and_is_never_exceeded() {
         },
     );
     let mut state = state(&agent);
-    Engine::new(agent)
+    agent
         .drive(&mut state, &journal, RunControl::default())
         .await
         .unwrap();

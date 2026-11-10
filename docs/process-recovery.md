@@ -23,7 +23,7 @@ The default suite covers these cases:
 
 The external-effect fixture is a separate, fsynced file ledger outside the runtime database. It records handler attempts separately from effects. The idempotent variant stores one receipt per key, modeling the explicit deduplication contract an application must obtain from its real external service. These tests establish recovery behavior; they do not claim that the runtime makes arbitrary external mutations exactly once.
 
-For wait boundaries, the fixture first awaits `Engine::drive` returning so the checkpoint's active-time refund is complete, then kills the process while the store remains open. Recovery to completion or uncertainty uses the background `Host`. This avoids confusing an intermediate, already-visible wait checkpoint with the execution loop's quiescence boundary.
+For wait boundaries, the fixture first awaits `Agent::drive` returning so the checkpoint's active-time refund is complete, then kills the process while the store remains open. Recovery to completion or uncertainty uses the background `Host`. This avoids confusing an intermediate, already-visible wait checkpoint with the execution loop's quiescence boundary.
 
 ## Real-time restart soak
 

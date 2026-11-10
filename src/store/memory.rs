@@ -130,7 +130,7 @@ impl DurableStore for MemoryStore {
         expires_at_ms: Option<u64>,
     ) -> Result<RunId> {
         check_acceptance(conversation, key, expires_at_ms)?;
-        let acceptance = (encode(&input)?, encode(&agent.binding())?, expires_at_ms);
+        let acceptance = (encode(&input)?, encode(agent.binding())?, expires_at_ms);
         let mut inner = self.lock()?;
         let identity = (conversation.to_owned(), key.to_owned());
         if let Some(id) = inner.keys.get(&identity) {

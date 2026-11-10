@@ -15,15 +15,11 @@ use yielded_agent::{
 };
 
 fn agent(responses: Vec<ModelResponse>, tools: Vec<Arc<dyn Tool>>) -> Agent {
-    Agent::new::<Value, Value>(
-        "test",
-        "Be deterministic",
-        Arc::new(ScriptedModel::new(responses)),
-        ModelConfig::default(),
-        tools,
-        Limits::default(),
-    )
-    .unwrap()
+    Agent::builder("test", Arc::new(ScriptedModel::new(responses)))
+        .instructions("Be deterministic")
+        .tools(tools)
+        .build()
+        .unwrap()
 }
 fn final_agent() -> Agent {
     agent(vec![ModelResponse::final_output(json!("done"))], vec![])
@@ -166,7 +162,7 @@ async fn settled_run_state_history_and_operations_survive_reopening() {
         .await
         .unwrap();
     let mut state = db.claim(earlier).await.unwrap();
-    Engine::new(agent.clone())
+    agent
         .drive(&mut state, db.as_ref(), RunControl::default())
         .await
         .unwrap();
@@ -175,7 +171,7 @@ async fn settled_run_state_history_and_operations_survive_reopening() {
         .await
         .unwrap();
     let mut state = db.claim(id).await.unwrap();
-    Engine::new(agent)
+    agent
         .drive(&mut state, db.as_ref(), RunControl::default())
         .await
         .unwrap();
@@ -626,16 +622,14 @@ async fn incompatible_binding_is_visible_and_stays_blocked_until_repaired() {
         .accept(&original, "c", "k", json!(1), None)
         .await
         .unwrap();
-    let changed = Agent::new::<Value, Value>(
+    let changed = Agent::builder(
         "test",
-        "Changed instructions",
         Arc::new(ScriptedModel::new(vec![ModelResponse::final_output(
             json!("changed"),
         )])),
-        ModelConfig::default(),
-        vec![],
-        Limits::default(),
     )
+    .instructions("Changed instructions")
+    .build()
     .unwrap();
     let mut host = Host::start(db.clone(), changed, options()).unwrap();
     tokio::time::timeout(Duration::from_secs(2), async {
@@ -881,15 +875,11 @@ async fn repaired_binding_retries_abandoned_dispatch_behind_an_input_wait() {
         state.operations.iter().map(|o| o.call.clone()).collect(),
     ));
     db.commit(&mut state).await.unwrap();
-    let changed = Agent::new::<Value, Value>(
-        "test",
-        "Changed instructions",
-        Arc::new(ScriptedModel::new(vec![])),
-        ModelConfig::default(),
-        vec![tool],
-        Limits::default(),
-    )
-    .unwrap();
+    let changed = Agent::builder("test", Arc::new(ScriptedModel::new(vec![])))
+        .instructions("Changed instructions")
+        .tool(tool)
+        .build()
+        .unwrap();
     let mut host = Host::start(db.clone(), changed, options()).unwrap();
     tokio::time::timeout(Duration::from_secs(2), async {
         while db.last_error(id).await.unwrap().is_none() {

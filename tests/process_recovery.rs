@@ -245,24 +245,24 @@ fn agent(config: &Config) -> Agent {
         }
     }
     responses.push(ModelResponse::final_output(json!("done")));
-    Agent::new::<Value, Value>(
+    Agent::builder(
         "process-recovery-v1",
-        "Run the deterministic process recovery scenario.",
         Arc::new(LoggedModel {
             inner: ScriptedModel::new(responses),
             directory: config.directory.clone(),
         }),
-        ModelConfig::default(),
-        tools,
-        Limits {
-            max_model_calls: config.max_model_calls,
-            max_tool_calls: 8,
-            operation_timeout_ms: 5_000,
-            cleanup_timeout_ms: 100,
-            active_budget_ms: 30_000,
-            ..Limits::default()
-        },
     )
+    .instructions("Run the deterministic process recovery scenario.")
+    .tools(tools)
+    .limits(Limits {
+        max_model_calls: config.max_model_calls,
+        max_tool_calls: 8,
+        operation_timeout_ms: 5_000,
+        cleanup_timeout_ms: 100,
+        active_budget_ms: 30_000,
+        ..Limits::default()
+    })
+    .build()
     .unwrap()
 }
 
@@ -387,7 +387,7 @@ async fn child(config: Config) -> Result<()> {
     }
     if !matches!(config.crash, CrashPoint::None) {
         let mut state = store.claim(id).await?;
-        Engine::new(agent)
+        agent
             .drive(
                 &mut state,
                 &BoundaryCheckpoint {
@@ -406,7 +406,7 @@ async fn child(config: Config) -> Result<()> {
         // Returning from drive is the public quiescence barrier for a wait. Merely
         // observing its first checkpoint can race the subsequent budget refund.
         let mut state = store.claim(id).await?;
-        Engine::new(agent)
+        agent
             .drive(&mut state, store.as_ref(), RunControl::default())
             .await?;
         assert!(ready(&state, config.ready), "expected a persisted wait");
