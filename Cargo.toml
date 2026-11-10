@@ -44,3 +44,7 @@ harness = false
 name = "model_adapters"
 harness = false
 required-features = ["openai"]
+[[bench]]
+name = "steering_schedule"
+harness = false
+required-features = ["sqlite"]
