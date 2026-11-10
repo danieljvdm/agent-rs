@@ -24,7 +24,7 @@ use yielded_agent::{
 };
 // Optional adapters, each behind its feature.
 #[cfg(feature = "openai")]
-use yielded_agent::openai::OpenAiModel;
+use yielded_agent::openai::{OpenAiModel, OpenAiResponsesModel};
 #[cfg(feature = "sqlite")]
 use yielded_agent::sqlite::{SqliteStore, StoreMetrics};
 
