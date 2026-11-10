@@ -3,6 +3,8 @@
 use async_trait::async_trait;
 use futures::stream;
 use serde_json::{Value, json};
+#[cfg(feature = "sqlite")]
+use std::sync::Mutex;
 use std::{
     sync::{
         Arc,
@@ -34,6 +36,30 @@ impl Fixture for Memory {
     }
     async fn close(&self, _: Arc<dyn SteeringStore>) {}
 }
+#[cfg(feature = "sqlite")]
+struct Sqlite {
+    directory: tempfile::TempDir,
+    open: Mutex<Option<Arc<sqlite::SqliteStore>>>,
+}
+#[cfg(feature = "sqlite")]
+#[async_trait]
+impl Fixture for Sqlite {
+    async fn open(&self) -> Arc<dyn SteeringStore> {
+        let store = Arc::new(
+            sqlite::SqliteStore::open(self.directory.path().join("steering.sqlite"))
+                .await
+                .unwrap(),
+        );
+        *self.open.lock().unwrap() = Some(store.clone());
+        store
+    }
+    async fn close(&self, store: Arc<dyn SteeringStore>) {
+        drop(store);
+        let open = self.open.lock().unwrap().take().unwrap();
+        open.close().await.unwrap();
+    }
+}
+
 /// One model call in progress: the test sees its request and decides its response.
 struct Attempt {
     request: ModelRequest,
@@ -953,6 +979,18 @@ macro_rules! steering_tests {
 mod memory_contract {
     use super::*;
     steering_tests!(Memory::default());
+}
+
+#[cfg(feature = "sqlite")]
+mod sqlite_contract {
+    use super::*;
+    fn fixture() -> Sqlite {
+        Sqlite {
+            directory: tempfile::tempdir().unwrap(),
+            open: Mutex::new(None),
+        }
+    }
+    steering_tests!(fixture());
 }
 
 // ---------------------------------------------------------------------------------------------

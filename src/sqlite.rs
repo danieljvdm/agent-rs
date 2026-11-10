@@ -10,6 +10,11 @@
 //!   `last_error`. Every commit rewrites only this row, fenced on generation and revision.
 //! - `history` holds each entry once, appended in commit order; `operations` retains every
 //!   operation the run recorded, across batches.
+//! - `steering` holds each accepted instruction once, with its idempotency key and the revision
+//!   that applied it. A queued instruction is not history yet: the model dispatch commit appends
+//!   it to `history` at the run's next ordinals, in the same transaction that marks it applied.
+//!   The table is created additively in `steering_queue`, within schema version 2.
+use crate::steering::Boundary;
 use crate::store;
 use crate::types::STATE_VERSION;
 use crate::{
@@ -31,6 +36,8 @@ use std::{
     thread,
 };
 use tokio::sync::{mpsc, oneshot};
+
+mod steering_queue;
 
 const STORAGE_VERSION: i64 = 2;
 type Job = Box<dyn FnOnce(&mut Database) + Send>;
@@ -102,6 +109,8 @@ struct Delta {
     history_from: usize,
     history: Vec<String>,
     operations: Vec<(String, String)>,
+    /// What queued steering does to this write, as `Checkpoint` allows.
+    steering: Boundary,
 }
 impl Delta {
     fn encode(
@@ -109,6 +118,7 @@ impl Delta {
         revision: u64,
         history_from: usize,
         wake_now: bool,
+        steering: Boundary,
     ) -> Result<Self> {
         Ok(Self {
             id: state.id.to_string(),
@@ -139,6 +149,7 @@ impl Delta {
                 .iter()
                 .map(|op| Ok((op.call.id.clone(), encode(op)?)))
                 .collect::<Result<_>>()?,
+            steering,
         })
     }
 }
@@ -153,9 +164,14 @@ enum Fence {
 enum Written {
     Done {
         writes: u64,
+        /// Queued steering this write appended to the run's history, for the caller's state.
+        applied: Vec<HistoryEntry>,
     },
     /// The stored history is shorter than the delta's first encoded entry.
     NeedHistoryFrom(usize),
+    /// A completed settlement found steering queued: nothing was written, and the caller
+    /// commits `Ready` instead.
+    Reopen,
 }
 
 fn encode(value: &impl Serialize) -> Result<String> {
@@ -260,6 +276,7 @@ impl Database {
             PRAGMA user_version=2; COMMIT;",
             )
             .map_err(Error::storage)?;
+        steering_queue::create(&connection)?;
         Ok(Self {
             connection,
             _lock: lock,
@@ -402,10 +419,18 @@ fn write_delta(
     fence: Fence,
     clear_error: bool,
 ) -> Result<Written> {
-    let stored: i64 = tx
-        .prepare_cached("SELECT history_len FROM checkpoints WHERE run_id=?1")
+    // The one read main makes here. Only a dispatch or completion commit also asks, in the same
+    // statement, whether steering is queued; `CASE` leaves every other commit's work unchanged.
+    let (stored, steered): (i64, bool) = tx
+        .prepare_cached(
+            "SELECT history_len, CASE WHEN ?2 THEN EXISTS(SELECT 1 FROM steering
+                WHERE run_id=?1 AND applied_revision IS NULL) ELSE 0 END
+            FROM checkpoints WHERE run_id=?1",
+        )
         .map_err(Error::storage)?
-        .query_row([&delta.id], |r| r.get(0))
+        .query_row(params![delta.id, delta.steering != Boundary::None], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
         .optional()
         .map_err(Error::storage)?
         .ok_or(Error::NotFound)?;
@@ -413,6 +438,15 @@ fn write_delta(
     let (expected, allow_settled) = match fence {
         Fence::Commit(position) => (position, false),
         Fence::Update(position) => (position, true),
+    };
+    let queued = match delta.steering {
+        Boundary::Apply if steered => steering_queue::queued(tx, &delta.id)?,
+        Boundary::Apply | Boundary::Reopen | Boundary::None => Vec::new(),
+    };
+    // Applied steering takes the run's next ordinals, after the delta's own entries.
+    let history_len = match delta.steering {
+        Boundary::Apply => delta.history_len + queued.len(),
+        Boundary::None | Boundary::Reopen => delta.history_len,
     };
     let changed = tx
         .prepare_cached(
@@ -426,7 +460,7 @@ fn write_delta(
             expected.generation,
             expected.revision,
             delta.revision,
-            delta.history_len as i64,
+            history_len as i64,
             delta.progress,
             delta.settled,
             delta.wake_at,
@@ -438,6 +472,9 @@ fn write_delta(
     if changed == 0 {
         return Err(Error::Stale);
     }
+    if delta.steering == Boundary::Reopen && steered {
+        return Ok(Written::Reopen);
+    }
     if delta.history_len < stored {
         return Err(Error::input("history is append-only"));
     }
@@ -445,10 +482,12 @@ fn write_delta(
         return Ok(Written::NeedHistoryFrom(stored));
     }
     let new = &delta.history[stored - delta.history_from..];
-    let writes = 1
+    let mut writes = 1
         + insert_history(tx, &delta.id, &delta.conversation, stored, new)?
         + upsert_operations(tx, &delta.id, &delta.operations)?;
-    Ok(Written::Done { writes })
+    let (applied_writes, applied) = steering_queue::apply(tx, delta, queued)?;
+    writes += applied_writes;
+    Ok(Written::Done { writes, applied })
 }
 fn bounded_history(
     connection: &Connection,
@@ -534,7 +573,7 @@ fn accept_in(
         encode(&state.prior_context)?,
     ])
     .map_err(Error::storage)?;
-    let delta = Delta::encode(&state, state.revision, 0, false)?;
+    let delta = Delta::encode(&state, state.revision, 0, false, Boundary::None)?;
     tx.prepare_cached(
         "INSERT INTO checkpoints(run_id,conversation,generation,revision,history_len,progress,
             settled,wake_at,recover) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
@@ -771,14 +810,15 @@ impl DurableStore for SqliteStore {
                 return Ok(());
             }
             let revision = store::advance(state.revision, "revision")?;
-            let delta = Delta::encode(&state, revision, durable, effect.wake_now)?;
+            // Updates never apply steering: only an execution's commits may (see `Checkpoint`).
+            let delta = Delta::encode(&state, revision, durable, effect.wake_now, Boundary::None)?;
             match write_delta(&tx, &delta, fence, effect.clear_error)? {
-                Written::Done { writes } => {
+                Written::Done { writes, .. } => {
                     tx.commit().map_err(Error::storage)?;
                     db.count(writes);
                     Ok(())
                 }
-                Written::NeedHistoryFrom(_) => {
+                Written::NeedHistoryFrom(_) | Written::Reopen => {
                     Err(Error::storage("run history changed during update"))
                 }
             }
@@ -890,35 +930,54 @@ impl DurableStore for SqliteStore {
 impl Checkpoint for SqliteStore {
     /// Writes only the run's progress, new history and changed operations, encoded here from
     /// a borrow. The stored acceptance is never compared or rewritten.
+    ///
+    /// Whether steering is queued is asked inside the same transaction, by the write's existing
+    /// first statement and only for a dispatch or completion commit. A completion that finds
+    /// some is rolled back and resent as `Ready`; the queue cannot drain in between, because only
+    /// this run's dispatch commit applies it.
     async fn commit(&self, state: &mut RunState) -> Result<()> {
         let fence = Fence::Commit(CheckpointPosition::from(&*state));
         let revision = store::advance(state.revision, "revision")?;
         let mut from = self.hinted(state);
-        loop {
-            let delta = Delta::encode(state, revision, from, false)?;
+        let mut settled = None;
+        let result = loop {
+            let delta = Delta::encode(state, revision, from, false, Boundary::of(state))?;
             let written = self
                 .call(move |db| {
                     let tx = db.connection.transaction().map_err(Error::storage)?;
                     let written = write_delta(&tx, &delta, fence, false)?;
-                    if let Written::Done { writes } = written {
+                    if let Written::Done { writes, .. } = &written {
                         tx.commit().map_err(Error::storage)?;
-                        db.count(writes);
+                        db.count(*writes);
                     }
                     Ok(written)
                 })
                 .await;
             match written {
-                Ok(Written::Done { .. }) => break,
+                Ok(Written::Done { applied, .. }) => {
+                    state.history.extend(applied);
+                    break Ok(());
+                }
                 // The hint ran ahead of durable history; resend from the stored length.
                 Ok(Written::NeedHistoryFrom(stored)) if stored < from => from = stored,
                 Ok(Written::NeedHistoryFrom(_)) => {
-                    return Err(Error::storage("checkpoint history changed during commit"));
+                    break Err(Error::storage("checkpoint history changed during commit"));
+                }
+                Ok(Written::Reopen) => {
+                    settled = Some(std::mem::replace(&mut state.phase, Phase::Ready));
                 }
                 Err(error) => {
                     self.hint(state.id, None);
-                    return Err(error);
+                    break Err(error);
                 }
             }
+        };
+        if let Err(error) = result {
+            // A failed commit leaves the caller's state as it was.
+            if let Some(phase) = settled {
+                state.phase = phase;
+            }
+            return Err(error);
         }
         state.revision = revision;
         let settled = state.is_terminal();
