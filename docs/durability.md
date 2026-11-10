@@ -1,6 +1,6 @@
 # Execution and durability contract
 
-The engine owns a serializable `RunState`, with phases `Ready`, `ModelInFlight`, `Tools`, and `Settled`. The durable host drives that same engine over any `DurableStore` (`src/store.rs`), which extends the engine's atomic `Checkpoint` boundary with acceptance, claiming, application updates, and discovery. `MemoryStore` is the in-process reference implementation; SQLite is an optional file-backed adapter. `tests/storage_conformance.rs` runs the same contract against both. Futures are never serialized.
+The engine owns a serializable `RunState`, with phases `Ready`, `ModelInFlight`, `Tools`, and `Settled`. The durable host drives that same engine over any `DurableStore` (`src/store.rs`), which extends the engine's atomic `Checkpoint` boundary with acceptance, claiming, application updates, and discovery. `MemoryStore` is the in-process reference implementation; SQLite is an optional file-backed adapter and [PostgreSQL](postgres.md) an optional shared one. `tests/storage_conformance.rs` runs the same contract against each. Futures are never serialized.
 
 [Attached subagents](attached-subagents.md) commit inside their parent's checkpoint and fence. A child's admission commits with its input, identity, allocation and the parent's dependency on it; its settlement commits with the parent's result for the delegation and the reconciliation of its budget. Children are never discovered or claimed on their own.
 
@@ -25,6 +25,8 @@ Eligibility has one definition, `RunState::wake_at` (and `RunState::needs_recove
 
 The SQLite adapter uses WAL with full synchronization and a process lock beside the canonical database path. Symlink aliases share that lock. Hard-linked database files are rejected because their distinct WAL paths are unsafe after a crash. Keep the database and sidecars together on a local filesystem, and do not remove the lock file while an owner is running.
 
+The [PostgreSQL adapter](postgres.md) instead holds a session advisory lock for one schema on a dedicated session, and never reconnects after losing it. Its layout mirrors SQLite's, and each commit is one fenced statement. The [ownership protocol](deployment-targets.md#postgresql-ownership-protocol) defines failure detection, fencing and the limits of failover; it adds no distributed workers and does not change the external-effect rules below.
+
 Recorded tool outcomes are reused. Incomplete model attempts may repeat, with prior attempt charges retained. For an interrupted tool:
 
 | Original contract | Recovery |
@@ -41,7 +43,7 @@ Tool-call IDs must be unique throughout a run. This makes a delayed approval or 
 
 ## Waiting and time
 
-Approval is persisted before dispatch. Tool handlers may return `WaitRequest::Input` or `WaitRequest::Until`. The host releases the execution slot while the run waits. Replies target a specific operation; due deadlines are UTC Unix milliseconds stored in SQLite. Startup and periodic indexed discovery resume eligible work without relying on notifications.
+Approval is persisted before dispatch. Tool handlers may return `WaitRequest::Input` or `WaitRequest::Until`. The host releases the execution slot while the run waits. Replies target a specific operation; due deadlines are UTC Unix milliseconds stored by the store. Startup and periodic indexed discovery resume eligible work without relying on notifications.
 
 Each operation or parallel segment reserves its operation timeout plus cleanup allowance against the cumulative active budget **before external work**. On orderly completion it refunds unused time. An interrupted process keeps the entire reservation charged. This conservative policy prevents crashes from replenishing the budget. Awaiting approval, input, or a deadline consumes no active budget. Optional run expiry is a separate wall-clock deadline.
 
@@ -51,7 +53,7 @@ Model/tool attempts and token use accumulate across recovery. Attempts can be ch
 
 One host may serve several agents over one store (`Host::start_agents`, `Host::submit_to`). Runs record their agent ID at acceptance, and each claimed run executes with the registered agent of that ID; a run whose agent is not registered keeps a visible `Incompatible` error, like an incompatible binding, until a host with that agent retries it.
 
-Use `Host::shutdown().await` and then, for SQLite, `SqliteStore::close().await`. Shutdown stops admission, signals operations, and joins owned tasks; accepted work remains available to a later host. `Host::cancel` first persists explicit cancellation and then signals active work. Dropping the host signals shutdown but is not an asynchronous cleanup barrier.
+Use `Host::shutdown().await` and then the adapter's `close().await` (`SqliteStore::close`, `PostgresStore::close`). Shutdown stops admission, signals operations, and joins owned tasks; accepted work remains available to a later host. `Host::cancel` first persists explicit cancellation and then signals active work. Dropping the host signals shutdown but is not an asynchronous cleanup barrier.
 
 Model/tool implementations must not detach child tasks. If they own asynchronous resources, implement `cleanup`, which the engine invokes after each attempt, including interruptions. Cleanup has an explicit timeout; Rust cannot force an uncooperative external operation to undo itself. Handlers must yield to Tokio, honor cancellation, and bound CPU work; substantial blocking work belongs on an application-owned bounded blocking executor. SQLite uses its own bounded worker.
 
