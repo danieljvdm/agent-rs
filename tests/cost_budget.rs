@@ -378,10 +378,7 @@ async fn observed_stream_allocation_budget() {
             let drive = agent.drive(
                 &mut state,
                 &MemoryCheckpoint,
-                RunControl {
-                    events: Some(sender),
-                    ..RunControl::default()
-                },
+                RunControl::default().with_events(sender),
             );
             let drain = async {
                 let mut deltas = 0;

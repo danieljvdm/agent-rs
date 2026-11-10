@@ -509,10 +509,7 @@ async fn shutdown_drains_running_calls_and_leaves_unstarted_calls_pending() {
         .drive(
             &mut state,
             &journal,
-            RunControl {
-                shutdown,
-                ..RunControl::default()
-            },
+            RunControl::default().with_shutdown(shutdown),
         )
         .await;
     assert!(matches!(result, Err(Error::Interrupted)), "{result:?}");

@@ -159,10 +159,7 @@ async fn collect(samples: usize, filter: &str) -> Vec<Sample> {
                                 .drive(
                                     &mut state,
                                     &MemoryCheckpoint,
-                                    RunControl {
-                                        events: Some(sender),
-                                        ..RunControl::default()
-                                    },
+                                    RunControl::default().with_events(sender),
                                 )
                                 .await
                                 .unwrap();

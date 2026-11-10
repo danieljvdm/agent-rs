@@ -39,11 +39,8 @@ use std::{sync::Arc, time::Duration};
 use yielded_agent::{Host, HostOptions, sqlite::SqliteStore};
 use serde_json::json;
 let store = Arc::new(SqliteStore::open("agent.sqlite").await?);
-let mut host = Host::start(store.clone(), agent, HostOptions {
-    max_concurrent_runs: 16,
-    poll_interval: Duration::from_millis(50),
-    events: None,
-})?;
+let options = HostOptions::default().with_poll_interval(Duration::from_millis(50));
+let mut host = Host::start(store.clone(), agent, options)?;
 let run_id = host.submit("conversation-1", "client-request-1", json!("hello"), None).await?;
 // RunId is returned only after acceptance commits. Reuse the same key to retry admission.
 let state = host.status(run_id).await?;

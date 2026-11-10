@@ -71,11 +71,9 @@ fn spec(name: &str, retry: RetryPolicy) -> ToolSpec {
         .with_retry(retry)
 }
 fn options() -> HostOptions {
-    HostOptions {
-        max_concurrent_runs: 2,
-        poll_interval: Duration::from_millis(5),
-        events: None,
-    }
+    HostOptions::default()
+        .with_max_concurrent_runs(2)
+        .with_poll_interval(Duration::from_millis(5))
 }
 fn start(store: &Arc<dyn DurableStore>, agent: Agent) -> Host<dyn DurableStore> {
     Host::start(store.clone(), agent, options()).unwrap()

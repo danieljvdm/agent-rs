@@ -442,11 +442,10 @@ pub mod durable {
             let host = Host::start(
                 store.clone(),
                 fixture.agent.clone(),
-                HostOptions {
-                    max_concurrent_runs: active,
-                    poll_interval: Duration::from_millis(1),
-                    events: Some(sender),
-                },
+                HostOptions::default()
+                    .with_max_concurrent_runs(active)
+                    .with_poll_interval(Duration::from_millis(1))
+                    .with_events(sender),
             )
             .unwrap();
             let mut resident = Self {

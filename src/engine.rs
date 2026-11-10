@@ -522,13 +522,45 @@ impl Checkpoint for MemoryCheckpoint {
         Ok(())
     }
 }
+/// How the caller of [`Agent::drive`] can stop a run and observe it. The default never stops
+/// and sends no events:
+///
+/// ```
+/// # use tokio_util::sync::CancellationToken;
+/// # use yielded_agent::RunControl;
+/// let cancel = CancellationToken::new();
+/// let control = RunControl::default().with_cancel(cancel.clone());
+/// ```
 #[derive(Clone, Default)]
+#[non_exhaustive]
 pub struct RunControl {
+    /// Cancelling it settles the run as [`Settlement::Cancelled`], interrupting the work in
+    /// flight; an operation dispatched without a recorded outcome is left
+    /// [`Unknown`](OperationStatus::Unknown).
     pub cancel: CancellationToken,
+    /// Cancelling it stops driving the run without settling it: `drive` returns
+    /// [`Error::Interrupted`] and the run resumes from its last checkpoint.
     pub shutdown: CancellationToken,
     /// Best-effort transient events, each naming its run, so one channel may serve many runs.
     /// A full channel drops events and never blocks execution.
     pub events: Option<mpsc::Sender<ProgressEvent>>,
+}
+impl RunControl {
+    /// Sets [`cancel`](Self::cancel).
+    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
+        self.cancel = cancel;
+        self
+    }
+    /// Sets [`shutdown`](Self::shutdown).
+    pub fn with_shutdown(mut self, shutdown: CancellationToken) -> Self {
+        self.shutdown = shutdown;
+        self
+    }
+    /// Sends progress events to `events`; see [`events`](Self::events).
+    pub fn with_events(mut self, events: mpsc::Sender<ProgressEvent>) -> Self {
+        self.events = Some(events);
+        self
+    }
 }
 #[derive(Default, Debug)]
 pub struct Conversation {

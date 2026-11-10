@@ -297,10 +297,7 @@ async fn bounded_parallelism_sequential_barriers_history_order_and_cleanup() {
         .drive(
             &mut state,
             &MemoryCheckpoint,
-            RunControl {
-                events: Some(tx),
-                ..RunControl::default()
-            },
+            RunControl::default().with_events(tx),
         )
         .await
         .unwrap();
@@ -523,10 +520,7 @@ async fn empty_stream_events_have_a_hard_bound() {
         .drive(
             &mut state,
             &MemoryCheckpoint,
-            RunControl {
-                events: Some(tx),
-                ..RunControl::default()
-            },
+            RunControl::default().with_events(tx),
         )
         .await
         .unwrap();
@@ -632,10 +626,7 @@ async fn cancelled_idempotent_effect_is_unknown_even_when_cleanup_fails() {
         .drive(
             &mut state,
             &MemoryCheckpoint,
-            RunControl {
-                cancel: cancellation,
-                ..RunControl::default()
-            },
+            RunControl::default().with_cancel(cancellation),
         )
         .await
         .unwrap();
@@ -862,10 +853,7 @@ async fn settlement_event_is_emitted_only_after_a_successful_commit() {
             .drive(
                 &mut state,
                 &FailSettlement,
-                RunControl {
-                    events: Some(tx),
-                    ..RunControl::default()
-                }
+                RunControl::default().with_events(tx)
             )
             .await,
         Err(Error::Storage(_))
@@ -1188,10 +1176,7 @@ async fn progress_events_for_one_tool_round_are_exact() {
         .drive(
             &mut state,
             &MemoryCheckpoint,
-            RunControl {
-                events: Some(tx),
-                ..RunControl::default()
-            },
+            RunControl::default().with_events(tx),
         )
         .await
         .unwrap();
@@ -1258,10 +1243,7 @@ async fn concurrent_runs_sharing_a_channel_attribute_every_event() {
     let agent = agent(Arc::new(RunIdEcho), vec![], Limits::default());
     let (mut first, mut second) = (state(&agent), state(&agent));
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-    let control = || RunControl {
-        events: Some(tx.clone()),
-        ..RunControl::default()
-    };
+    let control = || RunControl::default().with_events(tx.clone());
     let (a, b) = tokio::join!(
         agent.drive(&mut first, &MemoryCheckpoint, control()),
         agent.drive(&mut second, &MemoryCheckpoint, control()),

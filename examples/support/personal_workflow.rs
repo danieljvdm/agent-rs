@@ -537,11 +537,9 @@ impl Session {
         match Host::start(
             store.clone(),
             agent,
-            HostOptions {
-                max_concurrent_runs: 1,
-                poll_interval: Duration::from_millis(5),
-                events: None,
-            },
+            HostOptions::default()
+                .with_max_concurrent_runs(1)
+                .with_poll_interval(Duration::from_millis(5)),
         ) {
             Ok(host) => Ok(Self { store, host }),
             Err(error) => {

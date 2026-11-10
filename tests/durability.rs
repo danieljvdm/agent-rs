@@ -51,11 +51,9 @@ async fn wait_for(
     .expect("state did not reach expected condition")
 }
 fn options() -> HostOptions {
-    HostOptions {
-        max_concurrent_runs: 4,
-        poll_interval: Duration::from_millis(2),
-        events: None,
-    }
+    HostOptions::default()
+        .with_max_concurrent_runs(4)
+        .with_poll_interval(Duration::from_millis(2))
 }
 
 #[tokio::test]

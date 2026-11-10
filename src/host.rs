@@ -17,11 +17,27 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+/// How a [`Host`] schedules runs. Start from [`HostOptions::default`] and change what differs:
+///
+/// ```
+/// # use std::time::Duration;
+/// # use yielded_agent::HostOptions;
+/// let options = HostOptions::default()
+///     .with_max_concurrent_runs(4)
+///     .with_poll_interval(Duration::from_millis(50));
+/// ```
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct HostOptions {
+    /// Runs driven at once, 1..=1024. A run waiting for approval, input or a timer holds no
+    /// slot. Default 16.
     pub max_concurrent_runs: usize,
+    /// How often the host asks its store for due runs. Submissions and updates made through the
+    /// host wake it at once; the interval bounds how late a timer wait, or a change made
+    /// directly in the store, is noticed. Nonzero. Default 100 ms.
     pub poll_interval: Duration,
-    /// Shared by every run this host drives; each event names its run.
+    /// Progress events of every run this host drives; each event names its run. Delivery is best
+    /// effort, as for [`RunControl::events`]. Default none.
     pub events: Option<mpsc::Sender<ProgressEvent>>,
 }
 impl Default for HostOptions {
@@ -31,6 +47,23 @@ impl Default for HostOptions {
             poll_interval: Duration::from_millis(100),
             events: None,
         }
+    }
+}
+impl HostOptions {
+    /// Sets [`max_concurrent_runs`](Self::max_concurrent_runs).
+    pub fn with_max_concurrent_runs(mut self, runs: usize) -> Self {
+        self.max_concurrent_runs = runs;
+        self
+    }
+    /// Sets [`poll_interval`](Self::poll_interval).
+    pub fn with_poll_interval(mut self, interval: Duration) -> Self {
+        self.poll_interval = interval;
+        self
+    }
+    /// Sends progress events to `events`; see [`events`](Self::events).
+    pub fn with_events(mut self, events: mpsc::Sender<ProgressEvent>) -> Self {
+        self.events = Some(events);
+        self
     }
 }
 /// Commits through the host's store. The wrapper lets an unsized store reach the engine's

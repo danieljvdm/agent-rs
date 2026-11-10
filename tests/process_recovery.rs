@@ -408,11 +408,9 @@ async fn child(config: Config) -> Result<()> {
     let host = Host::start(
         store.clone(),
         agent,
-        HostOptions {
-            max_concurrent_runs: 2,
-            poll_interval: Duration::from_millis(2),
-            events: None,
-        },
+        HostOptions::default()
+            .with_max_concurrent_runs(2)
+            .with_poll_interval(Duration::from_millis(2)),
     )?;
     tokio::time::timeout(READY_TIMEOUT, async {
         loop {
