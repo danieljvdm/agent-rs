@@ -18,7 +18,7 @@ pub struct Agent {
     // Shared with every `ModelRequest` instead of copied into each one.
     instructions: Arc<str>,
     model: Arc<dyn Model>,
-    config: ModelConfig,
+    config: Arc<ModelConfig>,
     tools: Vec<Arc<dyn Tool>>,
     tool_specs: Arc<[ToolSpec]>,
     limits: Limits,
@@ -79,7 +79,7 @@ impl Agent {
             id,
             instructions: instructions.into().into(),
             model,
-            config,
+            config: Arc::new(config),
             tool_specs: tools.iter().map(|tool| tool.spec().clone()).collect(),
             tools,
             limits,
@@ -127,7 +127,7 @@ impl Agent {
         &self.limits
     }
     pub fn binding(&self) -> Value {
-        let mut binding = json!({"id":self.id,"instructions":&*self.instructions,"model":self.config,"tools":&*self.tool_specs,
+        let mut binding = json!({"id":self.id,"instructions":&*self.instructions,"model":&*self.config,"tools":&*self.tool_specs,
             "input_schema":self.input_schema,"output_schema":&*self.output_schema,"limits":self.limits});
         if let Some((policy, max_bytes)) = &self.context_policy {
             binding["context_policy"] = json!({"binding":policy.binding(),"max_bytes":max_bytes});

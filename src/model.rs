@@ -25,13 +25,13 @@ impl Default for ModelConfig {
         }
     }
 }
+/// One model turn. Instructions, model configuration, tools and the output schema are the
+/// agent's own, shared rather than copied on every turn.
 #[derive(Clone, Debug)]
-/// One model turn. Instructions, tools and the output schema are the agent's own, shared rather
-/// than copied on every turn.
 pub struct ModelRequest {
     pub run_id: RunId,
     pub instructions: Arc<str>,
-    pub config: ModelConfig,
+    pub config: Arc<ModelConfig>,
     pub history: Vec<HistoryEntry>,
     /// Lower-trust reference data from the agent's `ContextPolicy`, kept separate from history
     /// and instructions. Providers must not present it as either.

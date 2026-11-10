@@ -675,7 +675,7 @@ mod tests {
         let request = ModelRequest {
             run_id: uuid::Uuid::nil(),
             instructions: "Instructions".into(),
-            config: crate::ModelConfig::default(),
+            config: Arc::default(),
             history: vec![
                 HistoryEntry::Input(json!("hello")),
                 HistoryEntry::Exchange {
