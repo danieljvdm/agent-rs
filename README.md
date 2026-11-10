@@ -66,7 +66,7 @@ The [personal-agent workflow eval](docs/personal-workflow-eval.md) exercises a m
 
 `Limits` bounds model attempts, tool attempts, tokens, output bytes, context bytes, parallelism, operation time, and cumulative active time. `RunState` carries the original limits and counters through recovery. Context selection keeps complete tool-call/result groups, the current input and the latest exchange. An optional `ContextPolicy`, set with `Agent::with_context_policy`, can pin further entries of the run's history and add bounded derived context prepared inside the model operation; its rustdoc states the contract. Retained history is separate from model context.
 
-Progress events are transient and best effort through a caller-supplied bounded Tokio channel; a full channel drops events. Reconnect using durable status/history, not token deltas. Standard `tracing` emits run spans without prompts or credentials.
+Progress events are transient and best effort through a caller-supplied bounded Tokio channel; a full channel drops events and never blocks a run. Each `ProgressEvent` carries its `run_id` and a `ProgressKind` (model started, text delta, tools started, committed, settled), so one channel, such as `HostOptions::events`, can serve many concurrent runs. Events are neither persisted nor counted in run state, and both types are `#[non_exhaustive]`: new kinds and fields may be added. Reconnect using durable status/history, not token deltas. Standard `tracing` emits run spans without prompts or credentials.
 
 ## Development
 
