@@ -11,7 +11,7 @@ The engine owns a serializable `RunState`, with phases `Ready`, `ModelInFlight`,
 
 A commit persists only progress: phase, usage, cancellation, the pending response, the current operations, and history appended since the last commit. Acceptance data in the caller's state is never compared or rewritten; it is fixed when the run is accepted. History is append-only, so a commit that drops entries is rejected. In SQLite, acceptance is one immutable `runs` row, each commit rewrites one small `checkpoints` row and inserts only new `history` rows, and loading reassembles the full `RunState` from the three. Bytes written per commit therefore do not depend on retained context (`tests/cost_budget.rs` pins this).
 
-A failed checkpoint stops that execution. Callers must reload authoritative state before resuming. A committed state can outlive loss of its acknowledgement; acceptance retries are safe through the caller's key.
+A failed checkpoint stops that execution. Callers must reload authoritative state before resuming. A failure while driving a run is classified once, by `Error::fails_run`: a failure of the run's own work (the model, its output, a tool contract, authorization, context) settles the run as `Failed` with the bounded error message, while `Storage`, `Stale`, `Incompatible` and `Interrupted` are returned with the run left at its last checkpoint. A checkpoint's error is always one of the latter: any other kind is reported as `Storage`, with the original as its cause. A committed state can outlive loss of its acknowledgement; acceptance retries are safe through the caller's key.
 
 ## Recovery and external effects
 
