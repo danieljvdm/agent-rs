@@ -10,21 +10,21 @@ use serde_json::json;
 use yielded_agent::*;
 
 # async fn example() -> Result<()> {
-let agent = Agent::new::<String, String>(
-    "assistant-v1", "Answer the request.",
-    Arc::new(ScriptedModel::new(vec![ModelResponse::final_output(json!("hello"))])),
-    ModelConfig::default(), vec![], Limits::default(),
-)?;
-let engine = Engine::new(agent);
+let model = ScriptedModel::new(vec![ModelResponse::final_output(json!("hello"))]);
+let agent = Agent::builder("assistant-v1", Arc::new(model))
+    .instructions("Answer the request.")
+    .input::<String>()
+    .output::<String>()
+    .build()?;
 let mut conversation = Conversation::default();
-let output: String = engine.run(&mut conversation, "hello").await?;
+let output: String = agent.run(&mut conversation, "hello").await?;
 assert_eq!(output, "hello");
 # Ok(()) }
 ```
 
-`Agent::new::<Input, Output>` derives schemas and validates deserialization. `typed_tool::<Arguments, Output, _, _>` registers typed handlers behind one dispatch boundary. Use `#[serde(deny_unknown_fields)]` on argument structs when unknown fields should be rejected, and implement semantic validation in custom `Tool::validate` where deserialization is insufficient.
+`Agent::builder(id, model)` takes the two required parts; instructions, model configuration, tools, limits, an authorizer and a context policy each have a default and their own method, and `build` checks the whole definition once. `input::<Input>()` and `output::<Output>()` derive schemas and validate deserialization, and make `Agent<Input, Output>::run` take an `Input` and return an `Output`, so a mismatch does not compile. The plain `Agent` (both types `serde_json::Value`) is the erased form that hosts and stores take; `Agent::erased` converts a typed agent. Cloning an agent shares its definition, and its durable binding is composed once at `build`. `typed_tool::<Arguments, Output, _, _>` registers typed handlers behind one dispatch boundary. Use `#[serde(deny_unknown_fields)]` on argument structs when unknown fields should be rejected, and implement semantic validation in custom `Tool::validate` where deserialization is insufficient.
 
-`Conversation::last_run` retains the run state, including waits and uncertain outcomes. Resolve its pending operation and call `Engine::resume` to continue; `run` refuses a new input while that conversation has unfinished work. Advanced callers can use `Agent::new_run` and `Engine::drive` directly.
+`Conversation::last_run` retains the run state, including waits and uncertain outcomes. Resolve its pending operation and call `Agent::resume` to continue; `run` refuses a new input while that conversation has unfinished work. Advanced callers can use `Agent::new_run` and `Agent::drive` directly.
 
 Default features enable `sqlite` and `openai`. `default-features = false` builds the engine and the durable host without either adapter; the host then runs over the in-process `MemoryStore` or any other `DurableStore`. Tokio runs asynchronous work; a dedicated bounded worker keeps SQLite operations off its worker threads.
 
@@ -64,7 +64,7 @@ The [personal-agent workflow eval](docs/personal-workflow-eval.md) exercises a m
 
 `ScriptedModel` is a deterministic in-process provider for tests and benchmarks. `openai::OpenAiModel` implements Chat Completions SSE, buffers and validates a complete response before tools start, and accepts explicit credentials. It does not load credentials from the environment or retry HTTP requests implicitly. Supply the model name through `ModelConfig`.
 
-`Limits` bounds model attempts, tool attempts, tokens, output bytes, context bytes, parallelism, operation time, and cumulative active time. `RunState` carries the original limits and counters through recovery. Context selection keeps complete tool-call/result groups, the current input and the latest exchange. An optional `ContextPolicy`, set with `Agent::with_context_policy`, can pin further entries of the run's history and add bounded derived context prepared inside the model operation; its rustdoc states the contract. Retained history is separate from model context.
+`Limits` bounds model attempts, tool attempts, tokens, output bytes, context bytes, parallelism, operation time, and cumulative active time. `RunState` carries the original limits and counters through recovery. Context selection keeps complete tool-call/result groups, the current input and the latest exchange. An optional `ContextPolicy`, set with `AgentBuilder::context_policy`, can pin further entries of the run's history and add bounded derived context prepared inside the model operation; its rustdoc states the contract. Retained history is separate from model context.
 
 Progress events are transient and best effort through a caller-supplied bounded Tokio channel; a full channel drops events and never blocks a run. Each `ProgressEvent` carries its `run_id` and a `ProgressKind` (model started, text delta, tools started, committed, settled), so one channel, such as `HostOptions::events`, can serve many concurrent runs. Events are neither persisted nor counted in run state, and both types are `#[non_exhaustive]`: new kinds and fields may be added. Reconnect using durable status/history, not token deltas. Standard `tracing` emits run spans without prompts or credentials.
 
