@@ -15,9 +15,9 @@ type Cause = Box<dyn StdError + Send + Sync>;
 /// - **A run's own work went wrong:** [`ModelOutput`](Self::ModelOutput),
 ///   [`Provider`](Self::Provider), [`Tool`](Self::Tool), [`Authorization`](Self::Authorization)
 ///   and [`Context`](Self::Context). Raised while driving a run, these settle it as
-///   [`Settlement::Failed`](crate::Settlement::Failed) with the error's message. They reach
-///   callers directly from implementations called outside a run, and from
-///   [`Model`](crate::Model) adapters or tools that compose others.
+///   [`Settlement::Failed`](crate::Settlement::Failed) with the error's message; see
+///   [`fails_run`](Self::fails_run). They reach callers directly from implementations called
+///   outside a run, and from [`Model`](crate::Model) adapters or tools that compose others.
 /// - **The run could not be advanced:** [`Storage`](Self::Storage), [`Stale`](Self::Stale),
 ///   [`Incompatible`](Self::Incompatible) and [`Interrupted`](Self::Interrupted).
 ///   [`Agent::drive`](crate::Agent::drive) returns these and the run stays resumable.
@@ -143,6 +143,46 @@ impl Error {
     }
     pub(crate) fn authorization(detail: ErrorDetail) -> Self {
         Self::Authorization(detail)
+    }
+
+    /// Whether this error, raised while [`Agent::drive`](crate::Agent::drive) advances a run,
+    /// ends the run.
+    ///
+    /// `true`: the run's own work went wrong, in the model, a tool contract, authorization, its
+    /// context or its input, and driving it again would fail the same way. The run settles as
+    /// [`Settlement::Failed`](crate::Settlement::Failed) with this error's message, bounded to
+    /// `Limits::max_tool_output_bytes`, and `drive` returns `Ok`.
+    ///
+    /// `false`: the run could not be advanced, but nothing is wrong with it. Storage failed
+    /// ([`Storage`](Self::Storage)), another execution owns it ([`Stale`](Self::Stale)), this
+    /// agent cannot drive it ([`Incompatible`](Self::Incompatible)), or shutdown interrupted it
+    /// ([`Interrupted`](Self::Interrupted); a cancelled run settles as cancelled instead).
+    /// `drive` returns the error and the run stays as of its last checkpoint, to be driven
+    /// again once the cause is fixed.
+    ///
+    /// Errors from a [`Checkpoint`](crate::Checkpoint) never end the run: the engine reports one
+    /// whose kind would as [`Storage`](Self::Storage), with the original as its cause.
+    pub fn fails_run(&self) -> bool {
+        // No wildcard: every new variant must decide.
+        match self {
+            Self::Storage(_) | Self::Stale | Self::Incompatible(_) | Self::Interrupted => false,
+            Self::Config(_)
+            | Self::Input(_)
+            | Self::ModelOutput(_)
+            | Self::Provider(_)
+            | Self::Tool(_)
+            | Self::Authorization(_)
+            | Self::Context(_)
+            | Self::IdempotencyConflict
+            | Self::ConversationBusy
+            | Self::StoreBusy
+            | Self::NotFound
+            | Self::NotWaiting
+            | Self::Waiting
+            | Self::Stopped(_)
+            | Self::Failed(_)
+            | Self::Cancelled => true,
+        }
     }
 }
 

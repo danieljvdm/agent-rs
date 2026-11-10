@@ -277,3 +277,33 @@ async fn drive_fails_the_run_or_returns_the_error_by_kind_of_failure() {
         }
     }
 }
+
+#[test]
+fn fails_run_separates_failed_runs_from_resumable_ones() {
+    for error in [
+        Error::storage("disk full"),
+        Error::Stale,
+        Error::incompatible("binding differs"),
+        Error::Interrupted,
+    ] {
+        assert!(!error.fails_run(), "{error:?}");
+    }
+    for error in [
+        Error::config("bad"),
+        Error::input("bad"),
+        Error::model_output("bad"),
+        Error::provider("bad"),
+        Error::tool("bad"),
+        Error::context("bad"),
+        Error::IdempotencyConflict,
+        Error::ConversationBusy,
+        Error::StoreBusy,
+        Error::NotFound,
+        Error::NotWaiting,
+        Error::Waiting,
+        Error::Stopped(StopReason::Tokens),
+        Error::Cancelled,
+    ] {
+        assert!(error.fails_run(), "{error:?}");
+    }
+}

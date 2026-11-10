@@ -204,6 +204,10 @@ impl<I, O> Agent<I, O> {
     /// Drives a run this agent accepted, or one stored with an equal binding, until it settles
     /// or waits. The same state machine serves memory and durable execution. No child work is
     /// detached.
+    ///
+    /// A failure of the run's own work settles it as [`Settlement::Failed`] and returns `Ok`;
+    /// only errors for which [`Error::fails_run`] is false are returned, leaving the run as of
+    /// its last checkpoint.
     pub async fn drive(
         &self,
         state: &mut RunState,
@@ -498,7 +502,7 @@ where
 /// A commit that is fenced fails with [`Error::Stale`], one whose stored state cannot hold this
 /// run with [`Error::Incompatible`], and any other failure with [`Error::Storage`]. The engine
 /// reports any other kind of error as `Storage`, with the original as its cause, so a failed
-/// commit never fails the run.
+/// commit never fails the run: see [`Error::fails_run`].
 #[async_trait]
 pub trait Checkpoint: Send + Sync {
     async fn commit(&self, state: &mut RunState) -> Result<()>;
@@ -587,70 +591,34 @@ impl Definition {
                 )
                 .await;
             }
-            match state.phase {
+            let batch = matches!(state.phase, Phase::Tools);
+            let step = match state.phase {
                 Phase::Ready => {
                     if let Some(reason) = exhausted(state, true, 0) {
                         return settle(checkpoint, state, &control, Settlement::Stopped(reason))
                             .await;
                     }
-                    match self.model_turn(state, checkpoint, &control).await {
-                        Ok(()) => {}
-                        Err(Error::Interrupted) => {
-                            if control.cancel.is_cancelled() {
-                                continue;
-                            }
-                            return Err(Error::Interrupted);
-                        }
-                        Err(
-                            error @ (Error::Storage(_) | Error::Stale | Error::Incompatible(_)),
-                        ) => return Err(error),
-                        Err(error) => {
-                            return settle(
-                                checkpoint,
-                                state,
-                                &control,
-                                Settlement::Failed(bounded_error(
-                                    &error,
-                                    state.limits.max_tool_output_bytes,
-                                )),
-                            )
-                            .await;
-                        }
-                    }
+                    self.model_turn(state, checkpoint, &control).await
                 }
-                Phase::Tools => {
-                    match self.tool_batch(state, checkpoint, &control).await {
-                        Ok(()) => {}
-                        Err(Error::Interrupted) => {
-                            if control.cancel.is_cancelled() {
-                                continue;
-                            }
-                            return Err(Error::Interrupted);
-                        }
-                        Err(
-                            error @ (Error::Storage(_) | Error::Stale | Error::Incompatible(_)),
-                        ) => return Err(error),
-                        Err(error) => {
-                            return settle(
-                                checkpoint,
-                                state,
-                                &control,
-                                Settlement::Failed(bounded_error(
-                                    &error,
-                                    state.limits.max_tool_output_bytes,
-                                )),
-                            )
-                            .await;
-                        }
-                    }
-                    if matches!(state.phase, Phase::Tools) {
-                        return Ok(());
-                    }
-                }
+                Phase::Tools => self.tool_batch(state, checkpoint, &control).await,
                 Phase::Settled(_) => return Ok(()),
                 Phase::ModelInFlight => {
                     return Err(Error::input("unexpected in-flight model state"));
                 }
+            };
+            match step {
+                Ok(()) => {}
+                // Cancellation interrupted the work; the next iteration settles the run.
+                Err(Error::Interrupted) if control.cancel.is_cancelled() => continue,
+                Err(error) if error.fails_run() => {
+                    let reason = bounded_error(&error, state.limits.max_tool_output_bytes);
+                    return settle(checkpoint, state, &control, Settlement::Failed(reason)).await;
+                }
+                Err(error) => return Err(error),
+            }
+            // A batch still in `Tools` waits on approval, input, reconciliation or a timer.
+            if batch && matches!(state.phase, Phase::Tools) {
+                return Ok(());
             }
         }
     }
