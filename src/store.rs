@@ -43,11 +43,11 @@ impl StoreLease {
 #[derive(Default)]
 pub struct HostSlot(Arc<AtomicBool>);
 impl HostSlot {
-    /// Fails with [`Error::DatabaseBusy`] while another lease from this slot is alive.
+    /// Fails with [`Error::StoreBusy`] while another lease from this slot is alive.
     pub fn lease(&self) -> Result<StoreLease> {
         self.0
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| Error::DatabaseBusy)?;
+            .map_err(|_| Error::StoreBusy)?;
         Ok(StoreLease::new(SlotGuard(self.0.clone())))
     }
 }
@@ -140,9 +140,13 @@ impl RunUpdate {
 /// - **Single resident host.** `lease` grants exclusive residency until the lease drops.
 ///   Applications driving `claim`/`commit` directly must join earlier execution of a run
 ///   before claiming it again. This is not a distributed lease protocol.
+/// - **Errors.** Failures to read or write are [`Error::Storage`], built with
+///   [`Error::storage`] to keep the underlying error as the cause; requests the store refuses
+///   use the variant named above or on the method, and out-of-bounds arguments are
+///   [`Error::Input`].
 #[async_trait]
 pub trait DurableStore: Checkpoint {
-    /// Take exclusive residency; fails with [`Error::DatabaseBusy`] while a lease is alive.
+    /// Take exclusive residency; fails with [`Error::StoreBusy`] while a lease is alive.
     fn lease(&self) -> Result<StoreLease>;
     /// Durably accept a run with bounded prior context from the conversation's history.
     async fn accept(
@@ -206,14 +210,12 @@ pub(crate) fn check_acceptance(
     expires_at_ms: Option<u64>,
 ) -> Result<()> {
     if conversation.is_empty() || conversation.len() > 1024 || key.is_empty() || key.len() > 1024 {
-        return Err(Error::Invalid(
-            "conversation and idempotency keys must contain 1..=1024 bytes".into(),
+        return Err(Error::input(
+            "conversation and idempotency keys must contain 1..=1024 bytes",
         ));
     }
     if expires_at_ms.is_some_and(|at| at > i64::MAX as u64) {
-        return Err(Error::Invalid(
-            "expiry must fit signed 64-bit milliseconds".into(),
-        ));
+        return Err(Error::input("expiry must fit signed 64-bit milliseconds"));
     }
     Ok(())
 }
@@ -222,5 +224,5 @@ pub(crate) fn advance(value: u64, name: &str) -> Result<u64> {
     value
         .checked_add(1)
         .filter(|value| *value <= i64::MAX as u64)
-        .ok_or_else(|| Error::Storage(format!("{name} exhausted")))
+        .ok_or_else(|| Error::storage(format!("{name} exhausted")))
 }

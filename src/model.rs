@@ -50,6 +50,10 @@ pub enum ModelEvent {
 }
 pub type ModelStream = Pin<Box<dyn Stream<Item = Result<ModelEvent>> + Send>>;
 /// Implementations must bound transport buffers and release run-owned work in cleanup.
+///
+/// Report failures with [`Error::provider`], which keeps the underlying error as its cause. The
+/// engine reports any other kind of error from `stream`, its events or `cleanup` as
+/// [`Error::Provider`] with the original as its cause, and it fails the run.
 #[async_trait]
 pub trait Model: Send + Sync {
     async fn stream(&self, request: ModelRequest, cancel: CancellationToken)
@@ -90,7 +94,7 @@ impl Model for ScriptedModel {
         let events = self
             .turns
             .get(request.turn.saturating_sub(1) as usize)
-            .ok_or_else(|| Error::Provider("script exhausted".into()))?
+            .ok_or_else(|| Error::provider("script exhausted"))?
             .clone();
         Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
     }

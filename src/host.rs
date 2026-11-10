@@ -48,8 +48,13 @@ pub struct Host<S: DurableStore + ?Sized> {
     shutdown: CancellationToken,
     notify: Arc<Notify>,
     running: Arc<Mutex<HashMap<RunId, CancellationToken>>>,
-    fatal_error: Arc<Mutex<Option<String>>>,
-    task: Option<JoinHandle<Result<()>>>,
+    /// Why the scheduler stopped, shared by `health` and `shutdown`.
+    fatal_error: Arc<Mutex<Option<Arc<Error>>>>,
+    task: Option<JoinHandle<std::result::Result<(), Arc<Error>>>>,
+}
+/// The scheduler stopped because of `cause`.
+fn host_stopped(cause: Arc<Error>) -> Error {
+    Error::Storage(ErrorDetail::caused_by("host stopped", cause))
 }
 impl<S: DurableStore + ?Sized + 'static> Host<S> {
     /// Host one agent, of any input and output types.
@@ -68,18 +73,18 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
             || options.max_concurrent_runs > 1024
             || options.poll_interval.is_zero()
         {
-            return Err(Error::Invalid(
-                "host requires 1..=1024 run workers and a nonzero discovery interval".into(),
+            return Err(Error::config(
+                "host requires 1..=1024 run workers and a nonzero discovery interval",
             ));
         }
         let mut registered = HashMap::new();
         for agent in agents {
             if registered.insert(agent.id().to_owned(), agent).is_some() {
-                return Err(Error::Invalid("host agent IDs must be unique".into()));
+                return Err(Error::config("host agent IDs must be unique"));
             }
         }
         if registered.is_empty() {
-            return Err(Error::Invalid("host requires at least one agent".into()));
+            return Err(Error::config("host requires at least one agent"));
         }
         let agents = Arc::new(registered);
         let lease = store.lease()?;
@@ -96,11 +101,13 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
             let fatal_error = fatal_error.clone();
             tokio::spawn(async move {
                 let _lease = lease;
-                let result = schedule(store, agents, options, shutdown, notify, running).await;
-                if let Err(error) = &result {
-                    *fatal_error.lock().expect("host status lock") = Some(error.to_string());
-                }
-                result
+                schedule(store, agents, options, shutdown, notify, running)
+                    .await
+                    .map_err(|error| {
+                        let error = Arc::new(error);
+                        *fatal_error.lock().expect("host status lock") = Some(error.clone());
+                        error
+                    })
             })
         };
         Ok(Self {
@@ -116,9 +123,11 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
     pub fn store(&self) -> &Arc<S> {
         &self.store
     }
+    /// Fails with [`Error::Storage`] "host stopped", caused by the error that stopped the
+    /// scheduler, or with [`Error::Interrupted`] once the host is shutting down.
     pub fn health(&self) -> Result<()> {
         if let Some(error) = self.fatal_error.lock().expect("host status lock").as_ref() {
-            return Err(Error::Storage(error.clone()));
+            return Err(host_stopped(error.clone()));
         }
         if self.shutdown.is_cancelled() {
             return Err(Error::Interrupted);
@@ -135,8 +144,8 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
     ) -> Result<RunId> {
         let mut agents = self.agents.values();
         let (Some(agent), None) = (agents.next(), agents.next()) else {
-            return Err(Error::Invalid(
-                "host has several agents; submit with submit_to".into(),
+            return Err(Error::input(
+                "host has several agents; submit with submit_to",
             ));
         };
         self.accept(agent, conversation, key, input, expires_at_ms)
@@ -154,7 +163,7 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
         let agent = self
             .agents
             .get(agent_id)
-            .ok_or_else(|| Error::Invalid(format!("agent {agent_id} is not registered")))?;
+            .ok_or_else(|| Error::input(format!("agent {agent_id} is not registered")))?;
         self.accept(agent, conversation, key, input, expires_at_ms)
             .await
     }
@@ -199,11 +208,13 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
     }
     /// Stop admission and ask active operations to clean up. Accepted work is retained,
     /// and all owned execution tasks are joined before returning. This is not cancellation.
+    /// Fails as [`health`](Self::health) does if an error had stopped the scheduler.
     pub async fn shutdown(&mut self) -> Result<()> {
         self.shutdown.cancel();
         if let Some(task) = self.task.take() {
             task.await
-                .map_err(|e| Error::Storage(format!("host task: {e}")))??;
+                .map_err(|error| Error::Storage(ErrorDetail::caused_by("host task failed", error)))?
+                .map_err(host_stopped)?;
         }
         Ok(())
     }
@@ -284,7 +295,7 @@ async fn schedule<S: DurableStore + ?Sized + 'static>(
                     let mut state = store.claim(id).await?;
                     position = Some(CheckpointPosition::from(&state));
                     let Some(agent) = agents.get(&state.agent_id) else {
-                        return Err(Error::Incompatible(format!(
+                        return Err(Error::incompatible(format!(
                             "agent {} is not registered with this host",
                             state.agent_id
                         )));
@@ -316,7 +327,7 @@ async fn schedule<S: DurableStore + ?Sized + 'static>(
                         }
                     },
                     Some(Err(error)) => {
-                        scheduler_error = Some(Error::Storage(format!("execution task panicked: {error}")));
+                        scheduler_error = Some(Error::Storage(ErrorDetail::caused_by("execution task panicked", error)));
                         shutdown.cancel(); break;
                     },
                     None => (),
@@ -339,7 +350,7 @@ async fn schedule<S: DurableStore + ?Sized + 'static>(
             }
             Err(error) => {
                 scheduler_error.get_or_insert_with(|| {
-                    Error::Storage(format!("execution task panicked: {error}"))
+                    Error::Storage(ErrorDetail::caused_by("execution task panicked", error))
                 });
             }
         }

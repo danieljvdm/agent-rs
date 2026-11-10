@@ -1,6 +1,7 @@
 //! A resumable agent engine. SQLite and HTTP dependencies are optional features.
 pub mod context;
 pub mod engine;
+pub mod error;
 pub mod host;
 pub mod model;
 #[cfg(feature = "openai")]
@@ -12,6 +13,7 @@ pub mod tool;
 pub mod types;
 pub use context::*;
 pub use engine::*;
+pub use error::*;
 pub use model::*;
 pub use store::*;
 pub use tool::*;

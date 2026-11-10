@@ -41,6 +41,12 @@ pub enum ToolOutput<T> {
 /// Return `Failed` rather than `Err` whenever the failure is known, for example a rejected
 /// request that changed nothing, so the run can continue without reconciliation.
 ///
+/// # Errors
+///
+/// Build an execution or cleanup error with [`Error::tool`], which keeps the underlying error
+/// as its cause: `client.send(request).await.map_err(Error::tool)?`. `validate` rejects the
+/// model's arguments with [`Error::model_output`], which fails the run.
+///
 /// # Concurrency
 ///
 /// All tool calls of one run execute concurrently on the task that drives the run, up to
@@ -77,16 +83,16 @@ where
         // `&Value` is a deserializer, so checking the arguments never copies them.
         A::deserialize(arguments)
             .map(|_| ())
-            .map_err(|e| Error::Invalid(e.to_string()))
+            .map_err(Error::model_output)
     }
     async fn execute(&self, arguments: Value, context: ToolContext) -> Result<ToolOutput<Value>> {
-        let input = serde_json::from_value(arguments).map_err(|e| Error::Invalid(e.to_string()))?;
+        let input = serde_json::from_value(arguments).map_err(Error::model_output)?;
         match (self.handler)(input, context).await? {
             ToolOutput::Complete(output) => Ok(ToolOutput::Complete(
-                serde_json::to_value(output).map_err(|e| Error::Tool(e.to_string()))?,
+                serde_json::to_value(output).map_err(Error::tool)?,
             )),
             ToolOutput::Failed(output) => Ok(ToolOutput::Failed(
-                serde_json::to_value(output).map_err(|e| Error::Tool(e.to_string()))?,
+                serde_json::to_value(output).map_err(Error::tool)?,
             )),
             ToolOutput::Wait(wait) => Ok(ToolOutput::Wait(wait)),
         }
@@ -107,6 +113,9 @@ where
         marker: PhantomData,
     })
 }
+/// Decides whether a tool call may run, before it is dispatched. Denial, an error and a timeout
+/// each fail the run with [`Error::Authorization`]; an error is kept as its cause, whatever its
+/// kind, so an authorizer's own storage failure is never taken for the run's.
 #[async_trait]
 pub trait Authorizer: Send + Sync {
     async fn authorize(&self, run: &RunState, call: &ToolCall) -> Result<bool>;

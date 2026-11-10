@@ -104,7 +104,7 @@ struct Observation {
 }
 
 fn storage(error: impl std::fmt::Display) -> Error {
-    Error::Storage(error.to_string())
+    Error::storage(error.to_string())
 }
 fn append_synced(path: &Path, value: &str) -> std::io::Result<()> {
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
@@ -425,7 +425,7 @@ async fn child(config: Config) -> Result<()> {
         loop {
             host.health()?;
             if let Some(error) = store.last_error(id).await? {
-                return Err(Error::Storage(format!("host error: {error}")));
+                return Err(Error::storage(format!("host error: {error}")));
             }
             let state = host.status(id).await?;
             if ready(&state, config.ready) {
@@ -559,7 +559,7 @@ fn durable_acceptance_and_reserved_model_budget_survive_process_death() {
         .unwrap();
     assert!(matches!(
         runtime.block_on(SqliteStore::open(dir.path().join("runtime.sqlite"))),
-        Err(Error::DatabaseBusy)
+        Err(Error::StoreBusy)
     ));
     drop(runtime);
     child.kill_at_ready();

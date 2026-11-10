@@ -65,7 +65,7 @@ const ALLOC_TYPED_TOOL_CALL: Budget = Budget::new(5, 382);
 // Type sizes (exact bytes). `Result<T, Error>` is returned on every hot path, so the error must
 // stay small: large payloads belong behind a box.
 /// `size_of::<Error>()`.
-const ERROR_SIZE_BYTES: usize = 32;
+const ERROR_SIZE_BYTES: usize = 16;
 
 /// Allowance above a measured allocation or record-byte budget.
 const HEADROOM_PERCENT: u64 = 2;

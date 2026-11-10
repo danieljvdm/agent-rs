@@ -49,7 +49,7 @@ struct FailingModel;
 #[async_trait]
 impl Model for FailingModel {
     async fn stream(&self, _: ModelRequest, _: CancellationToken) -> Result<ModelStream> {
-        Err(Error::Provider("connection reset".into()))
+        Err(Error::provider("connection reset"))
     }
 }
 struct DenyAll;
@@ -65,7 +65,7 @@ struct BrokenAuthorizer;
 #[async_trait]
 impl Authorizer for BrokenAuthorizer {
     async fn authorize(&self, _: &RunState, _: &ToolCall) -> Result<bool> {
-        Err(Error::Storage("policy store down".into()))
+        Err(Error::storage("policy store down"))
     }
 }
 /// Every commit fails with the error `fail` makes.
@@ -173,7 +173,7 @@ fn cases() -> Vec<Case> {
             Expect::Fails(&["current input and pinned history exceed context limit"]),
         ),
         Case {
-            checkpoint: Box::new(FailingCheckpoint(|| Error::Storage("disk full".into()))),
+            checkpoint: Box::new(FailingCheckpoint(|| Error::storage("disk full"))),
             ..case(
                 "checkpoint storage failure",
                 builder(done()),
@@ -182,9 +182,7 @@ fn cases() -> Vec<Case> {
         },
         Case {
             // A checkpoint's error never fails the run, whatever its kind: it is storage.
-            checkpoint: Box::new(FailingCheckpoint(|| {
-                Error::Invalid("history is append-only".into())
-            })),
+            checkpoint: Box::new(FailingCheckpoint(|| Error::input("history is append-only"))),
             ..case(
                 "checkpoint error of another kind",
                 builder(done()),

@@ -16,24 +16,22 @@ use std::{
 use tokio::{sync::mpsc, time::Instant};
 use tokio_util::sync::CancellationToken;
 
-type Validator = fn(&Value) -> Result<()>;
+type Validator = fn(&Value) -> serde_json::Result<()>;
 /// Encodes a run's input. Input that already is a `Value` is moved, not copied.
 fn into_json<T: Serialize + 'static>(input: T) -> Result<Value> {
     let mut input = Some(input);
     if let Some(value) = (&mut input as &mut dyn Any).downcast_mut::<Option<Value>>() {
         return Ok(value.take().unwrap_or_default());
     }
-    serde_json::to_value(input).map_err(|e| Error::Invalid(e.to_string()))
+    serde_json::to_value(input).map_err(Error::input)
 }
 /// Checks that `value` deserializes as `T`. `&Value` is a deserializer, so this never copies it,
 /// and any JSON is a `Value`, so an untyped agent checks nothing.
-fn validate<T: DeserializeOwned + 'static>(value: &Value) -> Result<()> {
+fn validate<T: DeserializeOwned + 'static>(value: &Value) -> serde_json::Result<()> {
     if TypeId::of::<T>() == TypeId::of::<Value>() {
         return Ok(());
     }
-    T::deserialize(value)
-        .map(|_| ())
-        .map_err(|e| Error::Invalid(e.to_string()))
+    T::deserialize(value).map(|_| ())
 }
 
 /// An immutable agent definition, built with [`Agent::builder`]. Product policy and clients are
@@ -164,17 +162,15 @@ impl<I, O> Agent<I, O> {
         expires_at_ms: Option<u64>,
     ) -> Result<RunState> {
         let definition = &*self.definition;
-        (definition.validate_input)(&input)?;
+        (definition.validate_input)(&input).map_err(Error::input)?;
         let conversation_id = conversation_id.into();
         if conversation_id.is_empty() || conversation_id.len() > 1024 {
-            return Err(Error::Invalid(
-                "conversation ID must be 1..1024 bytes".into(),
-            ));
+            return Err(Error::input("conversation ID must be 1..1024 bytes"));
         }
         let max_context_bytes = definition.limits.max_context_bytes;
         let input_entry = HistoryEntry::Input(input.clone());
-        if encoded_len(&input_entry)? + 2 > max_context_bytes {
-            return Err(Error::Invalid("input exceeds context limit".into()));
+        if encoded_len(&input_entry) + 2 > max_context_bytes {
+            return Err(Error::input("input exceeds context limit"));
         }
         let prior_context = conversation[suffix_start(conversation, max_context_bytes)?..].to_vec();
         Ok(RunState {
@@ -220,6 +216,37 @@ impl<I, O> Agent<I, O> {
 impl<I: Serialize + 'static, O: DeserializeOwned> Agent<I, O> {
     /// Convenience API for runs that finish without application input. Use `drive` for
     /// resumable waits.
+    ///
+    /// Returns the run's output once it completes. A run that ends any other way is an error
+    /// naming how, and stays in `conversation.last_run`:
+    /// - [`Error::Waiting`]: a tool waits for approval, input, reconciliation or a timer.
+    ///   Resolve it through `last_run` and call [`resume`](Self::resume).
+    /// - [`Error::Stopped`]: a limit stopped the run, with its [`StopReason`].
+    /// - [`Error::Failed`]: the run failed, with its [`Settlement::Failed`] message.
+    /// - [`Error::Cancelled`]: the run was cancelled.
+    ///
+    /// Other errors are the request's or the engine's own, as for [`drive`](Self::drive).
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use serde_json::json;
+    /// # use yielded_agent::*;
+    /// # async fn example(agent: Agent<String, String>) -> Result<()> {
+    /// let mut conversation = Conversation::default();
+    /// match agent.run(&mut conversation, "hello").await {
+    ///     Ok(reply) => println!("{reply}"),
+    ///     Err(Error::Stopped(StopReason::Tokens)) => println!("out of tokens"),
+    ///     Err(Error::Waiting) => {
+    ///         let run = conversation.last_run.as_mut().expect("retained");
+    ///         let call_id = run.operations[0].call.id.clone();
+    ///         resolve(run, &call_id, Resolution::Approve(true))?;
+    ///         let reply = agent.resume(&mut conversation, RunControl::default()).await?;
+    ///         println!("{reply}");
+    ///     }
+    ///     Err(error) => return Err(error),
+    /// }
+    /// # Ok(()) }
+    /// ```
     pub async fn run(&self, conversation: &mut Conversation, input: impl Into<I>) -> Result<O> {
         if conversation.last_run.as_ref().is_some_and(|run| {
             !run.is_terminal()
@@ -238,7 +265,8 @@ impl<I: Serialize + 'static, O: DeserializeOwned> Agent<I, O> {
         self.resume_from(conversation, RunControl::default(), 0)
             .await
     }
-    /// Resume a retained in-memory run after resolving its wait through `last_run`.
+    /// Resume a retained in-memory run after resolving its wait through `last_run`. Ends as
+    /// [`run`](Self::run) does.
     pub async fn resume(&self, conversation: &mut Conversation, control: RunControl) -> Result<O> {
         let old_len = conversation
             .last_run
@@ -262,12 +290,14 @@ impl<I: Serialize + 'static, O: DeserializeOwned> Agent<I, O> {
         result?;
         match &state.phase {
             Phase::Settled(Settlement::Completed(value)) => {
-                O::deserialize(value).map_err(|e| Error::Invalid(e.to_string()))
+                O::deserialize(value).map_err(Error::model_output)
             }
-            Phase::Settled(other) => Err(Error::Invalid(format!("run settled: {other:?}"))),
-            _ => Err(Error::Invalid(
-                "run is waiting; resolve Conversation::last_run and call Agent::resume".into(),
-            )),
+            Phase::Settled(Settlement::Stopped(reason)) => Err(Error::Stopped(reason.clone())),
+            Phase::Settled(Settlement::Failed(reason)) => {
+                Err(Error::Failed(ErrorDetail::message(reason.clone())))
+            }
+            Phase::Settled(Settlement::Cancelled) => Err(Error::Cancelled),
+            Phase::Ready | Phase::ModelInFlight | Phase::Tools => Err(Error::Waiting),
         }
     }
 }
@@ -285,10 +315,12 @@ impl Definition {
         }
         binding
     }
-    fn tool(&self, name: &str) -> Result<&Arc<dyn Tool>> {
+    /// The tool an operation recorded, provided this definition has it under the same contract.
+    fn recorded_tool(&self, op: &Operation) -> Result<&Arc<dyn Tool>> {
         self.tools
-            .get(name)
-            .ok_or_else(|| Error::Invalid(format!("unknown tool {name}")))
+            .get(&op.call.name)
+            .filter(|tool| tool.spec() == &op.spec)
+            .ok_or_else(|| Error::incompatible(format!("tool contract differs: {}", op.call.name)))
     }
 }
 
@@ -380,7 +412,7 @@ where
     I: DeserializeOwned + JsonSchema + 'static,
     O: DeserializeOwned + JsonSchema + 'static,
 {
-    /// Checks the definition and composes its binding. Fails with [`Error::Invalid`] for an ID
+    /// Checks the definition and composes its binding. Fails with [`Error::Config`] for an ID
     /// outside 1..=256 bytes, a zero parallelism, byte limit or timeout, a duplicate, unbounded
     /// or unversioned tool name, an idempotent tool without a retry contract, or a derived
     /// context cap above `max_context_bytes`.
@@ -397,7 +429,7 @@ where
             types: _,
         } = self;
         if id.is_empty() || id.len() > 256 {
-            return Err(Error::Invalid("agent ID must be 1..256 bytes".into()));
+            return Err(Error::config("agent ID must be 1..256 bytes"));
         }
         if limits.max_parallel_tools == 0
             || limits.max_response_bytes == 0
@@ -406,8 +438,8 @@ where
             || limits.operation_timeout_ms == 0
             || limits.cleanup_timeout_ms == 0
         {
-            return Err(Error::Invalid(
-                "parallelism, byte limits, and timeouts must be positive".into(),
+            return Err(Error::config(
+                "parallelism, byte limits, and timeouts must be positive",
             ));
         }
         let mut by_name = HashMap::with_capacity(tools.len());
@@ -418,22 +450,20 @@ where
                 || by_name.insert(spec.name.clone(), tool.clone()).is_some()
                 || spec.version.is_empty()
             {
-                return Err(Error::Invalid(
-                    "tool names must be unique, bounded, and versioned".into(),
+                return Err(Error::config(
+                    "tool names must be unique, bounded, and versioned",
                 ));
             }
             if matches!(&spec.retry, RetryPolicy::Idempotent { contract } if contract.is_empty()) {
-                return Err(Error::Invalid(
-                    "idempotent tools require a retry contract".into(),
-                ));
+                return Err(Error::config("idempotent tools require a retry contract"));
             }
         }
         if context_policy
             .as_ref()
             .is_some_and(|(_, max_derived_bytes)| *max_derived_bytes > limits.max_context_bytes)
         {
-            return Err(Error::Invalid(
-                "derived context cap must fit the context limit".into(),
+            return Err(Error::config(
+                "derived context cap must fit the context limit",
             ));
         }
         let mut definition = Definition {
@@ -464,6 +494,11 @@ where
 
 /// A commit must atomically retain evidence, operations, and the new checkpoint.
 /// On success it advances `revision`; on failure callers must reload authoritative state.
+///
+/// A commit that is fenced fails with [`Error::Stale`], one whose stored state cannot hold this
+/// run with [`Error::Incompatible`], and any other failure with [`Error::Storage`]. The engine
+/// reports any other kind of error as `Storage`, with the original as its cause, so a failed
+/// commit never fails the run.
 #[async_trait]
 pub trait Checkpoint: Send + Sync {
     async fn commit(&self, state: &mut RunState) -> Result<()>;
@@ -506,8 +541,8 @@ impl Definition {
             || !(Arc::ptr_eq(&state.binding, &self.binding) || state.binding == self.binding)
             || state.limits != self.limits
         {
-            return Err(Error::Incompatible(
-                "persisted state or immutable agent definition differs".into(),
+            return Err(Error::incompatible(
+                "persisted state or immutable agent definition differs",
             ));
         }
         if state.is_terminal() {
@@ -520,13 +555,7 @@ impl Definition {
         }
         for op in &mut state.operations {
             if matches!(op.status, OperationStatus::Dispatched) {
-                let tool = self.tool(&op.call.name)?;
-                if tool.spec() != &op.spec {
-                    return Err(Error::Incompatible(format!(
-                        "tool contract differs: {}",
-                        op.call.name
-                    )));
-                }
+                self.recorded_tool(op)?;
                 if op.spec.retry == RetryPolicy::Never {
                     op.status = OperationStatus::Unknown {
                         reason: "execution ended after dispatch without a recorded outcome".into(),
@@ -620,7 +649,7 @@ impl Definition {
                 }
                 Phase::Settled(_) => return Ok(()),
                 Phase::ModelInFlight => {
-                    return Err(Error::Invalid("unexpected in-flight model state".into()));
+                    return Err(Error::input("unexpected in-flight model state"));
                 }
             }
         }
@@ -631,7 +660,7 @@ impl Definition {
         checkpoint: &dyn Checkpoint,
         control: &RunControl,
     ) -> Result<()> {
-        let (reservation, work_ms) = reserve(state)?;
+        let (reservation, work_ms) = reserve(state);
         state.usage.model_calls += 1;
         state.phase = Phase::ModelInFlight;
         emit(state, control, ProgressKind::ModelStarted);
@@ -665,41 +694,37 @@ impl Definition {
                     .model
                     .stream(request, operation_cancel.clone())
                     .await
-                    .map_err(|error| Error::Provider(error.to_string()))?;
+                    .map_err(provider_error)?;
                 let mut response = None;
                 let mut bytes = 0_usize;
                 let mut events = 0_usize;
                 while let Some(event) = stream.next().await {
                     events += 1;
                     if events > state.limits.max_response_bytes.clamp(1, 65_536) {
-                        return Err(Error::Provider("model event count exceeds limit".into()));
+                        return Err(Error::provider("model event count exceeds limit"));
                     }
                     if response.is_some() {
-                        return Err(Error::Provider(
-                            "model emitted data after its complete response".into(),
+                        return Err(Error::provider(
+                            "model emitted data after its complete response",
                         ));
                     }
-                    match event.map_err(|error| Error::Provider(error.to_string()))? {
+                    match event.map_err(provider_error)? {
                         ModelEvent::TextDelta(text) => {
                             bytes = bytes.saturating_add(text.len());
                             if bytes > state.limits.max_response_bytes {
-                                return Err(Error::Provider(
-                                    "stream exceeds response byte limit".into(),
-                                ));
+                                return Err(Error::provider("stream exceeds response byte limit"));
                             }
                             emit(state, control, ProgressKind::TextDelta(text));
                         }
                         ModelEvent::Response(value) => {
-                            if encoded_len(&value)? > state.limits.max_response_bytes {
-                                return Err(Error::Provider("response exceeds byte limit".into()));
+                            if encoded_len(&value) > state.limits.max_response_bytes {
+                                return Err(Error::provider("response exceeds byte limit"));
                             }
                             response = Some(value);
                         }
                     }
                 }
-                response.ok_or_else(|| {
-                    Error::Provider("stream ended without a complete response".into())
-                })
+                response.ok_or_else(|| Error::provider("stream ended without a complete response"))
             };
             run_work(future, work_deadline(state, started, work_ms), control).await
         };
@@ -726,7 +751,7 @@ impl Definition {
                 commit(checkpoint, state, control).await?;
                 return Err(Error::Interrupted);
             }
-            WorkOutcome::TimedOut => Err(Error::Provider("model operation timed out".into())),
+            WorkOutcome::TimedOut => Err(Error::provider("model operation timed out")),
         };
         if let Ok(response) = &response_result {
             state.usage.input_tokens = state
@@ -751,8 +776,8 @@ impl Definition {
         }
         let response = response_result?;
         cleanup
-            .map_err(|_| Error::Provider("model cleanup timed out".into()))?
-            .map_err(|error| Error::Provider(error.to_string()))?;
+            .map_err(|_| Error::provider("model cleanup timed out"))?
+            .map_err(provider_error)?;
         self.validate_response(&response, state)?;
         if state
             .usage
@@ -769,7 +794,7 @@ impl Definition {
             .await;
         }
         if let Some(output) = &response.output {
-            (self.validate_output)(output)?;
+            (self.validate_output)(output).map_err(Error::model_output)?;
             state.history.push(HistoryEntry::Exchange {
                 response: response.clone(),
                 results: vec![],
@@ -787,11 +812,7 @@ impl Definition {
             .tools
             .iter()
             .map(|call| {
-                let spec = self
-                    .tool(&call.name)
-                    .expect("validated tool")
-                    .spec()
-                    .clone();
+                let spec = self.tools[&call.name].spec().clone();
                 let status = if spec.requires_approval {
                     OperationStatus::Approval
                 } else {
@@ -814,12 +835,12 @@ impl Definition {
     }
     fn validate_response(&self, response: &ModelResponse, state: &RunState) -> Result<()> {
         if response.output.is_some() == !response.tools.is_empty() {
-            return Err(Error::Invalid(
-                "model response must contain either final output or at least one tool call".into(),
+            return Err(Error::model_output(
+                "model response must contain either final output or at least one tool call",
             ));
         }
         if response.tools.len() > state.limits.max_tool_calls as usize {
-            return Err(Error::Invalid("tool batch exceeds call limit".into()));
+            return Err(Error::model_output("tool batch exceeds call limit"));
         }
         let mut ids: HashSet<&str> = state
             .history
@@ -834,11 +855,14 @@ impl Definition {
             .collect();
         for call in &response.tools {
             if call.id.is_empty() || call.id.len() > 256 || !ids.insert(call.id.as_str()) {
-                return Err(Error::Invalid(
-                    "tool call IDs must be unique and 1..256 bytes".into(),
+                return Err(Error::model_output(
+                    "tool call IDs must be unique and 1..256 bytes",
                 ));
             }
-            self.tool(&call.name)?.validate(&call.arguments)?;
+            let Some(tool) = self.tools.get(&call.name) else {
+                return Err(Error::model_output(format!("unknown tool {}", call.name)));
+            };
+            tool.validate(&call.arguments)?;
         }
         Ok(())
     }
@@ -908,7 +932,7 @@ impl Definition {
         checkpoint: &dyn Checkpoint,
         control: &RunControl,
     ) -> Result<()> {
-        let (reservation, _) = reserve(state)?;
+        let (reservation, _) = reserve(state);
         // Reserve before authorization too, so retries cannot replenish its active-work budget.
         commit(checkpoint, state, control).await?;
         let mut window = Window::new(reservation);
@@ -1030,14 +1054,8 @@ impl Definition {
         if is_expired(state) {
             return Admission::Stop;
         }
-        let op = &state.operations[index];
-        let tool = match self.tool(&op.call.name) {
-            Ok(tool) if tool.spec() == &op.spec => tool.clone(),
-            Ok(_) => {
-                let error = Error::Incompatible(format!("tool contract differs: {}", op.call.name));
-                window.failure = Some(error);
-                return Admission::Stop;
-            }
+        let tool = match self.recorded_tool(&state.operations[index]) {
+            Ok(tool) => tool.clone(),
             Err(error) => {
                 window.failure = Some(error);
                 return Admission::Stop;
@@ -1064,17 +1082,22 @@ impl Definition {
         match authorization {
             WorkOutcome::Done(Ok(true)) => {}
             WorkOutcome::Done(Ok(false)) => {
-                window.failure = Some(Error::Invalid(format!("authorization denied for {name}")));
+                let denied = ErrorDetail::message(format!("authorization denied for {name}"));
+                window.failure = Some(Error::authorization(denied));
                 return Admission::Stop;
             }
+            // Whatever the authorizer's error, it fails the run rather than its storage.
             WorkOutcome::Done(Err(error)) => {
-                window.failure = Some(Error::Invalid(format!("authorization failed: {error}")));
+                let failed = ErrorDetail::caused_by("authorization failed", error);
+                window.failure = Some(Error::authorization(failed));
                 return Admission::Stop;
             }
             // Expiry settles the run once the window drains.
             WorkOutcome::TimedOut if is_expired(state) => return Admission::Stop,
             WorkOutcome::TimedOut => {
-                window.failure = Some(Error::Invalid("authorization timed out".into()));
+                window.failure = Some(Error::authorization(ErrorDetail::message(
+                    "authorization timed out",
+                )));
                 return Admission::Stop;
             }
             WorkOutcome::Interrupted => {
@@ -1150,7 +1173,7 @@ async fn finish_tool_batch(
     let response = state
         .pending_response
         .take()
-        .ok_or_else(|| Error::Invalid("tool batch has no model response".into()))?;
+        .ok_or_else(|| Error::input("tool batch has no model response"))?;
     state
         .history
         .push(HistoryEntry::Exchange { response, results });
@@ -1194,7 +1217,8 @@ struct Window {
     /// Outcomes have been recorded since the last commit.
     unsaved: bool,
     interrupted: bool,
-    /// An authorization or contract failure that fails the run once the window drains.
+    /// An authorization failure that fails the run, or a contract difference that `drive`
+    /// returns, once the window drains.
     failure: Option<Error>,
     storage: Option<Error>,
 }
@@ -1358,11 +1382,11 @@ fn outcome_status(
     let interrupted = matches!(outcome, WorkOutcome::Interrupted);
     let mut value = match outcome {
         WorkOutcome::Done(result) => result,
-        WorkOutcome::TimedOut => Err(Error::Tool("tool operation timed out".into())),
+        WorkOutcome::TimedOut => Err(Error::tool("tool operation timed out")),
         WorkOutcome::Interrupted => Err(Error::Interrupted),
     };
     if let Err(error) = cleanup
-        .map_err(|_| Error::Tool("tool cleanup timed out".into()))
+        .map_err(|_| Error::tool("tool cleanup timed out"))
         .and_then(|v| v)
     {
         value = Err(error);
@@ -1386,10 +1410,12 @@ fn output_status(
     output: ToolOutput<Value>,
     max_bytes: usize,
 ) -> std::result::Result<OperationStatus, String> {
-    let fits = |len: Result<usize>| match len {
-        Ok(len) if len <= max_bytes => Ok(()),
-        Ok(_) => Err("tool output exceeds byte limit".to_owned()),
-        Err(error) => Err(format!("tool output cannot be encoded: {error}")),
+    let fits = |len: usize| {
+        if len <= max_bytes {
+            Ok(())
+        } else {
+            Err("tool output exceeds byte limit".to_owned())
+        }
     };
     let result = |value, is_error| {
         OperationStatus::Complete(ToolResult {
@@ -1449,6 +1475,14 @@ fn truncate(value: &str, max: usize) -> String {
     }
     value[..end].to_owned()
 }
+/// A model's error, as the provider failure it is to the run, keeping it as the cause. One that
+/// already is a provider failure is kept as it is.
+fn provider_error(error: Error) -> Error {
+    match error {
+        Error::Provider(_) => error,
+        error => Error::provider(error),
+    }
+}
 fn bounded_error(error: &Error, max: usize) -> String {
     truncate(&error.to_string(), max)
 }
@@ -1489,7 +1523,10 @@ fn work_deadline(state: &RunState, started: Instant, work_ms: u64) -> Instant {
         .unwrap_or(u64::MAX);
     started + Duration::from_millis(work_ms.min(remaining_ms))
 }
-fn reserve(state: &mut RunState) -> Result<(u64, u64)> {
+/// Reserves active time for one operation and its cleanup: `(reservation, work)` milliseconds.
+/// Callers check [`exhausted`] first, which guarantees work: it stops a run once the budget
+/// cannot cover `cleanup_timeout_ms`, and `build` requires a positive `operation_timeout_ms`.
+fn reserve(state: &mut RunState) -> (u64, u64) {
     let remaining = state
         .limits
         .active_budget_ms
@@ -1501,11 +1538,9 @@ fn reserve(state: &mut RunState) -> Result<(u64, u64)> {
             .saturating_add(state.limits.cleanup_timeout_ms),
     );
     let work = reservation.saturating_sub(state.limits.cleanup_timeout_ms);
-    if work == 0 {
-        return Err(Error::Invalid("active budget exhausted".into()));
-    }
+    debug_assert!(work > 0, "exhausted() is checked before every reservation");
     state.usage.active_ms = state.usage.active_ms.saturating_add(reservation);
-    Ok((reservation, work))
+    (reservation, work)
 }
 fn refund(state: &mut RunState, reservation: u64, elapsed: Duration) {
     let charged = u64::try_from(elapsed.as_nanos().div_ceil(1_000_000))
@@ -1534,7 +1569,8 @@ async fn commit(
         .await
         .map_err(|error| match error {
             Error::Stale | Error::Storage(_) | Error::Incompatible(_) => error,
-            _ => Error::Storage(error.to_string()),
+            // Whatever else a checkpoint reports, the commit failed and the run is unchanged.
+            error => Error::storage(error),
         })?;
     emit(
         state,
@@ -1601,8 +1637,8 @@ pub fn resolve(state: &mut RunState, call_id: &str, resolution: Resolution) -> R
         (OperationStatus::Waiting(WaitRequest::Input { .. }), Resolution::Input(value))
             if !matches!(state.phase, Phase::Settled(_)) =>
         {
-            if encoded_len(&value)? > state.limits.max_tool_output_bytes {
-                return Err(Error::Invalid("input reply exceeds byte limit".into()));
+            if encoded_len(&value) > state.limits.max_tool_output_bytes {
+                return Err(Error::input("input reply exceeds byte limit"));
             }
             OperationStatus::Complete(ToolResult {
                 call_id: call_id.into(),
@@ -1612,10 +1648,10 @@ pub fn resolve(state: &mut RunState, call_id: &str, resolution: Resolution) -> R
         }
         (OperationStatus::Unknown { .. }, Resolution::Reconcile(result)) => {
             if result.call_id != call_id
-                || encoded_len(&result.value)? > state.limits.max_tool_output_bytes
+                || encoded_len(&result.value) > state.limits.max_tool_output_bytes
             {
-                return Err(Error::Invalid(
-                    "reconciliation result identity or size is invalid".into(),
+                return Err(Error::input(
+                    "reconciliation result identity or size is invalid",
                 ));
             }
             OperationStatus::Complete(result)
