@@ -58,6 +58,49 @@ impl Fixture for Sqlite {
     }
 }
 
+#[cfg(feature = "postgres")]
+struct Postgres {
+    schema: String,
+    open: Mutex<Option<Arc<postgres::PostgresStore>>>,
+}
+#[cfg(feature = "postgres")]
+impl Postgres {
+    /// A fresh schema per test, in the scratch database `scripts/test-postgres.sh` provides.
+    fn new() -> Self {
+        Self {
+            schema: format!("conformance_{}", RunId::new_v4().simple()),
+            open: Mutex::new(None),
+        }
+    }
+}
+#[cfg(feature = "postgres")]
+#[async_trait]
+impl Fixture for Postgres {
+    async fn open(&self) -> Arc<dyn DurableStore> {
+        let config: postgres::Config = std::env::var("YIELDED_TEST_POSTGRES_URL")
+            .expect("set YIELDED_TEST_POSTGRES_URL, or run scripts/test-postgres.sh")
+            .parse()
+            .unwrap();
+        let store = Arc::new(
+            postgres::PostgresStore::connect(
+                &config,
+                &self.schema,
+                postgres::NoTls,
+                postgres::PostgresOptions::default(),
+            )
+            .await
+            .unwrap(),
+        );
+        *self.open.lock().unwrap() = Some(store.clone());
+        store
+    }
+    async fn close(&self, store: Arc<dyn DurableStore>) {
+        drop(store);
+        let open = self.open.lock().unwrap().take().unwrap();
+        open.close().await.unwrap();
+    }
+}
+
 fn agent(responses: Vec<ModelResponse>, tools: Vec<Arc<dyn Tool>>) -> Agent {
     Agent::builder("conformance-v1", Arc::new(ScriptedModel::new(responses)))
         .instructions("Be deterministic")
@@ -808,37 +851,47 @@ async fn children_commit_with_their_root(fixture: &impl Fixture) {
     fixture.close(store).await;
 }
 
+/// One test per scenario. Attributes after the fixture, such as `#[ignore]` for one that needs
+/// a server, apply to every test.
 macro_rules! conformance_tests {
-    ($make:expr) => {
+    ($make:expr $(, #[$attr:meta])*) => {
         #[tokio::test]
+        $(#[$attr])*
         async fn children_are_stored_with_their_root() {
             children_commit_with_their_root(&$make).await;
         }
         #[tokio::test]
+        $(#[$attr])*
         async fn acceptance_and_fencing() {
             admission_and_fencing(&$make).await;
         }
         #[tokio::test]
+        $(#[$attr])*
         async fn safe_replay_retains_keys_and_budgets() {
             safe_replay_and_budgets(&$make).await;
         }
         #[tokio::test]
+        $(#[$attr])*
         async fn startup_discovers_hidden_dispatch_and_explicit_repair() {
             hidden_dispatch_and_repair(&$make).await;
         }
         #[tokio::test]
+        $(#[$attr])*
         async fn shutdown_joins_cleanup_and_preserves_uncertainty() {
             shutdown_and_recovery(&$make).await;
         }
         #[tokio::test]
+        $(#[$attr])*
         async fn retained_history_and_bounded_context() {
             history_is_ordered_and_context_is_bounded(&$make).await;
         }
         #[tokio::test]
+        $(#[$attr])*
         async fn due_order_follows_waits_and_expiry() {
             due_order_waits_and_expiry(&$make).await;
         }
         #[tokio::test]
+        $(#[$attr])*
         async fn one_host_routes_runs_to_several_agents() {
             several_agents_share_one_store(&$make).await;
         }
@@ -860,6 +913,12 @@ mod sqlite_contract {
         }
     }
     conformance_tests!(fixture());
+}
+
+#[cfg(feature = "postgres")]
+mod postgres_contract {
+    use super::*;
+    conformance_tests!(Postgres::new(), #[ignore = "needs PostgreSQL: scripts/test-postgres.sh"]);
 }
 
 /// The current UTC Unix time in milliseconds, the unit of run expiry and timer waits.
