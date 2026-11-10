@@ -3,7 +3,7 @@
 use crate::StopReason;
 use std::{any::Any, borrow::Cow, error::Error as StdError, fmt};
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// A boxed error from anywhere, kept as the cause of an [`Error`].
 type Cause = Box<dyn StdError + Send + Sync>;

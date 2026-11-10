@@ -508,11 +508,25 @@ fn context_keeps_whole_groups_and_rejects_an_oversized_newest_group() {
     };
     let input = HistoryEntry::Input(json!("old input"));
     let limit = serde_json::to_vec(&vec![group.clone()]).unwrap().len();
-    assert_eq!(
-        select_context(&[input, group.clone()], limit).unwrap(),
-        vec![group.clone()]
-    );
-    assert!(select_context(&[group], limit - 1).is_err());
+    // A run accepts the bounded suffix of its conversation that fits the context limit.
+    let accept = |max_context_bytes, conversation: &[HistoryEntry]| {
+        let limits = Limits {
+            max_context_bytes,
+            ..Limits::default()
+        };
+        agent(Arc::new(ScriptedModel::new(vec![])), vec![], limits).new_run(
+            "c",
+            json!("go"),
+            conversation,
+            None,
+        )
+    };
+    let state = accept(limit, &[input, group.clone()]).unwrap();
+    assert_eq!(state.prior_context, vec![group.clone()]);
+    assert!(matches!(
+        accept(limit - 1, &[group]),
+        Err(Error::Context(_))
+    ));
 }
 
 struct EndlessModel;
@@ -1427,4 +1441,10 @@ async fn input_and_latest_exchange_that_cannot_fit_fail_inside_the_model_operati
     // the model is never called with an incomplete context.
     assert_eq!(model.calls(), 1);
     assert_eq!(state.usage.model_calls, 2);
+}
+
+/// The current UTC Unix time in milliseconds, the unit of run expiry and timer waits.
+fn now_ms() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    u64::try_from(now.expect("clock after 1970").as_millis()).expect("milliseconds fit u64")
 }

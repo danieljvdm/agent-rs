@@ -1,6 +1,8 @@
 //! The durable host's persistence boundary. Storage adapters implement [`DurableStore`];
 //! [`MemoryStore`] is the in-process reference implementation.
-use crate::*;
+use crate::{
+    Agent, Checkpoint, Error, HistoryEntry, Operation, Resolution, Result, RunId, RunState,
+};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::{
@@ -117,7 +119,7 @@ impl RunUpdate {
     }
 }
 
-/// Durable runs for one resident [`crate::host::Host`].
+/// Durable runs for one resident [`Host`](crate::Host).
 ///
 /// Implementors must meet these obligations; `tests/storage_conformance.rs` checks them
 /// against every adapter, and `docs/durability.md` describes the contract.

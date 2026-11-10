@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
-pub const STATE_VERSION: u32 = 1;
+pub(crate) const STATE_VERSION: u32 = 1;
 pub type RunId = Uuid;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Limits {
@@ -323,7 +323,7 @@ pub enum ProgressKind {
     /// The run's settlement was committed; it is terminal.
     Settled,
 }
-pub fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

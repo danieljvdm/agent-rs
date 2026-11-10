@@ -10,10 +10,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::Notify;
-use yielded_agent::{
-    host::{Host, HostOptions},
-    *,
-};
+use yielded_agent::{Host, HostOptions, *};
 
 /// Opens a store and simulates a host restart over the same durable contents.
 #[async_trait]
@@ -736,4 +733,10 @@ mod sqlite_contract {
         }
     }
     conformance_tests!(fixture());
+}
+
+/// The current UTC Unix time in milliseconds, the unit of run expiry and timer waits.
+fn now_ms() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    u64::try_from(now.expect("clock after 1970").as_millis()).expect("milliseconds fit u64")
 }

@@ -15,11 +15,7 @@ use std::{
 };
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
-use yielded_agent::{
-    host::{Host, HostOptions},
-    sqlite::SqliteStore,
-    *,
-};
+use yielded_agent::{Host, HostOptions, sqlite::SqliteStore, *};
 
 const CHILD_CONFIG: &str = "AGENT_RS_PROCESS_CHILD";
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
@@ -755,4 +751,10 @@ fn persisted_wait_process_restart_soak() {
         started.elapsed().as_secs_f64(),
         initial.state.usage.active_ms
     );
+}
+
+/// The current UTC Unix time in milliseconds, the unit of run expiry and timer waits.
+fn now_ms() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    u64::try_from(now.expect("clock after 1970").as_millis()).expect("milliseconds fit u64")
 }

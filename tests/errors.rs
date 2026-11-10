@@ -466,9 +466,14 @@ fn rejected_requests_name_their_kind() {
         Agent::builder("", done()).build(),
         Err(Error::Config(_))
     ));
+    // The conversation's newest entry cannot fit the context limit beside the new input.
+    let small = Limits {
+        max_context_bytes: 16,
+        ..Limits::default()
+    };
     let entry = HistoryEntry::Input(json!("x".repeat(64)));
     assert!(matches!(
-        select_context(&[entry], 16),
+        typed(done(), vec![], small).new_run("c", json!("go"), &[entry], None),
         Err(Error::Context(_))
     ));
 }

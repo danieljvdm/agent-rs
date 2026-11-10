@@ -1,5 +1,11 @@
 use crate::context::{assemble, encoded_len, suffix_start};
-use crate::*;
+use crate::types::{STATE_VERSION, now_ms};
+use crate::{
+    AllowAll, Authorizer, ContextPolicy, Error, ErrorDetail, Execution, HistoryEntry, Limits,
+    Model, ModelConfig, ModelEvent, ModelRequest, ModelResponse, Operation, OperationStatus, Phase,
+    ProgressEvent, ProgressKind, Result, RetryPolicy, RunId, RunState, Settlement, StopReason,
+    Tool, ToolCall, ToolContext, ToolOutput, ToolResult, ToolSpec, Usage, WaitRequest,
+};
 use async_trait::async_trait;
 use futures::{StreamExt, stream::FuturesUnordered};
 use schemars::{JsonSchema, schema_for};
@@ -74,8 +80,8 @@ fn validate<T: DeserializeOwned + 'static>(value: &Value) -> serde_json::Result<
 /// # Ok(()) }
 /// ```
 ///
-/// The plain `Agent`, with both types `Value`, is the erased form: a [`Host`](crate::host::Host)
-/// serves agents of different types side by side, and a [`DurableStore`] accepts JSON input for
+/// The plain `Agent`, with both types `Value`, is the erased form: a [`Host`](crate::Host)
+/// serves agents of different types side by side, and a [`DurableStore`](crate::DurableStore) accepts JSON input for
 /// any of them. [`erased`](Self::erased) converts a typed agent, sharing its definition.
 pub struct Agent<I = Value, O = Value> {
     definition: Arc<Definition>,

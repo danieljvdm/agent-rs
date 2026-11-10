@@ -8,11 +8,7 @@ use std::{
     time::Duration,
 };
 use tempfile::TempDir;
-use yielded_agent::{
-    host::{Host, HostOptions},
-    sqlite::SqliteStore,
-    *,
-};
+use yielded_agent::{Host, HostOptions, sqlite::SqliteStore, *};
 
 fn agent(responses: Vec<ModelResponse>, tools: Vec<Arc<dyn Tool>>) -> Agent {
     Agent::builder("test", Arc::new(ScriptedModel::new(responses)))
@@ -905,4 +901,10 @@ async fn repaired_binding_retries_abandoned_dispatch_behind_an_input_wait() {
     assert_eq!(db.last_error(id).await.unwrap(), None);
     host.shutdown().await.unwrap();
     db.close().await.unwrap();
+}
+
+/// The current UTC Unix time in milliseconds, the unit of run expiry and timer waits.
+fn now_ms() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    u64::try_from(now.expect("clock after 1970").as_millis()).expect("milliseconds fit u64")
 }

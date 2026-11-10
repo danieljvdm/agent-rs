@@ -36,7 +36,7 @@ Default features enable `sqlite` and `openai`. `default-features = false` builds
 # #[cfg(feature = "sqlite")]
 # async fn durable(agent: yielded_agent::Agent) -> yielded_agent::Result<()> {
 use std::{sync::Arc, time::Duration};
-use yielded_agent::{host::{Host, HostOptions}, sqlite::SqliteStore};
+use yielded_agent::{Host, HostOptions, sqlite::SqliteStore};
 use serde_json::json;
 let store = Arc::new(SqliteStore::open("agent.sqlite").await?);
 let mut host = Host::start(store.clone(), agent, HostOptions {

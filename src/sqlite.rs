@@ -10,7 +10,12 @@
 //!   `last_error`. Every commit rewrites only this row, fenced on generation and revision.
 //! - `history` holds each entry once, appended in commit order; `operations` retains every
 //!   operation the run recorded, across batches.
-use crate::*;
+use crate::store;
+use crate::types::STATE_VERSION;
+use crate::{
+    Agent, Checkpoint, CheckpointPosition, DurableStore, Error, HistoryEntry, HostSlot,
+    ModelResponse, Operation, Phase, Result, RunId, RunState, RunUpdate, StoreLease, Usage,
+};
 use async_trait::async_trait;
 use fs2::FileExt;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -928,6 +933,7 @@ impl Drop for SqliteStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ScriptedModel, Settlement, types::now_ms};
     use serde_json::json;
     #[tokio::test]
     async fn failure_during_retirement_rolls_back_history_terminal_state_and_checkpoint() {

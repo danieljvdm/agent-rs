@@ -417,8 +417,8 @@ pub mod durable {
     use std::collections::{HashMap, HashSet};
     use std::future::Future;
     use std::path::Path;
-    use yielded_agent::host::{Host, HostOptions};
     use yielded_agent::sqlite::SqliteStore;
+    use yielded_agent::{Host, HostOptions};
 
     pub struct Resident {
         pub store: Arc<SqliteStore>,

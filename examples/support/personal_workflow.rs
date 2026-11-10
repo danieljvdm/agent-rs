@@ -22,11 +22,7 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
-use yielded_agent::{
-    host::{Host, HostOptions},
-    sqlite::SqliteStore,
-    *,
-};
+use yielded_agent::{Host, HostOptions, sqlite::SqliteStore, *};
 
 pub const FIXTURE_VERSION: &str = "personal-reminder-v2";
 pub const DEFAULT_MODEL: &str = "gpt-4.1-2025-04-14";
@@ -1123,4 +1119,10 @@ pub async fn run_suite(options: SuiteOptions) -> Result<SuiteReport> {
     report.passed = report.attempts.iter().all(|a| a.passed);
     save_report(&options.output, &report)?;
     Ok(report)
+}
+
+/// The current UTC Unix time in milliseconds, the unit of run expiry and timer waits.
+fn now_ms() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    u64::try_from(now.expect("clock after 1970").as_millis()).expect("milliseconds fit u64")
 }
