@@ -175,7 +175,7 @@ async fn pinned_entries_survive_truncation_and_older_entries_fill_the_rest() {
             None,
         )
         .unwrap();
-    Engine::new(agent)
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -216,7 +216,7 @@ async fn pinned_entries_that_cannot_fit_fail_without_reaching_the_model() {
         .build()
         .unwrap();
     let mut state = agent.new_run("c", json!("go"), &[], None).unwrap();
-    Engine::new(agent)
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -260,7 +260,7 @@ async fn derived_context_is_bounded_and_yields_to_pinned_history() {
     let mut state = agent
         .new_run("c", json!("go"), std::slice::from_ref(&old), None)
         .unwrap();
-    Engine::new(agent)
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -306,7 +306,7 @@ async fn policy_binding_is_part_of_the_agent_binding() {
     // A run accepted under the policy cannot be driven without it.
     let mut state = bound.new_run("c", json!("go"), &[], None).unwrap();
     assert!(matches!(
-        Engine::new(plain)
+        plain
             .drive(&mut state, &MemoryCheckpoint, RunControl::default())
             .await,
         Err(Error::Incompatible(_))
@@ -389,16 +389,13 @@ async fn preparation_obeys_cancellation_and_deadline_then_cleans_up() {
         let mut state = agent.new_run("c", json!("go"), &[], None).unwrap();
         let control = RunControl::default();
         let token = control.cancel.clone();
-        let engine = Engine::new(agent);
-        let (result, ()) = tokio::join!(
-            engine.drive(&mut state, &MemoryCheckpoint, control),
-            async {
+        let (result, ()) =
+            tokio::join!(agent.drive(&mut state, &MemoryCheckpoint, control), async {
                 if cancel {
                     policy.entered.notified().await;
                     token.cancel();
                 }
-            }
-        );
+            });
         result.unwrap();
         if cancel {
             assert_eq!(state.phase, Phase::Settled(Settlement::Cancelled));

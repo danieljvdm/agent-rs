@@ -27,7 +27,11 @@ fn call(id: &str, name: &str, value: Value) -> ToolCall {
         arguments: value,
     }
 }
-fn agent(model: Arc<dyn Model>, tools: Vec<Arc<dyn Tool>>, limits: Limits) -> Agent {
+fn agent(
+    model: Arc<dyn Model>,
+    tools: Vec<Arc<dyn Tool>>,
+    limits: Limits,
+) -> Agent<String, String> {
     builder(model, tools, limits).build().unwrap()
 }
 fn builder(
@@ -42,7 +46,7 @@ fn builder(
         .input::<String>()
         .output::<String>()
 }
-fn state(agent: &Agent) -> RunState {
+fn state(agent: &Agent<String, String>) -> RunState {
     agent.new_run("test", json!("go"), &[], None).unwrap()
 }
 
@@ -158,7 +162,7 @@ async fn typed_mutation_can_report_a_complete_failure_without_becoming_unknown()
         Limits::default(),
     );
     let mut state = state(&agent);
-    Engine::new(agent)
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -188,7 +192,7 @@ async fn validates_whole_response_before_dispatch_and_preserves_rejected_respons
     ])]));
     let agent = agent(model, vec![tool], Limits::default());
     let mut state = state(&agent);
-    Engine::new(agent)
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -218,7 +222,7 @@ async fn duplicate_ids_and_truncated_streams_dispatch_nothing() {
             Limits::default(),
         );
         let mut state = state(&agent);
-        Engine::new(agent)
+        agent
             .drive(&mut state, &MemoryCheckpoint, RunControl::default())
             .await
             .unwrap();
@@ -310,7 +314,7 @@ async fn bounded_parallelism_sequential_barriers_history_order_and_cleanup() {
     let agent = agent(model.clone(), tools, limits);
     let mut state = state(&agent);
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    Engine::new(agent)
+    agent
         .drive(
             &mut state,
             &MemoryCheckpoint,
@@ -371,8 +375,7 @@ async fn approval_and_input_waits_do_not_consume_budget_while_waiting() {
     ]));
     let agent = agent(model, vec![tool], Limits::default());
     let mut state = state(&agent);
-    let engine = Engine::new(agent);
-    engine
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -382,13 +385,13 @@ async fn approval_and_input_waits_do_not_consume_budget_while_waiting() {
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     let usage = state.usage.clone();
-    engine
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
     assert_eq!(usage, state.usage);
     resolve(&mut state, "question", Resolution::Approve(true)).unwrap();
-    engine
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -397,13 +400,13 @@ async fn approval_and_input_waits_do_not_consume_budget_while_waiting() {
         OperationStatus::Waiting(WaitRequest::Input { .. })
     ));
     let usage = state.usage.clone();
-    engine
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
     assert_eq!(usage, state.usage);
     resolve(&mut state, "question", Resolution::Input(json!("there"))).unwrap();
-    engine
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -431,7 +434,7 @@ async fn recovered_model_attempt_does_not_replenish_call_budget() {
     state.phase = Phase::ModelInFlight;
     state.usage.model_calls = 1;
     state.usage.active_ms = 123;
-    Engine::new(agent)
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -463,7 +466,7 @@ async fn cancellation_retains_unknown_mutation_and_allows_reconciliation() {
         approved: false,
     });
     state.cancel_requested = true;
-    Engine::new(agent)
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -529,7 +532,7 @@ async fn empty_stream_events_have_a_hard_bound() {
     );
     let mut state = state(&agent);
     let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
-    Engine::new(agent)
+    agent
         .drive(
             &mut state,
             &MemoryCheckpoint,
@@ -566,7 +569,7 @@ async fn failed_intent_commit_never_dispatches() {
     let agent = agent(model.clone(), vec![], Limits::default());
     let mut state = state(&agent);
     assert!(matches!(
-        Engine::new(agent)
+        agent
             .drive(&mut state, &FailBeforeModel, RunControl::default())
             .await,
         Err(Error::Storage(_))
@@ -588,7 +591,7 @@ async fn reused_call_ids_cannot_accept_a_stale_resolution() {
     ]));
     let agent = agent(model, vec![tool], Limits::default());
     let mut state = state(&agent);
-    Engine::new(agent)
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -638,7 +641,7 @@ async fn cancelled_idempotent_effect_is_unknown_even_when_cleanup_fails() {
     )])]));
     let agent = agent(model, vec![tool], Limits::default());
     let mut state = state(&agent);
-    Engine::new(agent)
+    agent
         .drive(
             &mut state,
             &MemoryCheckpoint,
@@ -680,7 +683,7 @@ impl Model for FailedModelCleanup {
 async fn model_cleanup_failure_preserves_received_evidence_and_tokens() {
     let agent = agent(Arc::new(FailedModelCleanup), vec![], Limits::default());
     let mut state = state(&agent);
-    Engine::new(agent)
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -701,17 +704,12 @@ async fn convenience_api_retains_wait_and_can_resume_without_duplicate_history()
         ModelResponse::tools(vec![call("question", "question", json!(1))]),
         ModelResponse::final_output(json!("done")),
     ]));
-    let engine = Engine::new(agent(model, vec![tool], Limits::default()));
+    let agent = agent(model, vec![tool], Limits::default());
     let mut conversation = Conversation::default();
-    assert!(
-        engine
-            .run::<_, String>(&mut conversation, "go")
-            .await
-            .is_err()
-    );
+    assert!(agent.run(&mut conversation, "go").await.is_err());
     assert_eq!(conversation.history.len(), 1);
     assert!(matches!(
-        engine.run::<_, String>(&mut conversation, "other").await,
+        agent.run(&mut conversation, "other").await,
         Err(Error::ConversationBusy)
     ));
     resolve(
@@ -720,7 +718,7 @@ async fn convenience_api_retains_wait_and_can_resume_without_duplicate_history()
         Resolution::Input(json!("here")),
     )
     .unwrap();
-    let result: String = engine
+    let result: String = agent
         .resume(&mut conversation, RunControl::default())
         .await
         .unwrap();
@@ -762,7 +760,7 @@ async fn outcome_commit_failure_still_joins_and_cleans_sibling_tools() {
     let agent = agent(model, vec![tool], Limits::default());
     let mut state = state(&agent);
     assert!(matches!(
-        Engine::new(agent)
+        agent
             .drive(&mut state, &FailAfterFirstTool, RunControl::default())
             .await,
         Err(Error::Storage(_))
@@ -802,7 +800,7 @@ async fn wall_expiry_interrupts_model_and_keeps_its_cleanup() {
         .unwrap();
     tokio::time::timeout(
         Duration::from_secs(2),
-        Engine::new(agent).drive(&mut state, &MemoryCheckpoint, RunControl::default()),
+        agent.drive(&mut state, &MemoryCheckpoint, RunControl::default()),
     )
     .await
     .unwrap()
@@ -837,7 +835,7 @@ async fn wall_expiry_interrupts_mutation_and_retains_uncertainty() {
         .unwrap();
     tokio::time::timeout(
         Duration::from_secs(2),
-        Engine::new(agent).drive(&mut state, &MemoryCheckpoint, RunControl::default()),
+        agent.drive(&mut state, &MemoryCheckpoint, RunControl::default()),
     )
     .await
     .unwrap()
@@ -873,7 +871,7 @@ async fn settlement_event_is_emitted_only_after_a_successful_commit() {
     let mut state = state(&agent);
     let (tx, mut rx) = tokio::sync::mpsc::channel(20);
     assert!(matches!(
-        Engine::new(agent)
+        agent
             .drive(
                 &mut state,
                 &FailSettlement,
@@ -923,8 +921,7 @@ async fn approval_grant_still_requires_current_authorization() {
         .build()
         .unwrap();
     let mut state = state(&agent);
-    let engine = Engine::new(agent);
-    engine
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -934,7 +931,7 @@ async fn approval_grant_still_requires_current_authorization() {
     ));
     assert_eq!(authorizations.load(Ordering::SeqCst), 0);
     resolve(&mut state, "effect", Resolution::Approve(true)).unwrap();
-    engine
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -966,8 +963,7 @@ async fn convenience_api_requires_reconciliation_before_replacing_cancelled_run(
         approved: false,
     });
     state.cancel_requested = true;
-    let engine = Engine::new(agent);
-    engine
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -976,7 +972,7 @@ async fn convenience_api_requires_reconciliation_before_replacing_cancelled_run(
         last_run: Some(state),
     };
     assert!(matches!(
-        engine.run::<_, String>(&mut conversation, "next").await,
+        agent.run(&mut conversation, "next").await,
         Err(Error::ConversationBusy)
     ));
     let retained = conversation.last_run.as_mut().unwrap();
@@ -996,7 +992,7 @@ async fn convenience_api_requires_reconciliation_before_replacing_cancelled_run(
         }),
     )
     .unwrap();
-    let result: String = engine.run(&mut conversation, "next").await.unwrap();
+    let result: String = agent.run(&mut conversation, "next").await.unwrap();
     assert_eq!(result, "new run");
     assert_ne!(conversation.last_run.as_ref().unwrap().id, original_id);
 }
@@ -1030,7 +1026,7 @@ async fn recovered_dispatched_work_becomes_resolvable_when_budgets_or_expiry_sto
         } else {
             state.usage.active_ms = state.limits.active_budget_ms;
         }
-        Engine::new(agent)
+        agent
             .drive(&mut state, &MemoryCheckpoint, RunControl::default())
             .await
             .unwrap();
@@ -1083,8 +1079,7 @@ async fn idempotent_timeout_keeps_mutation_uncertainty() {
         },
     );
     let mut state = state(&agent);
-    let engine = Engine::new(agent);
-    engine
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -1093,7 +1088,7 @@ async fn idempotent_timeout_keeps_mutation_uncertainty() {
         OperationStatus::Unknown { .. }
     ));
     state.cancel_requested = true;
-    engine
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -1144,9 +1139,8 @@ async fn wait_or_unknown_outcome_stops_further_dispatch_until_resolved() {
             },
         );
         let mut state = state(&agent);
-        let engine = Engine::new(agent);
         for _ in 0..2 {
-            engine
+            agent
                 .drive(&mut state, &MemoryCheckpoint, RunControl::default())
                 .await
                 .unwrap();
@@ -1170,7 +1164,7 @@ async fn wait_or_unknown_outcome_stops_further_dispatch_until_resolved() {
             })
         };
         resolve(&mut state, "block", resolution).unwrap();
-        engine
+        agent
             .drive(&mut state, &MemoryCheckpoint, RunControl::default())
             .await
             .unwrap();
@@ -1211,7 +1205,7 @@ async fn progress_events_for_one_tool_round_are_exact() {
     let agent = agent(model, vec![tool], Limits::default());
     let mut state = state(&agent);
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-    Engine::new(agent)
+    agent
         .drive(
             &mut state,
             &MemoryCheckpoint,
@@ -1284,15 +1278,14 @@ impl Model for RunIdEcho {
 async fn concurrent_runs_sharing_a_channel_attribute_every_event() {
     let agent = agent(Arc::new(RunIdEcho), vec![], Limits::default());
     let (mut first, mut second) = (state(&agent), state(&agent));
-    let engine = Engine::new(agent);
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
     let control = || RunControl {
         events: Some(tx.clone()),
         ..RunControl::default()
     };
     let (a, b) = tokio::join!(
-        engine.drive(&mut first, &MemoryCheckpoint, control()),
-        engine.drive(&mut second, &MemoryCheckpoint, control()),
+        agent.drive(&mut first, &MemoryCheckpoint, control()),
+        agent.drive(&mut second, &MemoryCheckpoint, control()),
     );
     a.unwrap();
     b.unwrap();
@@ -1377,7 +1370,7 @@ async fn model_context_fits_truncates_suffix_and_repins_current_input() {
     let mut state = agent
         .new_run("test", json!("go"), std::slice::from_ref(&prior), None)
         .unwrap();
-    Engine::new(agent)
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
@@ -1417,7 +1410,7 @@ async fn input_and_latest_exchange_that_cannot_fit_fail_inside_the_model_operati
         },
     );
     let mut state = state(&agent);
-    Engine::new(agent)
+    agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();

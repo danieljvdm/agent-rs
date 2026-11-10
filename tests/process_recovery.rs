@@ -387,7 +387,7 @@ async fn child(config: Config) -> Result<()> {
     }
     if !matches!(config.crash, CrashPoint::None) {
         let mut state = store.claim(id).await?;
-        Engine::new(agent)
+        agent
             .drive(
                 &mut state,
                 &BoundaryCheckpoint {
@@ -406,7 +406,7 @@ async fn child(config: Config) -> Result<()> {
         // Returning from drive is the public quiescence barrier for a wait. Merely
         // observing its first checkpoint can race the subsequent budget refund.
         let mut state = store.claim(id).await?;
-        Engine::new(agent)
+        agent
             .drive(&mut state, store.as_ref(), RunControl::default())
             .await?;
         assert!(ready(&state, config.ready), "expected a persisted wait");

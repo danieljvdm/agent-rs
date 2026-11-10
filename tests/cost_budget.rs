@@ -12,7 +12,7 @@
 // Budget table: today's measured values.
 // ---------------------------------------------------------------------------------------------
 
-// SQLite transactions for `SqliteStore::claim` plus `Engine::drive` to settlement (exact).
+// SQLite transactions for `SqliteStore::claim` plus `Agent::drive` to settlement (exact).
 /// A run whose first model response is final: claim, model intent, settlement.
 const SQLITE_TRANSACTIONS_NO_TOOLS: u64 = 3;
 /// One round of one tool: six commits per single-tool round (model intent, model outcome, tool
@@ -39,24 +39,24 @@ const SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS: u64 = 27_263;
 const TOOL_SCHEDULE_VIRTUAL_MS: u64 = 310;
 
 // Heap allocations on the driving thread: (count, requested bytes), with headroom.
-/// `Engine::run` of a final-only response in an empty conversation.
+/// `Agent::run` of a final-only response in an empty conversation.
 const ALLOC_RUN_EMPTY_CONVERSATION: Budget = Budget::new(32, 2_118);
 /// The same run in a conversation holding 1,024 prior entries: one copy into the run's prior
 /// context and one into the model request.
 const ALLOC_RUN_1024_PRIOR_ENTRIES: Budget = Budget::new(6_177, 1_737_242);
-/// `Engine::run` of four rounds of one tool each in an empty conversation.
+/// `Agent::run` of four rounds of one tool each in an empty conversation.
 const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(430, 52_028);
-/// `Engine::drive` of a final response streamed as 64 text deltas of 16 bytes, observed through
+/// `Agent::drive` of a final response streamed as 64 text deltas of 16 bytes, observed through
 /// an attached progress channel that a receiver drains concurrently. Includes the scripted
 /// model's copy of each delta, so the engine itself must add no allocation per delta. Bytes
 /// include the channel's two 32-slot blocks of 40-byte `ProgressEvent`s, a per-channel cost.
 const ALLOC_STREAM_64_DELTAS_OBSERVED: Budget = Budget::new(97, 10_850);
-/// `Engine::run` of a final-only response for an agent with typed input and output, in an empty
+/// `Agent::run` of a final-only response for an agent with typed input and output, in an empty
 /// conversation: includes validating the input and the output against their types.
-const ALLOC_RUN_TYPED_EMPTY_CONVERSATION: Budget = Budget::new(60, 8_542);
+const ALLOC_RUN_TYPED_EMPTY_CONVERSATION: Budget = Budget::new(57, 7_896);
 /// `Agent::clone` with four typed tools (once per spawned durable run and per `accept`).
 const ALLOC_AGENT_CLONE: Budget = Budget::new(0, 0);
-/// `Engine::drive` of a settled run decoded from storage, with four typed tools: only the
+/// `Agent::drive` of a settled run decoded from storage, with four typed tools: only the
 /// compatibility check every `drive` performs against the agent's binding.
 const ALLOC_DRIVE_BINDING_CHECK: Budget = Budget::new(0, 0);
 /// `Tool::validate` then `Tool::execute` of one typed tool call with a string argument.
@@ -283,13 +283,13 @@ fn prior_entries(count: usize) -> Vec<HistoryEntry> {
 
 #[tokio::test]
 async fn engine_allocation_budgets() {
-    let engine = Engine::new(agent(0, 0));
+    let simple = agent(0, 0);
     stable(
         "run_empty_conversation",
         ALLOC_RUN_EMPTY_CONVERSATION,
         || async {
             let mut conversation = Conversation::default();
-            let output: Value = engine.run(&mut conversation, "go").await.unwrap();
+            let output: Value = simple.run(&mut conversation, "go").await.unwrap();
             assert_eq!(output, json!("done"));
         },
     )
@@ -308,9 +308,9 @@ async fn engine_allocation_budgets() {
         ALLOC_RUN_1024_PRIOR_ENTRIES,
         || {
             let mut conversation = prepared.pop().unwrap();
-            let engine = &engine;
+            let simple = &simple;
             async move {
-                let output: Value = engine.run(&mut conversation, "go").await.unwrap();
+                let output: Value = simple.run(&mut conversation, "go").await.unwrap();
                 assert_eq!(output, json!("done"));
                 assert_eq!(conversation.history.len(), 1026);
                 let state = conversation.last_run.as_ref().unwrap();
@@ -320,13 +320,13 @@ async fn engine_allocation_budgets() {
     )
     .await;
 
-    let engine = Engine::new(agent(4, 1));
+    let rounds = agent(4, 1);
     stable(
         "run_four_tool_rounds",
         ALLOC_RUN_FOUR_TOOL_ROUNDS,
         || async {
             let mut conversation = Conversation::default();
-            let _: Value = engine.run(&mut conversation, "go").await.unwrap();
+            let _: Value = rounds.run(&mut conversation, "go").await.unwrap();
             assert_completed(conversation.last_run.as_ref().unwrap(), 4, 1);
         },
     )
@@ -368,19 +368,15 @@ async fn observed_stream_allocation_budget() {
     .instructions("Stream the scripted answer.")
     .build()
     .unwrap();
-    let engine = Engine::new(agent);
     stable(
         "stream_64_deltas_observed",
         ALLOC_STREAM_64_DELTAS_OBSERVED,
         || async {
-            let mut state = engine
-                .agent()
-                .new_run("cost", json!("go"), &[], None)
-                .unwrap();
+            let mut state = agent.new_run("cost", json!("go"), &[], None).unwrap();
             let run_id = state.id;
             // Room for every event, so nothing is dropped and the count stays deterministic.
             let (sender, mut receiver) = tokio::sync::mpsc::channel(2 * STREAM_DELTAS);
-            let drive = engine.drive(
+            let drive = agent.drive(
                 &mut state,
                 &MemoryCheckpoint,
                 RunControl {
@@ -422,11 +418,7 @@ async fn agent_allocation_budgets() {
     .await;
 
     // A stored run shares nothing with the agent in memory, so this is what a host pays.
-    let engine = Engine::new(agent);
-    let mut settled = engine
-        .agent()
-        .new_run("cost", json!("go"), &[], None)
-        .unwrap();
+    let mut settled = agent.new_run("cost", json!("go"), &[], None).unwrap();
     settled.phase = Phase::Settled(Settlement::Cancelled);
     let stored = serde_json::to_string(&settled).unwrap();
     // Cloned, not created, per drive: a new token's first lock allocates its mutex.
@@ -434,9 +426,9 @@ async fn agent_allocation_budgets() {
     stable("drive_binding_check", ALLOC_DRIVE_BINDING_CHECK, || {
         let mut state: RunState = serde_json::from_str(&stored).unwrap();
         let control = control.clone();
-        let engine = &engine;
+        let agent = &agent;
         async move {
-            engine
+            agent
                 .drive(&mut state, &MemoryCheckpoint, control)
                 .await
                 .unwrap();
@@ -468,13 +460,12 @@ async fn typed_allocation_budgets() {
     .output::<Answer>()
     .build()
     .unwrap();
-    let engine = Engine::new(agent);
     stable(
         "run_typed_empty_conversation",
         ALLOC_RUN_TYPED_EMPTY_CONVERSATION,
         || async {
             let mut conversation = Conversation::default();
-            let output: Answer = engine
+            let output: Answer = agent
                 .run(&mut conversation, Question { text: "go".into() })
                 .await
                 .unwrap();
@@ -535,10 +526,7 @@ async fn sliding_window_starts_the_next_call_when_a_slot_frees() {
     .unwrap();
     let mut conversation = Conversation::default();
     let started = tokio::time::Instant::now();
-    let _: Value = Engine::new(agent)
-        .run(&mut conversation, "go")
-        .await
-        .unwrap();
+    let _: Value = agent.run(&mut conversation, "go").await.unwrap();
     let elapsed = started.elapsed();
     eprintln!("tool_schedule_virtual: {elapsed:?}");
     let HistoryEntry::Exchange { results, .. } = &conversation.history[1] else {
@@ -643,8 +631,7 @@ mod sqlite {
                 .await
                 .unwrap();
             let mut state = store.claim(id).await.unwrap();
-            Engine::new(seed.clone())
-                .drive(&mut state, &store, RunControl::default())
+            seed.drive(&mut state, &store, RunControl::default())
                 .await
                 .unwrap();
             assert!(state.is_terminal());
@@ -659,7 +646,7 @@ mod sqlite {
         let transactions_before = store.metrics().transactions;
         let accepted_bytes = meter.bytes();
         let mut state = store.claim(id).await.unwrap();
-        Engine::new(agent)
+        agent
             .drive(&mut state, &store, RunControl::default())
             .await
             .unwrap();

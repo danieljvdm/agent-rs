@@ -179,7 +179,7 @@ pub struct PreparedRun {
     history: Vec<HistoryEntry>,
 }
 impl PreparedRun {
-    pub fn admit(self, agent: &Agent) -> RunState {
+    pub fn admit<I, O>(self, agent: &Agent<I, O>) -> RunState {
         agent
             .new_run(self.conversation, self.input, &self.history, None)
             .unwrap()
@@ -187,8 +187,7 @@ impl PreparedRun {
 }
 
 pub struct Fixture {
-    pub agent: Agent,
-    pub engine: Arc<Engine>,
+    pub agent: Agent<Input, Output>,
     pub counts: Arc<Counts>,
     pub rounds: usize,
     pub batch: usize,
@@ -270,7 +269,6 @@ impl Fixture {
             .output::<Output>()
             .build()
             .unwrap();
-        let engine = Arc::new(Engine::new(agent.clone()));
         let history = (0..history_entries)
             .map(|n| {
                 if n % 2 == 0 {
@@ -287,7 +285,6 @@ impl Fixture {
             .collect();
         Self {
             agent,
-            engine,
             counts,
             rounds,
             batch,
@@ -309,7 +306,7 @@ impl Fixture {
     }
     pub async fn execute(&self, prepared: PreparedRun) -> RunState {
         let mut state = prepared.admit(&self.agent);
-        self.engine
+        self.agent
             .drive(&mut state, &MemoryCheckpoint, RunControl::default())
             .await
             .unwrap();
@@ -376,12 +373,12 @@ pub async fn concurrent(
     active: usize,
 ) -> Vec<(RunState, Duration)> {
     stream::iter(states.into_iter().map(|prepared| {
-        let engine = fixture.engine.clone();
+        let agent = fixture.agent.clone();
         async move {
             let started = Instant::now();
             let state = tokio::spawn(async move {
-                let mut state = prepared.admit(engine.agent());
-                engine
+                let mut state = prepared.admit(&agent);
+                agent
                     .drive(&mut state, &MemoryCheckpoint, RunControl::default())
                     .await
                     .unwrap();
@@ -610,7 +607,7 @@ pub mod durable {
                 });
                 let id = store
                     .accept(
-                        &seed.agent,
+                        &seed.agent.erased(),
                         CONTEXT_CONVERSATION,
                         &format!("seed-{index}"),
                         input,
@@ -619,7 +616,7 @@ pub mod durable {
                     .await
                     .unwrap();
                 let mut state = store.claim(id).await.unwrap();
-                seed.engine
+                seed.agent
                     .drive(&mut state, &store, RunControl::default())
                     .await
                     .unwrap();
@@ -676,7 +673,7 @@ pub mod durable {
             for index in 0..prior_runs {
                 let id = store
                     .accept(
-                        &seed.agent,
+                        &seed.agent.erased(),
                         "recovery",
                         &format!("seed-{index}"),
                         seed.input(),
@@ -685,7 +682,7 @@ pub mod durable {
                     .await
                     .unwrap();
                 let mut state = store.claim(id).await.unwrap();
-                seed.engine
+                seed.agent
                     .drive(&mut state, &*store, RunControl::default())
                     .await
                     .unwrap();
@@ -693,7 +690,7 @@ pub mod durable {
             }
             let id = store
                 .accept(
-                    &fixture.agent,
+                    &fixture.agent.erased(),
                     "recovery",
                     "resume-me",
                     fixture.input(),
@@ -703,7 +700,7 @@ pub mod durable {
                 .unwrap();
             let mut state = store.claim(id).await.unwrap();
             let result = fixture
-                .engine
+                .agent
                 .drive(
                     &mut state,
                     &StopAfterRound {
@@ -738,7 +735,7 @@ pub mod durable {
                 "recovery must retain the full bounded seed context"
             );
             fixture
-                .engine
+                .agent
                 .drive(&mut state, &*store, RunControl::default())
                 .await
                 .unwrap();

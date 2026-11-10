@@ -6,7 +6,7 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{
-    any::TypeId,
+    any::{Any, TypeId},
     collections::{HashMap, HashSet},
     future::Future,
     marker::PhantomData,
@@ -17,6 +17,14 @@ use tokio::{sync::mpsc, time::Instant};
 use tokio_util::sync::CancellationToken;
 
 type Validator = fn(&Value) -> Result<()>;
+/// Encodes a run's input. Input that already is a `Value` is moved, not copied.
+fn into_json<T: Serialize + 'static>(input: T) -> Result<Value> {
+    let mut input = Some(input);
+    if let Some(value) = (&mut input as &mut dyn Any).downcast_mut::<Option<Value>>() {
+        return Ok(value.take().unwrap_or_default());
+    }
+    serde_json::to_value(input).map_err(|e| Error::Invalid(e.to_string()))
+}
 /// Checks that `value` deserializes as `T`. `&Value` is a deserializer, so this never copies it,
 /// and any JSON is a `Value`, so an untyped agent checks nothing.
 fn validate<T: DeserializeOwned + 'static>(value: &Value) -> Result<()> {
@@ -28,12 +36,60 @@ fn validate<T: DeserializeOwned + 'static>(value: &Value) -> Result<()> {
         .map_err(|e| Error::Invalid(e.to_string()))
 }
 
-/// Immutable agent definition. Product policy and clients are supplied by its caller.
+/// An immutable agent definition, built with [`Agent::builder`]. Product policy and clients are
+/// supplied by its caller. The definition is shared: cloning an agent increments a reference
+/// count.
 ///
-/// The definition is shared: cloning an agent only increments a reference count.
-#[derive(Clone)]
-pub struct Agent {
+/// `I` and `O` are the input and output types named with [`AgentBuilder::input`] and
+/// [`AgentBuilder::output`]. The in-memory [`run`](Self::run) takes an `I` and returns an `O`,
+/// so a mismatch does not compile:
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use serde_json::json;
+/// # use yielded_agent::*;
+/// # async fn example() -> Result<()> {
+/// let model = ScriptedModel::new(vec![ModelResponse::final_output(json!("hi"))]);
+/// let agent: Agent<String, String> = Agent::builder("greeter", Arc::new(model))
+///     .input::<String>()
+///     .output::<String>()
+///     .build()?;
+/// let reply: String = agent.run(&mut Conversation::default(), "hello").await?;
+/// # Ok(()) }
+/// ```
+///
+/// ```compile_fail
+/// # use std::sync::Arc;
+/// # use yielded_agent::*;
+/// # async fn example(agent: Agent<String, String>) -> Result<()> {
+/// // The input must convert into `String`.
+/// let reply: String = agent.run(&mut Conversation::default(), 42_u64).await?;
+/// # Ok(()) }
+/// ```
+///
+/// ```compile_fail
+/// # use std::sync::Arc;
+/// # use yielded_agent::*;
+/// # async fn example(agent: Agent<String, String>) -> Result<()> {
+/// // The output is a `String`.
+/// let reply: u64 = agent.run(&mut Conversation::default(), "hello").await?;
+/// # Ok(()) }
+/// ```
+///
+/// The plain `Agent`, with both types `Value`, is the erased form: a [`Host`](crate::host::Host)
+/// serves agents of different types side by side, and a [`DurableStore`] accepts JSON input for
+/// any of them. [`erased`](Self::erased) converts a typed agent, sharing its definition.
+pub struct Agent<I = Value, O = Value> {
     definition: Arc<Definition>,
+    types: PhantomData<fn(I) -> O>,
+}
+impl<I, O> Clone for Agent<I, O> {
+    fn clone(&self) -> Self {
+        Self {
+            definition: self.definition.clone(),
+            types: PhantomData,
+        }
+    }
 }
 /// Everything an agent is, built and checked once and then shared by every run.
 struct Definition {
@@ -86,6 +142,8 @@ impl Agent {
             types: PhantomData,
         }
     }
+}
+impl<I, O> Agent<I, O> {
     pub fn id(&self) -> &str {
         &self.definition.id
     }
@@ -138,6 +196,79 @@ impl Agent {
             pending_response: None,
             operations: vec![],
         })
+    }
+    /// The same agent with its types erased, to serve beside agents of other types or to
+    /// accept JSON input. Shares the definition, so its binding is the same.
+    pub fn erased(&self) -> Agent {
+        Agent {
+            definition: self.definition.clone(),
+            types: PhantomData,
+        }
+    }
+    /// Drives a run this agent accepted, or one stored with an equal binding, until it settles
+    /// or waits. The same state machine serves memory and durable execution. No child work is
+    /// detached.
+    pub async fn drive(
+        &self,
+        state: &mut RunState,
+        checkpoint: &dyn Checkpoint,
+        control: RunControl,
+    ) -> Result<()> {
+        self.definition.drive(state, checkpoint, control).await
+    }
+}
+impl<I: Serialize + 'static, O: DeserializeOwned> Agent<I, O> {
+    /// Convenience API for runs that finish without application input. Use `drive` for
+    /// resumable waits.
+    pub async fn run(&self, conversation: &mut Conversation, input: impl Into<I>) -> Result<O> {
+        if conversation.last_run.as_ref().is_some_and(|run| {
+            !run.is_terminal()
+                || run.operations.iter().any(|operation| {
+                    matches!(
+                        operation.status,
+                        OperationStatus::Unknown { .. } | OperationStatus::Dispatched
+                    )
+                })
+        }) {
+            return Err(Error::ConversationBusy);
+        }
+        let input = into_json(input.into())?;
+        let state = self.new_run("memory", input, &conversation.history, None)?;
+        conversation.last_run = Some(state);
+        self.resume_from(conversation, RunControl::default(), 0)
+            .await
+    }
+    /// Resume a retained in-memory run after resolving its wait through `last_run`.
+    pub async fn resume(&self, conversation: &mut Conversation, control: RunControl) -> Result<O> {
+        let old_len = conversation
+            .last_run
+            .as_ref()
+            .ok_or(Error::NotFound)?
+            .history
+            .len();
+        self.resume_from(conversation, control, old_len).await
+    }
+    async fn resume_from(
+        &self,
+        conversation: &mut Conversation,
+        control: RunControl,
+        old_len: usize,
+    ) -> Result<O> {
+        let state = conversation.last_run.as_mut().ok_or(Error::NotFound)?;
+        let result = self.drive(state, &MemoryCheckpoint, control).await;
+        conversation
+            .history
+            .extend(state.history[old_len..].iter().cloned());
+        result?;
+        match &state.phase {
+            Phase::Settled(Settlement::Completed(value)) => {
+                O::deserialize(value).map_err(|e| Error::Invalid(e.to_string()))
+            }
+            Phase::Settled(other) => Err(Error::Invalid(format!("run settled: {other:?}"))),
+            _ => Err(Error::Invalid(
+                "run is waiting; resolve Conversation::last_run and call Agent::resume".into(),
+            )),
+        }
     }
 }
 impl Definition {
@@ -253,7 +384,7 @@ where
     /// outside 1..=256 bytes, a zero parallelism, byte limit or timeout, a duplicate, unbounded
     /// or unversioned tool name, an idempotent tool without a retry contract, or a derived
     /// context cap above `max_context_bytes`.
-    pub fn build(self) -> Result<Agent> {
+    pub fn build(self) -> Result<Agent<I, O>> {
         let Self {
             id,
             instructions,
@@ -326,6 +457,7 @@ where
         definition.binding = Arc::new(definition.compose_binding());
         Ok(Agent {
             definition: Arc::new(definition),
+            types: PhantomData,
         })
     }
 }
@@ -359,94 +491,8 @@ pub struct Conversation {
     /// Retains waits and uncertain outcomes even when the convenience API returns an error.
     pub last_run: Option<RunState>,
 }
-#[derive(Clone)]
-pub struct Engine {
-    agent: Agent,
-}
-impl Engine {
-    pub fn new(agent: Agent) -> Self {
-        Self { agent }
-    }
-    pub fn agent(&self) -> &Agent {
-        &self.agent
-    }
-    /// Convenience API for runs that finish without application input. Use `drive` for resumable waits.
-    pub async fn run<I: Serialize, O: DeserializeOwned>(
-        &self,
-        conversation: &mut Conversation,
-        input: I,
-    ) -> Result<O> {
-        if conversation.last_run.as_ref().is_some_and(|run| {
-            !run.is_terminal()
-                || run.operations.iter().any(|operation| {
-                    matches!(
-                        operation.status,
-                        OperationStatus::Unknown { .. } | OperationStatus::Dispatched
-                    )
-                })
-        }) {
-            return Err(Error::ConversationBusy);
-        }
-        let input = serde_json::to_value(input).map_err(|e| Error::Invalid(e.to_string()))?;
-        let state = self
-            .agent
-            .new_run("memory", input, &conversation.history, None)?;
-        conversation.last_run = Some(state);
-        self.resume_from(conversation, RunControl::default(), 0)
-            .await
-    }
-    /// Resume a retained in-memory run after resolving its wait through `last_run`.
-    pub async fn resume<O: DeserializeOwned>(
-        &self,
-        conversation: &mut Conversation,
-        control: RunControl,
-    ) -> Result<O> {
-        let old_len = conversation
-            .last_run
-            .as_ref()
-            .ok_or(Error::NotFound)?
-            .history
-            .len();
-        self.resume_from(conversation, control, old_len).await
-    }
-    async fn resume_from<O: DeserializeOwned>(
-        &self,
-        conversation: &mut Conversation,
-        control: RunControl,
-        old_len: usize,
-    ) -> Result<O> {
-        let state = conversation.last_run.as_mut().ok_or(Error::NotFound)?;
-        let result = self.drive(state, &MemoryCheckpoint, control).await;
-        conversation
-            .history
-            .extend(state.history[old_len..].iter().cloned());
-        result?;
-        match &state.phase {
-            Phase::Settled(Settlement::Completed(value)) => {
-                serde_json::from_value(value.clone()).map_err(|e| Error::Invalid(e.to_string()))
-            }
-            Phase::Settled(other) => Err(Error::Invalid(format!("run settled: {other:?}"))),
-            _ => Err(Error::Invalid(
-                "run is waiting; resolve Conversation::last_run and call Engine::resume".into(),
-            )),
-        }
-    }
-    /// Drives the same state machine for memory and durable execution. No child work is detached.
-    pub async fn drive(
-        &self,
-        state: &mut RunState,
-        checkpoint: &dyn Checkpoint,
-        control: RunControl,
-    ) -> Result<()> {
-        self.agent
-            .definition
-            .drive(state, checkpoint, control)
-            .await
-    }
-}
-/// The engine's state machine runs on the shared definition of the agent being driven.
+/// The state machine runs on the shared definition of the agent being driven.
 impl Definition {
-    /// Drives the same state machine for memory and durable execution. No child work is detached.
     #[tracing::instrument(skip_all, fields(run_id = %state.id))]
     async fn drive(
         &self,

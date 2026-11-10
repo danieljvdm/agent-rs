@@ -162,7 +162,7 @@ async fn settled_run_state_history_and_operations_survive_reopening() {
         .await
         .unwrap();
     let mut state = db.claim(earlier).await.unwrap();
-    Engine::new(agent.clone())
+    agent
         .drive(&mut state, db.as_ref(), RunControl::default())
         .await
         .unwrap();
@@ -171,7 +171,7 @@ async fn settled_run_state_history_and_operations_survive_reopening() {
         .await
         .unwrap();
     let mut state = db.claim(id).await.unwrap();
-    Engine::new(agent)
+    agent
         .drive(&mut state, db.as_ref(), RunControl::default())
         .await
         .unwrap();

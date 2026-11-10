@@ -539,7 +539,7 @@ struct Session {
     host: Host<SqliteStore>,
 }
 impl Session {
-    async fn open(directory: &Path, agent: Agent) -> Result<Self> {
+    async fn open(directory: &Path, agent: Agent<WorkflowInput, WorkflowOutput>) -> Result<Self> {
         let store = Arc::new(SqliteStore::open(directory.join("runtime.sqlite")).await?);
         match Host::start(
             store.clone(),
@@ -565,7 +565,7 @@ impl Session {
 }
 struct Runner {
     session: Option<Session>,
-    agent: Agent,
+    agent: Agent<WorkflowInput, WorkflowOutput>,
     environment: Arc<Environment>,
     id: Option<RunId>,
     restarts: Vec<Restart>,

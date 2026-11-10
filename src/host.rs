@@ -52,11 +52,12 @@ pub struct Host<S: DurableStore + ?Sized> {
     task: Option<JoinHandle<Result<()>>>,
 }
 impl<S: DurableStore + ?Sized + 'static> Host<S> {
-    pub fn start(store: Arc<S>, agent: Agent, options: HostOptions) -> Result<Self> {
-        Self::start_agents(store, [agent], options)
+    /// Host one agent, of any input and output types.
+    pub fn start<I, O>(store: Arc<S>, agent: Agent<I, O>, options: HostOptions) -> Result<Self> {
+        Self::start_agents(store, [agent.erased()], options)
     }
-    /// Host several agents over one store. Each claimed run executes with the agent whose ID
-    /// it recorded at acceptance; a run whose agent is not registered here keeps a visible
+    /// Host several agents over one store, erased with [`Agent::erased`] when their types
+    /// differ. Each claimed run executes with the agent whose ID it recorded at acceptance; a run whose agent is not registered here keeps a visible
     /// `Incompatible` error until a host with that agent retries it.
     pub fn start_agents(
         store: Arc<S>,
@@ -288,7 +289,7 @@ async fn schedule<S: DurableStore + ?Sized + 'static>(
                             state.agent_id
                         )));
                     };
-                    let result = Engine::new(agent.clone())
+                    let result = agent
                         .drive(&mut state, &StoreCheckpoint(store.as_ref()), control)
                         .await;
                     position = Some(CheckpointPosition::from(&state));

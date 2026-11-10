@@ -105,11 +105,10 @@ mod demo {
             .input::<String>()
             .output::<String>()
             .build()?;
-        let engine = Engine::new(agent.clone());
         let mut store = SqliteStore::open(&path).await?;
         let id = store
             .accept(
-                &agent,
+                &agent.erased(),
                 "personal",
                 "request-1",
                 json!("Record a reminder"),
@@ -118,7 +117,7 @@ mod demo {
             .await?;
         println!("Accepted {id} in {}", path.display());
         let mut state = store.claim(id).await?;
-        engine
+        agent
             .drive(&mut state, &store, RunControl::default())
             .await?;
         assert!(matches!(
@@ -132,7 +131,7 @@ mod demo {
             .resolve(id, "review", Resolution::Approve(true))
             .await?;
         state = store.claim(id).await?;
-        engine
+        agent
             .drive(&mut state, &store, RunControl::default())
             .await?;
         assert!(matches!(
@@ -146,7 +145,7 @@ mod demo {
             .resolve(id, "details", Resolution::Input(json!("Call the dentist")))
             .await?;
         state = store.claim(id).await?;
-        engine
+        agent
             .drive(&mut state, &store, RunControl::default())
             .await?;
         let deadline = match state.operations[0].status {
@@ -161,7 +160,7 @@ mod demo {
         assert!(store.due(now_ms(), 8).await?.contains(&id));
         state = store.claim(id).await?;
         assert_eq!(state.usage.active_ms, budget_before_wait);
-        let failure = engine
+        let failure = agent
             .drive(&mut state, &LoseOutcome(&store), RunControl::default())
             .await;
         assert!(matches!(failure, Err(Error::Storage(_))));
@@ -170,7 +169,7 @@ mod demo {
 
         store = reopen(&path, store).await?;
         state = store.claim(id).await?;
-        engine
+        agent
             .drive(&mut state, &store, RunControl::default())
             .await?;
         assert!(matches!(
@@ -191,7 +190,7 @@ mod demo {
             )
             .await?;
         state = store.claim(id).await?;
-        engine
+        agent
             .drive(&mut state, &store, RunControl::default())
             .await?;
         assert_eq!(
