@@ -17,6 +17,8 @@ pub mod memory;
 mod model;
 #[cfg(feature = "openai")]
 pub mod openai;
+#[cfg(feature = "postgres")]
+pub mod postgres;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 mod steering;
