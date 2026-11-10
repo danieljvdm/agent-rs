@@ -166,10 +166,7 @@ fn cases() -> Vec<Case> {
                 ModelResponse::final_output(json!("done")),
             ]))
             .tool(blob)
-            .limits(Limits {
-                max_context_bytes: 512,
-                ..Limits::default()
-            }),
+            .limits(Limits::default().with_max_context_bytes(512)),
             Expect::Fails(&["current input and pinned history exceed context limit"]),
         ),
         Case {
@@ -386,10 +383,7 @@ async fn run_reports_a_stopped_run_with_its_reason() {
             output: 8,
         },
     }]);
-    let limits = Limits {
-        max_tokens: 10,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_tokens(10);
     let agent = typed(model, vec![], limits);
     let mut conversation = Conversation::default();
     let error = agent.run(&mut conversation, "go").await.unwrap_err();
@@ -481,10 +475,7 @@ fn rejected_requests_name_their_kind() {
         Err(Error::Config(_))
     ));
     // The conversation's newest entry cannot fit the context limit beside the new input.
-    let small = Limits {
-        max_context_bytes: 16,
-        ..Limits::default()
-    };
+    let small = Limits::default().with_max_context_bytes(16);
     let entry = HistoryEntry::Input(json!("x".repeat(64)));
     assert!(matches!(
         typed(done(), vec![], small).new_run("c", json!("go"), &[entry], None),

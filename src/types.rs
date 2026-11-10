@@ -4,23 +4,119 @@ use serde_json::{Value, json};
 use std::{
     fmt,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
 pub(crate) const STATE_VERSION: u32 = 1;
 pub type RunId = Uuid;
+/// Bounds on one run, set with [`AgentBuilder::limits`](crate::AgentBuilder::limits). Start from
+/// [`Limits::default`] and change what differs:
+///
+/// ```
+/// # use std::time::Duration;
+/// # use yielded_agent::Limits;
+/// let limits = Limits::default()
+///     .with_max_model_calls(8)
+///     .with_operation_timeout(Duration::from_secs(5));
+/// assert_eq!(limits.operation_timeout_ms, 5_000);
+/// ```
+///
+/// Limits are part of the agent's [`binding`](crate::Agent::binding) and are recorded with every
+/// run it accepts, so a stored run resumes only under the limits it was accepted with. Times are
+/// held in whole milliseconds because that is how they are recorded.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub struct Limits {
+    /// Model calls per run, counting every attempt. The run stops with
+    /// [`StopReason::ModelCalls`] instead of starting another. Default 32.
     pub max_model_calls: u32,
+    /// Tool executions per run, counting every dispatch, including retries. A response with more
+    /// calls fails the run; a batch whose calls would exceed what remains stops it with
+    /// [`StopReason::ToolCalls`] before any of them starts. Default 128.
     pub max_tool_calls: u32,
+    /// Input plus output tokens the model reports across the run. Reaching it stops the run with
+    /// [`StopReason::Tokens`]; providers see what remains in
+    /// [`ModelRequest::remaining_tokens`](crate::ModelRequest::remaining_tokens).
+    /// Default 100,000.
     pub max_tokens: u64,
+    /// Tool calls of one run that execute at once. At least 1. Default 4.
     pub max_parallel_tools: usize,
+    /// Bytes of streamed text and of the encoded response in one model turn; a turn that exceeds
+    /// it fails the run. Also bounds the number of stream events. At least 1. Default 1 MiB.
     pub max_response_bytes: usize,
+    /// Encoded bytes of one tool output or wait request, an input reply or a reconciled result.
+    /// A larger tool output is handled like a tool error. Also bounds a failed run's recorded
+    /// message. At least 1. Default 256 KiB.
     pub max_tool_output_bytes: usize,
+    /// Encoded bytes of the history and derived context sent on one model turn; see
+    /// [`ContextPolicy`](crate::ContextPolicy). The run's input must fit on its own. At least 2.
+    /// Default 2 MiB.
     pub max_context_bytes: usize,
+    /// Deadline in milliseconds for each model call, tool call and authorization. Positive.
+    /// Default 30,000.
     pub operation_timeout_ms: u64,
+    /// Deadline in milliseconds for each model or tool cleanup. Positive. Default 1,000.
     pub cleanup_timeout_ms: u64,
+    /// Active milliseconds a run may spend in model and tool operations, including their cleanup
+    /// allowance; waiting for approval, input or a timer does not count. Exhausting it stops the
+    /// run with [`StopReason::ActiveBudget`]. Default 600,000.
     pub active_budget_ms: u64,
+}
+impl Limits {
+    /// Sets [`max_model_calls`](Self::max_model_calls).
+    pub fn with_max_model_calls(mut self, calls: u32) -> Self {
+        self.max_model_calls = calls;
+        self
+    }
+    /// Sets [`max_tool_calls`](Self::max_tool_calls).
+    pub fn with_max_tool_calls(mut self, calls: u32) -> Self {
+        self.max_tool_calls = calls;
+        self
+    }
+    /// Sets [`max_tokens`](Self::max_tokens).
+    pub fn with_max_tokens(mut self, tokens: u64) -> Self {
+        self.max_tokens = tokens;
+        self
+    }
+    /// Sets [`max_parallel_tools`](Self::max_parallel_tools).
+    pub fn with_max_parallel_tools(mut self, tools: usize) -> Self {
+        self.max_parallel_tools = tools;
+        self
+    }
+    /// Sets [`max_response_bytes`](Self::max_response_bytes).
+    pub fn with_max_response_bytes(mut self, bytes: usize) -> Self {
+        self.max_response_bytes = bytes;
+        self
+    }
+    /// Sets [`max_tool_output_bytes`](Self::max_tool_output_bytes).
+    pub fn with_max_tool_output_bytes(mut self, bytes: usize) -> Self {
+        self.max_tool_output_bytes = bytes;
+        self
+    }
+    /// Sets [`max_context_bytes`](Self::max_context_bytes).
+    pub fn with_max_context_bytes(mut self, bytes: usize) -> Self {
+        self.max_context_bytes = bytes;
+        self
+    }
+    /// Sets [`operation_timeout_ms`](Self::operation_timeout_ms), rounded up to a millisecond.
+    pub fn with_operation_timeout(mut self, timeout: Duration) -> Self {
+        self.operation_timeout_ms = whole_ms(timeout);
+        self
+    }
+    /// Sets [`cleanup_timeout_ms`](Self::cleanup_timeout_ms), rounded up to a millisecond.
+    pub fn with_cleanup_timeout(mut self, timeout: Duration) -> Self {
+        self.cleanup_timeout_ms = whole_ms(timeout);
+        self
+    }
+    /// Sets [`active_budget_ms`](Self::active_budget_ms), rounded up to a millisecond.
+    pub fn with_active_budget(mut self, budget: Duration) -> Self {
+        self.active_budget_ms = whole_ms(budget);
+        self
+    }
+}
+/// Whole milliseconds, rounded up so that a positive duration never becomes zero.
+fn whole_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos().div_ceil(1_000_000)).unwrap_or(u64::MAX)
 }
 impl Default for Limits {
     fn default() -> Self {

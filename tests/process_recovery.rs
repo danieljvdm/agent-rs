@@ -250,14 +250,14 @@ fn agent(config: &Config) -> Agent {
     )
     .instructions("Run the deterministic process recovery scenario.")
     .tools(tools)
-    .limits(Limits {
-        max_model_calls: config.max_model_calls,
-        max_tool_calls: 8,
-        operation_timeout_ms: 5_000,
-        cleanup_timeout_ms: 100,
-        active_budget_ms: 30_000,
-        ..Limits::default()
-    })
+    .limits(
+        Limits::default()
+            .with_max_model_calls(config.max_model_calls)
+            .with_max_tool_calls(8)
+            .with_operation_timeout(Duration::from_millis(5_000))
+            .with_cleanup_timeout(Duration::from_millis(100))
+            .with_active_budget(Duration::from_millis(30_000)),
+    )
     .build()
     .unwrap()
 }

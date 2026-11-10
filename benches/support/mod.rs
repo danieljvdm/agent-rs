@@ -262,10 +262,7 @@ impl Fixture {
         let agent = Agent::builder("benchmark", model)
             .instructions("Return the scripted result.")
             .tool(tool)
-            .limits(Limits {
-                max_parallel_tools: bound,
-                ..Limits::default()
-            })
+            .limits(Limits::default().with_max_parallel_tools(bound))
             .input::<Input>()
             .output::<Output>()
             .build()

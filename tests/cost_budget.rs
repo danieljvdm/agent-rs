@@ -525,10 +525,7 @@ async fn sliding_window_starts_the_next_call_when_a_slot_frees() {
     )
     .instructions("Sleep.")
     .tool(tool)
-    .limits(Limits {
-        max_parallel_tools: 4,
-        ..Limits::default()
-    })
+    .limits(Limits::default().with_max_parallel_tools(4))
     .build()
     .unwrap();
     let mut conversation = Conversation::default();

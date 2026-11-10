@@ -78,18 +78,9 @@ fn build_rejects_each_invalid_definition() {
     assert_eq!(reason(Agent::builder("a".repeat(257), model.clone())), ids);
     let limits = "parallelism, byte limits, and timeouts must be positive";
     for invalid in [
-        Limits {
-            max_parallel_tools: 0,
-            ..Limits::default()
-        },
-        Limits {
-            max_context_bytes: 1,
-            ..Limits::default()
-        },
-        Limits {
-            cleanup_timeout_ms: 0,
-            ..Limits::default()
-        },
+        Limits::default().with_max_parallel_tools(0),
+        Limits::default().with_max_context_bytes(1),
+        Limits::default().with_cleanup_timeout(Duration::from_millis(0)),
     ] {
         assert_eq!(
             reason(Agent::builder("a", model.clone()).limits(invalid)),
@@ -125,10 +116,7 @@ fn build_rejects_each_invalid_definition() {
         "idempotent tools require a retry contract"
     );
     // The cap is checked against the final limits, set before or after the policy.
-    let small = Limits {
-        max_context_bytes: 64,
-        ..Limits::default()
-    };
+    let small = Limits::default().with_max_context_bytes(64);
     assert_eq!(
         reason(
             Agent::builder("a", model.clone())
@@ -307,10 +295,7 @@ async fn bounded_parallelism_sequential_barriers_history_order_and_cleanup() {
         ModelResponse::tools(calls),
         ModelResponse::final_output(json!("done")),
     ]));
-    let limits = Limits {
-        max_parallel_tools: 2,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_parallel_tools(2);
     let agent = agent(model.clone(), tools, limits);
     let mut state = state(&agent);
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
@@ -429,10 +414,7 @@ async fn recovered_model_attempt_does_not_replenish_call_budget() {
     let agent = agent(
         model.clone(),
         vec![],
-        Limits {
-            max_model_calls: 1,
-            ..Limits::default()
-        },
+        Limits::default().with_max_model_calls(1),
     );
     let mut state = state(&agent);
     state.phase = Phase::ModelInFlight;
@@ -509,10 +491,7 @@ fn context_keeps_whole_groups_and_rejects_an_oversized_newest_group() {
     let limit = serde_json::to_vec(&vec![group.clone()]).unwrap().len();
     // A run accepts the bounded suffix of its conversation that fits the context limit.
     let accept = |max_context_bytes, conversation: &[HistoryEntry]| {
-        let limits = Limits {
-            max_context_bytes,
-            ..Limits::default()
-        };
+        let limits = Limits::default().with_max_context_bytes(max_context_bytes);
         agent(Arc::new(ScriptedModel::new(vec![])), vec![], limits).new_run(
             "c",
             json!("go"),
@@ -542,10 +521,7 @@ async fn empty_stream_events_have_a_hard_bound() {
     let agent = agent(
         Arc::new(EndlessModel),
         vec![],
-        Limits {
-            max_response_bytes: 16,
-            ..Limits::default()
-        },
+        Limits::default().with_max_response_bytes(16),
     );
     let mut state = state(&agent);
     let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
@@ -1088,10 +1064,7 @@ async fn idempotent_timeout_keeps_mutation_uncertainty() {
     let agent = agent(
         model,
         vec![tool],
-        Limits {
-            operation_timeout_ms: 30,
-            ..Limits::default()
-        },
+        Limits::default().with_operation_timeout(Duration::from_millis(30)),
     );
     let mut state = state(&agent);
     agent
@@ -1148,10 +1121,7 @@ async fn wait_or_unknown_outcome_stops_further_dispatch_until_resolved() {
         let agent = agent(
             model,
             vec![slow, wait, fail],
-            Limits {
-                max_parallel_tools: 2,
-                ..Limits::default()
-            },
+            Limits::default().with_max_parallel_tools(2),
         );
         let mut state = state(&agent);
         for _ in 0..2 {
@@ -1377,10 +1347,7 @@ async fn model_context_fits_truncates_suffix_and_repins_current_input() {
     let agent = agent(
         model.clone(),
         vec![tool],
-        Limits {
-            max_context_bytes: max,
-            ..Limits::default()
-        },
+        Limits::default().with_max_context_bytes(max),
     );
     let mut state = agent
         .new_run("test", json!("go"), std::slice::from_ref(&prior), None)
@@ -1419,10 +1386,7 @@ async fn input_and_latest_exchange_that_cannot_fit_fail_inside_the_model_operati
     let agent = agent(
         model.clone(),
         vec![tool],
-        Limits {
-            max_context_bytes: 512,
-            ..Limits::default()
-        },
+        Limits::default().with_max_context_bytes(512),
     );
     let mut state = state(&agent);
     agent

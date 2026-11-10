@@ -447,10 +447,7 @@ async fn history_is_ordered_and_context_is_bounded(fixture: &impl Fixture) {
     store.commit(&mut state).await.unwrap();
     let bounded = Agent::builder("bounded", Arc::new(ScriptedModel::new(vec![])))
         .instructions("test")
-        .limits(Limits {
-            max_context_bytes: 512,
-            ..Limits::default()
-        })
+        .limits(Limits::default().with_max_context_bytes(512))
         .build()
         .unwrap();
     let id = store

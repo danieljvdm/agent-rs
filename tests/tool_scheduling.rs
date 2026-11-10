@@ -237,10 +237,7 @@ async fn next_call_starts_when_a_slot_frees_and_results_keep_declaration_order()
     let agent = agent(
         vec![sleeps(&delays)],
         vec![sleeper.tool(spec("sleep"))],
-        Limits {
-            max_parallel_tools: 4,
-            ..Limits::default()
-        },
+        Limits::default().with_max_parallel_tools(4),
     );
     let mut state = state(&agent);
     agent
@@ -282,11 +279,9 @@ async fn each_call_times_out_from_its_own_start() {
     let agent = agent(
         vec![sleeps(&[10, 30, 45, 60])],
         vec![sleeper.tool(spec("sleep"))],
-        Limits {
-            max_parallel_tools: 2,
-            operation_timeout_ms: 50,
-            ..Limits::default()
-        },
+        Limits::default()
+            .with_max_parallel_tools(2)
+            .with_operation_timeout(Duration::from_millis(50)),
     );
     let mut state = state(&agent);
     agent
@@ -326,10 +321,7 @@ async fn sequential_call_waits_for_running_calls_and_runs_alone() {
     let agent = agent(
         vec![calls],
         vec![sleeper.tool(spec("sleep")), sleeper.tool(alone)],
-        Limits {
-            max_parallel_tools: 2,
-            ..Limits::default()
-        },
+        Limits::default().with_max_parallel_tools(2),
     );
     let mut state = state(&agent);
     agent
@@ -373,10 +365,7 @@ async fn failed_commit_never_starts_the_next_call_and_still_drains_running_calls
     let agent = agent(
         vec![sleeps(&[10, 50, 10])],
         vec![sleeper.tool(spec("sleep"))],
-        Limits {
-            max_parallel_tools: 2,
-            ..Limits::default()
-        },
+        Limits::default().with_max_parallel_tools(2),
     );
     let mut state = state(&agent);
     let result = agent
@@ -403,10 +392,7 @@ async fn failed_commit_never_starts_the_next_call_and_still_drains_running_calls
 async fn intent_and_active_time_are_committed_before_each_call_starts() {
     let journal = Journal::default();
     let sleeper = Sleeper::new(&journal);
-    let limits = Limits {
-        max_parallel_tools: 2,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_parallel_tools(2);
     let lease = limits.operation_timeout_ms + limits.cleanup_timeout_ms;
     let agent = agent(
         vec![sleeps(&[30, 10, 20, 10, 10])],
@@ -453,10 +439,7 @@ async fn calls_behind_a_wait_are_never_committed_as_dispatched() {
     let agent = agent(
         vec![calls],
         vec![sleeper.tool(spec("sleep")), wait],
-        Limits {
-            max_parallel_tools: 2,
-            ..Limits::default()
-        },
+        Limits::default().with_max_parallel_tools(2),
     );
     let mut state = state(&agent);
     agent
@@ -487,10 +470,7 @@ async fn denial_stops_dispatch_and_keeps_outcomes_already_recorded() {
         let agent = builder(
             vec![sleeps(&[10, 10])],
             vec![sleeper.tool(spec("sleep"))],
-            Limits {
-                max_parallel_tools: slots,
-                ..Limits::default()
-            },
+            Limits::default().with_max_parallel_tools(slots),
         )
         .authorizer(Arc::new(DenyCall("c1")))
         .build()
@@ -522,10 +502,7 @@ async fn shutdown_drains_running_calls_and_leaves_unstarted_calls_pending() {
     let agent = agent(
         vec![sleeps(&[50, 10, 100, 10])],
         vec![sleeper.tool(spec("sleep"))],
-        Limits {
-            max_parallel_tools: 2,
-            ..Limits::default()
-        },
+        Limits::default().with_max_parallel_tools(2),
     );
     let mut state = state(&agent);
     let shutdown = CancellationToken::new();
@@ -579,10 +556,7 @@ async fn tool_call_limit_stops_a_batch_before_any_of_it_starts() {
             })
             .collect(),
         vec![sleeper.tool(spec("sleep"))],
-        Limits {
-            max_tool_calls: 3,
-            ..Limits::default()
-        },
+        Limits::default().with_max_tool_calls(3),
     );
     let mut state = state(&agent);
     agent
@@ -622,13 +596,11 @@ async fn active_budget_caps_the_last_call_and_is_never_exceeded() {
     let agent = agent(
         vec![sleeps(&[600, 600, 600])],
         vec![sleeper.tool(spec("sleep"))],
-        Limits {
-            max_parallel_tools: 1,
-            operation_timeout_ms: 1_000,
-            cleanup_timeout_ms: 100,
-            active_budget_ms: 1_500,
-            ..Limits::default()
-        },
+        Limits::default()
+            .with_max_parallel_tools(1)
+            .with_operation_timeout(Duration::from_millis(1_000))
+            .with_cleanup_timeout(Duration::from_millis(100))
+            .with_active_budget(Duration::from_millis(1_500)),
     );
     let mut state = state(&agent);
     agent

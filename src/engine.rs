@@ -127,7 +127,7 @@ impl Agent {
     /// # fn main() -> Result<()> {
     /// let agent = Agent::builder("support", Arc::new(ScriptedModel::new(vec![])))
     ///     .instructions("Answer briefly.")
-    ///     .limits(Limits { max_model_calls: 8, ..Limits::default() })
+    ///     .limits(Limits::default().with_max_model_calls(8))
     ///     .build()?;
     /// assert_eq!(agent.id(), "support");
     /// # Ok(())

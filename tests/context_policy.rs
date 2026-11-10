@@ -127,10 +127,7 @@ fn agent(model: Arc<dyn Model>, max_context_bytes: usize) -> AgentBuilder {
     Agent::builder("context-policy", model)
         .instructions("test")
         .tools(tools())
-        .limits(Limits {
-            max_context_bytes,
-            ..Limits::default()
-        })
+        .limits(Limits::default().with_max_context_bytes(max_context_bytes))
 }
 fn len<T: serde::Serialize + ?Sized>(value: &T) -> usize {
     serde_json::to_vec(value).unwrap().len()
@@ -336,10 +333,7 @@ fn binding_encoding_is_stable_for_an_unchanged_definition() {
             temperature: Some(0.5),
         })
         .tools(tools())
-        .limits(Limits {
-            max_context_bytes: 4096,
-            ..Limits::default()
-        })
+        .limits(Limits::default().with_max_context_bytes(4096))
         .input::<Question>()
         .output::<Answer>()
         .context_policy(Arc::new(PinNotes), 64)
@@ -379,10 +373,7 @@ async fn preparation_obeys_cancellation_and_deadline_then_cleans_up() {
         let model = Arc::new(ScriptedModel::new(vec![]));
         let agent = Agent::builder("context-policy", model.clone())
             .instructions("test")
-            .limits(Limits {
-                operation_timeout_ms: 20,
-                ..Limits::default()
-            })
+            .limits(Limits::default().with_operation_timeout(std::time::Duration::from_millis(20)))
             .context_policy(policy.clone(), 512)
             .build()
             .unwrap();

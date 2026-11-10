@@ -954,15 +954,15 @@ pub async fn run_case(
         temperature: Some(0.0),
     })
     .tools(tools(environment.clone()))
-    .limits(Limits {
-        max_model_calls: 8,
-        max_tool_calls: 12,
-        max_tokens: 20_000,
-        max_parallel_tools: 2,
-        operation_timeout_ms: 60_000,
-        active_budget_ms: 240_000,
-        ..Limits::default()
-    })
+    .limits(
+        Limits::default()
+            .with_max_model_calls(8)
+            .with_max_tool_calls(12)
+            .with_max_tokens(20_000)
+            .with_max_parallel_tools(2)
+            .with_operation_timeout(Duration::from_millis(60_000))
+            .with_active_budget(Duration::from_millis(240_000)),
+    )
     .input::<WorkflowInput>()
     .output::<WorkflowOutput>()
     .build()?;
