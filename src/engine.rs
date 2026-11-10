@@ -243,7 +243,7 @@ impl<I: Serialize + 'static, O: DeserializeOwned> Agent<I, O> {
     ///     Err(Error::Waiting) => {
     ///         let run = conversation.last_run.as_mut().expect("retained");
     ///         let call_id = run.operations[0].call.id.clone();
-    ///         resolve(run, &call_id, Resolution::Approve(true))?;
+    ///         run.resolve(&call_id, Resolution::Approve(true))?;
     ///         let reply = agent.resume(&mut conversation, RunControl::default()).await?;
     ///         println!("{reply}");
     ///     }
@@ -1577,55 +1577,4 @@ async fn run_work<T>(
         _ = tokio::time::sleep_until(deadline) => WorkOutcome::TimedOut,
         result = future => WorkOutcome::Done(result),
     }
-}
-/// Resolve only the exact outstanding operation. Resolution itself must be committed by the caller.
-/// Reconciliation is allowed after cancellation so uncertainty stays visible and resolvable.
-pub fn resolve(state: &mut RunState, call_id: &str, resolution: Resolution) -> Result<()> {
-    let op = state
-        .operations
-        .iter_mut()
-        .find(|op| op.call.id == call_id)
-        .ok_or(Error::NotWaiting)?;
-    let next = match (&op.status, resolution) {
-        (OperationStatus::Approval, Resolution::Approve(true))
-            if !matches!(state.phase, Phase::Settled(_)) =>
-        {
-            op.approved = true;
-            OperationStatus::Pending
-        }
-        (OperationStatus::Approval, Resolution::Approve(false))
-            if !matches!(state.phase, Phase::Settled(_)) =>
-        {
-            OperationStatus::Complete(ToolResult {
-                call_id: call_id.into(),
-                value: json!({"error":"approval denied"}),
-                is_error: true,
-            })
-        }
-        (OperationStatus::Waiting(WaitRequest::Input { .. }), Resolution::Input(value))
-            if !matches!(state.phase, Phase::Settled(_)) =>
-        {
-            if encoded_len(&value) > state.limits.max_tool_output_bytes {
-                return Err(Error::input("input reply exceeds byte limit"));
-            }
-            OperationStatus::Complete(ToolResult {
-                call_id: call_id.into(),
-                value,
-                is_error: false,
-            })
-        }
-        (OperationStatus::Unknown { .. }, Resolution::Reconcile(result)) => {
-            if result.call_id != call_id
-                || encoded_len(&result.value) > state.limits.max_tool_output_bytes
-            {
-                return Err(Error::input(
-                    "reconciliation result identity or size is invalid",
-                ));
-            }
-            OperationStatus::Complete(result)
-        }
-        _ => return Err(Error::NotWaiting),
-    };
-    op.status = next;
-    Ok(())
 }

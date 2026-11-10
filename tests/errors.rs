@@ -347,13 +347,14 @@ async fn run_reports_a_waiting_run_and_resume_completes_it() {
         Err(Error::Waiting)
     ));
     let run = conversation.last_run.as_mut().unwrap();
-    resolve(run, "ask", Resolution::Approve(true)).unwrap();
+    run.resolve("ask", Resolution::Approve(true)).unwrap();
     assert!(matches!(
         agent.resume(&mut conversation, RunControl::default()).await,
         Err(Error::Waiting)
     ));
     let run = conversation.last_run.as_mut().unwrap();
-    resolve(run, "ask", Resolution::Input(json!("here"))).unwrap();
+    run.resolve("ask", Resolution::Input(json!("here")))
+        .unwrap();
     let reply = agent
         .resume(&mut conversation, RunControl::default())
         .await

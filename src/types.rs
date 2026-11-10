@@ -1,5 +1,6 @@
+use crate::{Error, Result, context::encoded_len};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -231,6 +232,60 @@ impl RunState {
                 .operations
                 .iter()
                 .any(|op| matches!(op.status, OperationStatus::Dispatched))
+    }
+    /// Answers the operation `call_id` is blocked on, in memory: an approval, an input wait, or
+    /// the reconciliation of an unknown outcome. The caller commits the change, or calls
+    /// [`Agent::resume`](crate::Agent::resume), which does; a durable run is resolved through
+    /// its store or host instead. Reconciliation is allowed after cancellation, so uncertainty
+    /// stays visible and resolvable.
+    ///
+    /// Fails with [`Error::NotWaiting`] unless `resolution` matches what that operation waits
+    /// for, and with [`Error::Input`] for an input reply or reconciled value larger than
+    /// `max_tool_output_bytes` or a reconciliation for another call.
+    pub fn resolve(&mut self, call_id: &str, resolution: Resolution) -> Result<()> {
+        let settled = self.is_terminal();
+        let max_bytes = self.limits.max_tool_output_bytes;
+        let op = self
+            .operations
+            .iter_mut()
+            .find(|op| op.call.id == call_id)
+            .ok_or(Error::NotWaiting)?;
+        let next = match (&op.status, resolution) {
+            (OperationStatus::Approval, Resolution::Approve(true)) if !settled => {
+                op.approved = true;
+                OperationStatus::Pending
+            }
+            (OperationStatus::Approval, Resolution::Approve(false)) if !settled => {
+                OperationStatus::Complete(ToolResult {
+                    call_id: call_id.into(),
+                    value: json!({"error":"approval denied"}),
+                    is_error: true,
+                })
+            }
+            (OperationStatus::Waiting(WaitRequest::Input { .. }), Resolution::Input(value))
+                if !settled =>
+            {
+                if encoded_len(&value) > max_bytes {
+                    return Err(Error::input("input reply exceeds byte limit"));
+                }
+                OperationStatus::Complete(ToolResult {
+                    call_id: call_id.into(),
+                    value,
+                    is_error: false,
+                })
+            }
+            (OperationStatus::Unknown { .. }, Resolution::Reconcile(result)) => {
+                if result.call_id != call_id || encoded_len(&result.value) > max_bytes {
+                    return Err(Error::input(
+                        "reconciliation result identity or size is invalid",
+                    ));
+                }
+                OperationStatus::Complete(result)
+            }
+            _ => return Err(Error::NotWaiting),
+        };
+        op.status = next;
+        Ok(())
     }
 }
 #[derive(Clone, Debug)]

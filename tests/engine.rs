@@ -390,7 +390,9 @@ async fn approval_and_input_waits_do_not_consume_budget_while_waiting() {
         .await
         .unwrap();
     assert_eq!(usage, state.usage);
-    resolve(&mut state, "question", Resolution::Approve(true)).unwrap();
+    state
+        .resolve("question", Resolution::Approve(true))
+        .unwrap();
     agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
@@ -405,7 +407,9 @@ async fn approval_and_input_waits_do_not_consume_budget_while_waiting() {
         .await
         .unwrap();
     assert_eq!(usage, state.usage);
-    resolve(&mut state, "question", Resolution::Input(json!("there"))).unwrap();
+    state
+        .resolve("question", Resolution::Input(json!("there")))
+        .unwrap();
     agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
@@ -475,16 +479,16 @@ async fn cancellation_retains_unknown_mutation_and_allows_reconciliation() {
         state.operations[0].status,
         OperationStatus::Unknown { .. }
     ));
-    resolve(
-        &mut state,
-        "effect",
-        Resolution::Reconcile(ToolResult {
-            call_id: "effect".into(),
-            value: json!("actually succeeded"),
-            is_error: false,
-        }),
-    )
-    .unwrap();
+    state
+        .resolve(
+            "effect",
+            Resolution::Reconcile(ToolResult {
+                call_id: "effect".into(),
+                value: json!("actually succeeded"),
+                is_error: false,
+            }),
+        )
+        .unwrap();
     assert_eq!(state.phase, Phase::Settled(Settlement::Cancelled));
     assert!(matches!(
         state.operations[0].status,
@@ -712,12 +716,12 @@ async fn convenience_api_retains_wait_and_can_resume_without_duplicate_history()
         agent.run(&mut conversation, "other").await,
         Err(Error::ConversationBusy)
     ));
-    resolve(
-        conversation.last_run.as_mut().unwrap(),
-        "question",
-        Resolution::Input(json!("here")),
-    )
-    .unwrap();
+    conversation
+        .last_run
+        .as_mut()
+        .unwrap()
+        .resolve("question", Resolution::Input(json!("here")))
+        .unwrap();
     let result: String = agent
         .resume(&mut conversation, RunControl::default())
         .await
@@ -930,7 +934,7 @@ async fn approval_grant_still_requires_current_authorization() {
         OperationStatus::Approval
     ));
     assert_eq!(authorizations.load(Ordering::SeqCst), 0);
-    resolve(&mut state, "effect", Resolution::Approve(true)).unwrap();
+    state.resolve("effect", Resolution::Approve(true)).unwrap();
     agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
@@ -982,16 +986,16 @@ async fn convenience_api_requires_reconciliation_before_replacing_cancelled_run(
         retained.operations[0].status,
         OperationStatus::Unknown { .. }
     ));
-    resolve(
-        retained,
-        "effect",
-        Resolution::Reconcile(ToolResult {
-            call_id: "effect".into(),
-            value: json!("effect accounted for"),
-            is_error: false,
-        }),
-    )
-    .unwrap();
+    retained
+        .resolve(
+            "effect",
+            Resolution::Reconcile(ToolResult {
+                call_id: "effect".into(),
+                value: json!("effect accounted for"),
+                is_error: false,
+            }),
+        )
+        .unwrap();
     let result: String = agent.run(&mut conversation, "next").await.unwrap();
     assert_eq!(result, "new run");
     assert_ne!(conversation.last_run.as_ref().unwrap().id, original_id);
@@ -1042,16 +1046,16 @@ async fn recovered_dispatched_work_becomes_resolvable_when_budgets_or_expiry_sto
             state.operations[0].status,
             OperationStatus::Unknown { .. }
         ));
-        resolve(
-            &mut state,
-            "effect",
-            Resolution::Reconcile(ToolResult {
-                call_id: "effect".into(),
-                value: json!("accounted for"),
-                is_error: false,
-            }),
-        )
-        .unwrap();
+        state
+            .resolve(
+                "effect",
+                Resolution::Reconcile(ToolResult {
+                    call_id: "effect".into(),
+                    value: json!("accounted for"),
+                    is_error: false,
+                }),
+            )
+            .unwrap();
     }
 }
 
@@ -1163,7 +1167,7 @@ async fn wait_or_unknown_outcome_stops_further_dispatch_until_resolved() {
                 is_error: false,
             })
         };
-        resolve(&mut state, "block", resolution).unwrap();
+        state.resolve("block", resolution).unwrap();
         agent
             .drive(&mut state, &MemoryCheckpoint, RunControl::default())
             .await

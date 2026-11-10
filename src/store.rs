@@ -102,7 +102,7 @@ impl RunUpdate {
                 call_id,
                 resolution,
             } => {
-                crate::resolve(state, &call_id, resolution)?;
+                state.resolve(&call_id, resolution)?;
                 Ok(changed)
             }
             Self::Retry if state.is_terminal() => Err(Error::Stale),
