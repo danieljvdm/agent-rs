@@ -15,15 +15,12 @@ mod demo {
     use yielded_agent::{sqlite::SqliteStore, *};
 
     fn spec(name: &str, approval: bool, retry: RetryPolicy) -> ToolSpec {
-        ToolSpec {
-            name: name.into(),
-            description: name.into(),
-            input_schema: Value::Null,
-            version: "1".into(),
-            retry,
-            execution: Execution::Sequential,
-            requires_approval: approval,
-        }
+        ToolSpec::new(name, "1")
+            .with_description(name)
+            .with_input_schema(Value::Null)
+            .with_retry(retry)
+            .with_execution(Execution::Sequential)
+            .with_requires_approval(approval)
     }
     fn call(name: &str) -> ModelResponse {
         ModelResponse::tools(vec![ToolCall {
@@ -208,6 +205,12 @@ mod demo {
             store.operations(id).await?.len()
         );
         store.close().await
+    }
+
+    /// The current UTC Unix time in milliseconds, the unit of run expiry and timer waits.
+    fn now_ms() -> u64 {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+        u64::try_from(now.expect("clock after 1970").as_millis()).expect("milliseconds fit u64")
     }
 }
 #[cfg(feature = "sqlite")]

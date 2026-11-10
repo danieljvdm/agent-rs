@@ -31,7 +31,7 @@ const SQLITE_CONTEXT_COPIES_FOUR_TOOL_ROUNDS: u64 = 1;
 /// 27 transactions do not depend on how much context the conversation retains.
 const SQLITE_CONTEXT_COPIES_CLAIM_TO_SETTLEMENT: u64 = 0;
 /// Record bytes written by the same four-round run with no retained context (with headroom).
-const SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS: u64 = 27_263;
+const SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS: u64 = 26_787;
 
 // Tool scheduling under paused Tokio time (exact virtual milliseconds).
 /// Five parallel calls sleeping 300/10/10/10/300 ms with `max_parallel_tools = 4`. The sliding
@@ -45,7 +45,7 @@ const ALLOC_RUN_EMPTY_CONVERSATION: Budget = Budget::new(32, 2_118);
 /// context and one into the model request.
 const ALLOC_RUN_1024_PRIOR_ENTRIES: Budget = Budget::new(6_177, 1_737_242);
 /// `Agent::run` of four rounds of one tool each in an empty conversation.
-const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(430, 52_028);
+const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(430, 51_996);
 /// `Agent::drive` of a final response streamed as 64 text deltas of 16 bytes, observed through
 /// an attached progress channel that a receiver drains concurrently. Includes the scripted
 /// model's copy of each delta, so the engine itself must add no allocation per delta. Bytes
@@ -203,15 +203,9 @@ struct Lookup {
     limit: Option<u32>,
 }
 fn spec(name: &str) -> ToolSpec {
-    ToolSpec {
-        name: name.into(),
-        description: format!("Deterministic {name} tool for cost guards."),
-        input_schema: json!({}),
-        version: "1".into(),
-        retry: RetryPolicy::ReadOnly,
-        execution: Execution::Parallel,
-        requires_approval: false,
-    }
+    ToolSpec::new(name, "1")
+        .with_description(format!("Deterministic {name} tool for cost guards."))
+        .with_retry(RetryPolicy::ReadOnly)
 }
 /// Four typed tools; the scripted model only calls `echo`.
 fn tools() -> Vec<Arc<dyn Tool>> {
@@ -303,10 +297,7 @@ async fn engine_allocation_budgets() {
     let prior = prior_entries(1024);
     let mut prepared = Vec::new();
     for _ in 0..4 {
-        prepared.push(Conversation {
-            history: prior.clone(),
-            last_run: None,
-        });
+        prepared.push(Conversation::with_history(prior.clone()));
     }
     stable(
         "run_1024_prior_entries",
@@ -384,10 +375,7 @@ async fn observed_stream_allocation_budget() {
             let drive = agent.drive(
                 &mut state,
                 &MemoryCheckpoint,
-                RunControl {
-                    events: Some(sender),
-                    ..RunControl::default()
-                },
+                RunControl::default().with_events(sender),
             );
             let drain = async {
                 let mut deltas = 0;
@@ -481,12 +469,7 @@ async fn typed_allocation_budgets() {
 
     let tool = tools().remove(1);
     let arguments = json!({"key": "a key long enough to need its own allocation", "limit": 3});
-    let context = ToolContext {
-        run_id: RunId::nil(),
-        call_id: "call".into(),
-        idempotency_key: "key".into(),
-        cancel: tokio_util::sync::CancellationToken::new(),
-    };
+    let context = ToolContext::new(RunId::nil(), "call", "key");
     stable("typed_tool_call", ALLOC_TYPED_TOOL_CALL, || {
         let (arguments, context, tool) = (arguments.clone(), context.clone(), &tool);
         async move {
@@ -530,10 +513,7 @@ async fn sliding_window_starts_the_next_call_when_a_slot_frees() {
     )
     .instructions("Sleep.")
     .tool(tool)
-    .limits(Limits {
-        max_parallel_tools: 4,
-        ..Limits::default()
-    })
+    .limits(Limits::default().with_max_parallel_tools(4))
     .build()
     .unwrap();
     let mut conversation = Conversation::default();

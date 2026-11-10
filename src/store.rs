@@ -1,6 +1,8 @@
 //! The durable host's persistence boundary. Storage adapters implement [`DurableStore`];
 //! [`MemoryStore`] is the in-process reference implementation.
-use crate::*;
+use crate::{
+    Agent, Checkpoint, Error, HistoryEntry, Operation, Resolution, Result, RunId, RunState,
+};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::{
@@ -13,8 +15,12 @@ pub use memory::MemoryStore;
 
 /// Generation and revision identifying one authoritative unsettled checkpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Plain data, left open: it is exactly the pair a commit is fenced on.
 pub struct CheckpointPosition {
+    /// [`RunState::generation`].
     pub generation: u64,
+    /// [`RunState::revision`].
     pub revision: u64,
 }
 impl From<&RunState> for CheckpointPosition {
@@ -60,12 +66,15 @@ impl Drop for SlotGuard {
 
 /// An application request against a stored run, outside its execution.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum RunUpdate {
     /// Persist explicit cancellation. A settled or already cancelled run is unchanged.
     Cancel,
     /// Resolve one outstanding approval, input wait, or unknown outcome.
     Resolve {
+        /// The [`ToolCall::id`](crate::ToolCall::id) of the waiting call.
         call_id: String,
+        /// The answer, as for [`RunState::resolve`].
         resolution: Resolution,
     },
     /// Clear a recorded host error so the run is discovered again.
@@ -73,6 +82,7 @@ pub enum RunUpdate {
 }
 /// What a store must persist after [`RunUpdate::apply`] changed a run.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct UpdateEffect {
     /// The state changed: advance its revision and persist it, fencing older workers.
     pub changed: bool,
@@ -102,7 +112,7 @@ impl RunUpdate {
                 call_id,
                 resolution,
             } => {
-                crate::resolve(state, &call_id, resolution)?;
+                state.resolve(&call_id, resolution)?;
                 Ok(changed)
             }
             Self::Retry if state.is_terminal() => Err(Error::Stale),
@@ -117,7 +127,7 @@ impl RunUpdate {
     }
 }
 
-/// Durable runs for one resident [`crate::host::Host`].
+/// Durable runs for one resident [`Host`](crate::Host).
 ///
 /// Implementors must meet these obligations; `tests/storage_conformance.rs` checks them
 /// against every adapter, and `docs/durability.md` describes the contract.
@@ -178,15 +188,18 @@ pub trait DurableStore: Checkpoint {
         expected: CheckpointPosition,
         message: String,
     ) -> Result<bool>;
+    /// The error recorded by `record_error`, until `retry` or settlement clears it.
     async fn last_error(&self, id: RunId) -> Result<Option<String>>;
     /// The conversation's retained history in commit order, across all its runs.
     async fn history(&self, conversation: &str) -> Result<Vec<HistoryEntry>>;
     /// Every operation the run has recorded, across batches, in first-recorded order.
     async fn operations(&self, id: RunId) -> Result<Vec<Operation>>;
 
+    /// Persist a cancellation request with [`RunUpdate::Cancel`].
     async fn request_cancel(&self, id: RunId) -> Result<()> {
         self.update(id, RunUpdate::Cancel).await
     }
+    /// Answer a waiting call with [`RunUpdate::Resolve`].
     async fn resolve(&self, id: RunId, call_id: &str, resolution: Resolution) -> Result<()> {
         self.update(
             id,

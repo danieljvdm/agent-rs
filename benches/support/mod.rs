@@ -94,6 +94,7 @@ impl Model for CheckedModel {
                     .as_ref()
                     .and_then(|value| value["answer"].as_str())
                     .is_some_and(|text| text.starts_with("prior answer ")),
+                _ => false,
             })
             .count();
         assert_eq!(
@@ -242,15 +243,9 @@ impl Fixture {
             batch,
             expected_seed_entries: history_entries,
         });
-        let spec = ToolSpec {
-            name: "echo".into(),
-            description: "Return a deterministic integer".into(),
-            input_schema: json!({}),
-            version: "1".into(),
-            retry: RetryPolicy::ReadOnly,
-            execution: Execution::Parallel,
-            requires_approval: false,
-        };
+        let spec = ToolSpec::new("echo", "1")
+            .with_description("Return a deterministic integer")
+            .with_retry(RetryPolicy::ReadOnly);
         let inner = typed_tool::<Arguments, usize, _, _>(spec, |args, _| async move {
             Ok(ToolOutput::Complete(args.n))
         });
@@ -261,10 +256,7 @@ impl Fixture {
         let agent = Agent::builder("benchmark", model)
             .instructions("Return the scripted result.")
             .tool(tool)
-            .limits(Limits {
-                max_parallel_tools: bound,
-                ..Limits::default()
-            })
+            .limits(Limits::default().with_max_parallel_tools(bound))
             .input::<Input>()
             .output::<Output>()
             .build()
@@ -417,8 +409,8 @@ pub mod durable {
     use std::collections::{HashMap, HashSet};
     use std::future::Future;
     use std::path::Path;
-    use yielded_agent::host::{Host, HostOptions};
     use yielded_agent::sqlite::SqliteStore;
+    use yielded_agent::{Host, HostOptions};
 
     pub struct Resident {
         pub store: Arc<SqliteStore>,
@@ -450,11 +442,10 @@ pub mod durable {
             let host = Host::start(
                 store.clone(),
                 fixture.agent.clone(),
-                HostOptions {
-                    max_concurrent_runs: active,
-                    poll_interval: Duration::from_millis(1),
-                    events: Some(sender),
-                },
+                HostOptions::default()
+                    .with_max_concurrent_runs(active)
+                    .with_poll_interval(Duration::from_millis(1))
+                    .with_events(sender),
             )
             .unwrap();
             let mut resident = Self {

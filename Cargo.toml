@@ -2,12 +2,12 @@
 name = "yielded-agent"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 description = "A resumable agent engine with an optional SQLite durable host"
 license = "MIT"
 [features]
 default = ["sqlite", "openai"]
-sqlite = ["dep:rusqlite", "dep:fs2"]
+sqlite = ["dep:rusqlite"]
 openai = ["dep:reqwest"]
 allocation-metrics = []
 [dependencies]
@@ -16,20 +16,22 @@ futures = "0.3.32"
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0"
 schemars = "1.0"
-tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "sync", "time"] }
+# The library spawns tasks and uses timers, channels and select!; it never needs a
+# multi-threaded runtime, so dependents choose their own.
+tokio = { version = "1.52", features = ["rt", "macros", "sync", "time"] }
 tokio-util = "0.7"
 tracing = "0.1"
 uuid = { version = "1.20", features = ["v4", "serde"] }
 rusqlite = { version = "0.37", features = ["bundled"], optional = true }
-fs2 = { version = "0.4", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"], optional = true }
 [dev-dependencies]
 criterion = { version = "0.6", features = ["async_tokio"] }
 dhat = "0.3.3"
 tempfile = "3"
 libc = "0.2"
-# Paused virtual time makes scheduling costs deterministic in tests.
-tokio = { version = "1.52", features = ["test-util"] }
+# Tests, benches and examples run on multi-threaded runtimes. Paused virtual time makes
+# scheduling costs deterministic in tests.
+tokio = { version = "1.52", features = ["rt-multi-thread", "test-util"] }
 [[example]]
 name = "profile_recovery"
 required-features = ["sqlite"]

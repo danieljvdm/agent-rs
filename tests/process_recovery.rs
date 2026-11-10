@@ -15,11 +15,7 @@ use std::{
 };
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
-use yielded_agent::{
-    host::{Host, HostOptions},
-    sqlite::SqliteStore,
-    *,
-};
+use yielded_agent::{Host, HostOptions, sqlite::SqliteStore, *};
 
 const CHILD_CONFIG: &str = "AGENT_RS_PROCESS_CHILD";
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
@@ -140,15 +136,12 @@ impl Model for LoggedModel {
     }
 }
 fn spec(name: &str, retry: RetryPolicy, approval: bool) -> ToolSpec {
-    ToolSpec {
-        name: name.into(),
-        description: name.into(),
-        input_schema: Value::Null,
-        version: "1".into(),
-        retry,
-        execution: Execution::Sequential,
-        requires_approval: approval,
-    }
+    ToolSpec::new(name, "1")
+        .with_description(name)
+        .with_input_schema(Value::Null)
+        .with_retry(retry)
+        .with_execution(Execution::Sequential)
+        .with_requires_approval(approval)
 }
 fn call(name: &str) -> ModelResponse {
     ModelResponse::tools(vec![ToolCall {
@@ -254,14 +247,14 @@ fn agent(config: &Config) -> Agent {
     )
     .instructions("Run the deterministic process recovery scenario.")
     .tools(tools)
-    .limits(Limits {
-        max_model_calls: config.max_model_calls,
-        max_tool_calls: 8,
-        operation_timeout_ms: 5_000,
-        cleanup_timeout_ms: 100,
-        active_budget_ms: 30_000,
-        ..Limits::default()
-    })
+    .limits(
+        Limits::default()
+            .with_max_model_calls(config.max_model_calls)
+            .with_max_tool_calls(8)
+            .with_operation_timeout(Duration::from_millis(5_000))
+            .with_cleanup_timeout(Duration::from_millis(100))
+            .with_active_budget(Duration::from_millis(30_000)),
+    )
     .build()
     .unwrap()
 }
@@ -415,11 +408,9 @@ async fn child(config: Config) -> Result<()> {
     let host = Host::start(
         store.clone(),
         agent,
-        HostOptions {
-            max_concurrent_runs: 2,
-            poll_interval: Duration::from_millis(2),
-            events: None,
-        },
+        HostOptions::default()
+            .with_max_concurrent_runs(2)
+            .with_poll_interval(Duration::from_millis(2)),
     )?;
     tokio::time::timeout(READY_TIMEOUT, async {
         loop {
@@ -755,4 +746,10 @@ fn persisted_wait_process_restart_soak() {
         started.elapsed().as_secs_f64(),
         initial.state.usage.active_ms
     );
+}
+
+/// The current UTC Unix time in milliseconds, the unit of run expiry and timer waits.
+fn now_ms() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    u64::try_from(now.expect("clock after 1970").as_millis()).expect("milliseconds fit u64")
 }

@@ -8,9 +8,11 @@ use std::{io, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
 /// What [`ContextPolicy::prepare`] receives for one model turn.
+#[non_exhaustive]
 pub struct ContextRequest<'a> {
     /// Identifies the run to [`ContextPolicy::cleanup`].
     pub run_id: RunId,
+    /// The run's conversation, for policies that keep per-conversation state.
     pub conversation_id: &'a str,
     /// The run's current input.
     pub input: &'a Value,
@@ -133,10 +135,6 @@ impl Window {
     }
 }
 
-/// Select a bounded suffix while retaining each complete model/tool exchange intact.
-pub fn select_context(history: &[HistoryEntry], max_bytes: usize) -> Result<Vec<HistoryEntry>> {
-    Ok(history[suffix_start(history, max_bytes)?..].to_vec())
-}
 /// Start of the longest suffix whose encoded array fits. The newest entry must fit.
 pub(crate) fn suffix_start(history: &[HistoryEntry], max_bytes: usize) -> Result<usize> {
     let mut window = Window::new(max_bytes)?;

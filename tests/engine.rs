@@ -10,15 +10,9 @@ use tokio_util::sync::CancellationToken;
 use yielded_agent::*;
 
 fn spec(name: &str) -> ToolSpec {
-    ToolSpec {
-        name: name.into(),
-        description: "test".into(),
-        input_schema: json!({}),
-        version: "1".into(),
-        retry: RetryPolicy::ReadOnly,
-        execution: Execution::Parallel,
-        requires_approval: false,
-    }
+    ToolSpec::new(name, "1")
+        .with_description("test")
+        .with_retry(RetryPolicy::ReadOnly)
 }
 fn call(id: &str, name: &str, value: Value) -> ToolCall {
     ToolCall {
@@ -78,18 +72,9 @@ fn build_rejects_each_invalid_definition() {
     assert_eq!(reason(Agent::builder("a".repeat(257), model.clone())), ids);
     let limits = "parallelism, byte limits, and timeouts must be positive";
     for invalid in [
-        Limits {
-            max_parallel_tools: 0,
-            ..Limits::default()
-        },
-        Limits {
-            max_context_bytes: 1,
-            ..Limits::default()
-        },
-        Limits {
-            cleanup_timeout_ms: 0,
-            ..Limits::default()
-        },
+        Limits::default().with_max_parallel_tools(0),
+        Limits::default().with_max_context_bytes(1),
+        Limits::default().with_cleanup_timeout(Duration::from_millis(0)),
     ] {
         assert_eq!(
             reason(Agent::builder("a", model.clone()).limits(invalid)),
@@ -125,10 +110,7 @@ fn build_rejects_each_invalid_definition() {
         "idempotent tools require a retry contract"
     );
     // The cap is checked against the final limits, set before or after the policy.
-    let small = Limits {
-        max_context_bytes: 64,
-        ..Limits::default()
-    };
+    let small = Limits::default().with_max_context_bytes(64);
     assert_eq!(
         reason(
             Agent::builder("a", model.clone())
@@ -307,10 +289,7 @@ async fn bounded_parallelism_sequential_barriers_history_order_and_cleanup() {
         ModelResponse::tools(calls),
         ModelResponse::final_output(json!("done")),
     ]));
-    let limits = Limits {
-        max_parallel_tools: 2,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_parallel_tools(2);
     let agent = agent(model.clone(), tools, limits);
     let mut state = state(&agent);
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
@@ -318,10 +297,7 @@ async fn bounded_parallelism_sequential_barriers_history_order_and_cleanup() {
         .drive(
             &mut state,
             &MemoryCheckpoint,
-            RunControl {
-                events: Some(tx),
-                ..RunControl::default()
-            },
+            RunControl::default().with_events(tx),
         )
         .await
         .unwrap();
@@ -390,7 +366,9 @@ async fn approval_and_input_waits_do_not_consume_budget_while_waiting() {
         .await
         .unwrap();
     assert_eq!(usage, state.usage);
-    resolve(&mut state, "question", Resolution::Approve(true)).unwrap();
+    state
+        .resolve("question", Resolution::Approve(true))
+        .unwrap();
     agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
@@ -405,7 +383,9 @@ async fn approval_and_input_waits_do_not_consume_budget_while_waiting() {
         .await
         .unwrap();
     assert_eq!(usage, state.usage);
-    resolve(&mut state, "question", Resolution::Input(json!("there"))).unwrap();
+    state
+        .resolve("question", Resolution::Input(json!("there")))
+        .unwrap();
     agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
@@ -425,10 +405,7 @@ async fn recovered_model_attempt_does_not_replenish_call_budget() {
     let agent = agent(
         model.clone(),
         vec![],
-        Limits {
-            max_model_calls: 1,
-            ..Limits::default()
-        },
+        Limits::default().with_max_model_calls(1),
     );
     let mut state = state(&agent);
     state.phase = Phase::ModelInFlight;
@@ -458,13 +435,12 @@ async fn cancellation_retains_unknown_mutation_and_allows_reconciliation() {
     );
     let mut state = state(&agent);
     state.phase = Phase::Tools;
-    state.operations.push(Operation {
-        call: call("effect", "mutate", json!(1)),
-        spec: tool.spec().clone(),
-        idempotency_key: "stable".into(),
-        status: OperationStatus::Dispatched,
-        approved: false,
-    });
+    state.operations.push(Operation::new(
+        call("effect", "mutate", json!(1)),
+        tool.spec().clone(),
+        "stable",
+        OperationStatus::Dispatched,
+    ));
     state.cancel_requested = true;
     agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
@@ -475,16 +451,16 @@ async fn cancellation_retains_unknown_mutation_and_allows_reconciliation() {
         state.operations[0].status,
         OperationStatus::Unknown { .. }
     ));
-    resolve(
-        &mut state,
-        "effect",
-        Resolution::Reconcile(ToolResult {
-            call_id: "effect".into(),
-            value: json!("actually succeeded"),
-            is_error: false,
-        }),
-    )
-    .unwrap();
+    state
+        .resolve(
+            "effect",
+            Resolution::Reconcile(ToolResult {
+                call_id: "effect".into(),
+                value: json!("actually succeeded"),
+                is_error: false,
+            }),
+        )
+        .unwrap();
     assert_eq!(state.phase, Phase::Settled(Settlement::Cancelled));
     assert!(matches!(
         state.operations[0].status,
@@ -504,11 +480,22 @@ fn context_keeps_whole_groups_and_rejects_an_oversized_newest_group() {
     };
     let input = HistoryEntry::Input(json!("old input"));
     let limit = serde_json::to_vec(&vec![group.clone()]).unwrap().len();
-    assert_eq!(
-        select_context(&[input, group.clone()], limit).unwrap(),
-        vec![group.clone()]
-    );
-    assert!(select_context(&[group], limit - 1).is_err());
+    // A run accepts the bounded suffix of its conversation that fits the context limit.
+    let accept = |max_context_bytes, conversation: &[HistoryEntry]| {
+        let limits = Limits::default().with_max_context_bytes(max_context_bytes);
+        agent(Arc::new(ScriptedModel::new(vec![])), vec![], limits).new_run(
+            "c",
+            json!("go"),
+            conversation,
+            None,
+        )
+    };
+    let state = accept(limit, &[input, group.clone()]).unwrap();
+    assert_eq!(state.prior_context, vec![group.clone()]);
+    assert!(matches!(
+        accept(limit - 1, &[group]),
+        Err(Error::Context(_))
+    ));
 }
 
 struct EndlessModel;
@@ -525,10 +512,7 @@ async fn empty_stream_events_have_a_hard_bound() {
     let agent = agent(
         Arc::new(EndlessModel),
         vec![],
-        Limits {
-            max_response_bytes: 16,
-            ..Limits::default()
-        },
+        Limits::default().with_max_response_bytes(16),
     );
     let mut state = state(&agent);
     let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
@@ -536,10 +520,7 @@ async fn empty_stream_events_have_a_hard_bound() {
         .drive(
             &mut state,
             &MemoryCheckpoint,
-            RunControl {
-                events: Some(tx),
-                ..RunControl::default()
-            },
+            RunControl::default().with_events(tx),
         )
         .await
         .unwrap();
@@ -645,10 +626,7 @@ async fn cancelled_idempotent_effect_is_unknown_even_when_cleanup_fails() {
         .drive(
             &mut state,
             &MemoryCheckpoint,
-            RunControl {
-                cancel: cancellation,
-                ..RunControl::default()
-            },
+            RunControl::default().with_cancel(cancellation),
         )
         .await
         .unwrap();
@@ -665,14 +643,7 @@ struct FailedModelCleanup;
 impl Model for FailedModelCleanup {
     async fn stream(&self, _: ModelRequest, _: CancellationToken) -> Result<ModelStream> {
         Ok(Box::pin(stream::iter([Ok(ModelEvent::Response(
-            ModelResponse {
-                output: Some(json!("done")),
-                tools: vec![],
-                usage: TokenUsage {
-                    input: 7,
-                    output: 5,
-                },
-            },
+            ModelResponse::final_output(json!("done")).with_usage(TokenUsage::new(7, 5)),
         ))])))
     }
     async fn cleanup(&self, _: RunId) -> Result<()> {
@@ -712,12 +683,12 @@ async fn convenience_api_retains_wait_and_can_resume_without_duplicate_history()
         agent.run(&mut conversation, "other").await,
         Err(Error::ConversationBusy)
     ));
-    resolve(
-        conversation.last_run.as_mut().unwrap(),
-        "question",
-        Resolution::Input(json!("here")),
-    )
-    .unwrap();
+    conversation
+        .last_run
+        .as_mut()
+        .unwrap()
+        .resolve("question", Resolution::Input(json!("here")))
+        .unwrap();
     let result: String = agent
         .resume(&mut conversation, RunControl::default())
         .await
@@ -875,10 +846,7 @@ async fn settlement_event_is_emitted_only_after_a_successful_commit() {
             .drive(
                 &mut state,
                 &FailSettlement,
-                RunControl {
-                    events: Some(tx),
-                    ..RunControl::default()
-                }
+                RunControl::default().with_events(tx)
             )
             .await,
         Err(Error::Storage(_))
@@ -930,7 +898,7 @@ async fn approval_grant_still_requires_current_authorization() {
         OperationStatus::Approval
     ));
     assert_eq!(authorizations.load(Ordering::SeqCst), 0);
-    resolve(&mut state, "effect", Resolution::Approve(true)).unwrap();
+    state.resolve("effect", Resolution::Approve(true)).unwrap();
     agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
@@ -955,22 +923,19 @@ async fn convenience_api_requires_reconciliation_before_replacing_cancelled_run(
     let mut state = state(&agent);
     let original_id = state.id;
     state.phase = Phase::Tools;
-    state.operations.push(Operation {
-        call: call("effect", "mutate", json!(1)),
-        spec: tool.spec().clone(),
-        idempotency_key: "stable".into(),
-        status: OperationStatus::Dispatched,
-        approved: false,
-    });
+    state.operations.push(Operation::new(
+        call("effect", "mutate", json!(1)),
+        tool.spec().clone(),
+        "stable",
+        OperationStatus::Dispatched,
+    ));
     state.cancel_requested = true;
     agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
-    let mut conversation = Conversation {
-        history: state.history.clone(),
-        last_run: Some(state),
-    };
+    let mut conversation = Conversation::with_history(state.history.clone());
+    conversation.last_run = Some(state);
     assert!(matches!(
         agent.run(&mut conversation, "next").await,
         Err(Error::ConversationBusy)
@@ -982,16 +947,16 @@ async fn convenience_api_requires_reconciliation_before_replacing_cancelled_run(
         retained.operations[0].status,
         OperationStatus::Unknown { .. }
     ));
-    resolve(
-        retained,
-        "effect",
-        Resolution::Reconcile(ToolResult {
-            call_id: "effect".into(),
-            value: json!("effect accounted for"),
-            is_error: false,
-        }),
-    )
-    .unwrap();
+    retained
+        .resolve(
+            "effect",
+            Resolution::Reconcile(ToolResult {
+                call_id: "effect".into(),
+                value: json!("effect accounted for"),
+                is_error: false,
+            }),
+        )
+        .unwrap();
     let result: String = agent.run(&mut conversation, "next").await.unwrap();
     assert_eq!(result, "new run");
     assert_ne!(conversation.last_run.as_ref().unwrap().id, original_id);
@@ -1014,13 +979,12 @@ async fn recovered_dispatched_work_becomes_resolvable_when_budgets_or_expiry_sto
         );
         let mut state = state(&agent);
         state.phase = Phase::Tools;
-        state.operations.push(Operation {
-            call: call("effect", "idempotent", json!(1)),
-            spec: tool.spec().clone(),
-            idempotency_key: "same-external-key".into(),
-            status: OperationStatus::Dispatched,
-            approved: false,
-        });
+        state.operations.push(Operation::new(
+            call("effect", "idempotent", json!(1)),
+            tool.spec().clone(),
+            "same-external-key",
+            OperationStatus::Dispatched,
+        ));
         if expired {
             state.expires_at_ms = Some(now_ms().saturating_sub(1));
         } else {
@@ -1042,16 +1006,16 @@ async fn recovered_dispatched_work_becomes_resolvable_when_budgets_or_expiry_sto
             state.operations[0].status,
             OperationStatus::Unknown { .. }
         ));
-        resolve(
-            &mut state,
-            "effect",
-            Resolution::Reconcile(ToolResult {
-                call_id: "effect".into(),
-                value: json!("accounted for"),
-                is_error: false,
-            }),
-        )
-        .unwrap();
+        state
+            .resolve(
+                "effect",
+                Resolution::Reconcile(ToolResult {
+                    call_id: "effect".into(),
+                    value: json!("accounted for"),
+                    is_error: false,
+                }),
+            )
+            .unwrap();
     }
 }
 
@@ -1073,10 +1037,7 @@ async fn idempotent_timeout_keeps_mutation_uncertainty() {
     let agent = agent(
         model,
         vec![tool],
-        Limits {
-            operation_timeout_ms: 30,
-            ..Limits::default()
-        },
+        Limits::default().with_operation_timeout(Duration::from_millis(30)),
     );
     let mut state = state(&agent);
     agent
@@ -1133,10 +1094,7 @@ async fn wait_or_unknown_outcome_stops_further_dispatch_until_resolved() {
         let agent = agent(
             model,
             vec![slow, wait, fail],
-            Limits {
-                max_parallel_tools: 2,
-                ..Limits::default()
-            },
+            Limits::default().with_max_parallel_tools(2),
         );
         let mut state = state(&agent);
         for _ in 0..2 {
@@ -1163,7 +1121,7 @@ async fn wait_or_unknown_outcome_stops_further_dispatch_until_resolved() {
                 is_error: false,
             })
         };
-        resolve(&mut state, "block", resolution).unwrap();
+        state.resolve("block", resolution).unwrap();
         agent
             .drive(&mut state, &MemoryCheckpoint, RunControl::default())
             .await
@@ -1209,10 +1167,7 @@ async fn progress_events_for_one_tool_round_are_exact() {
         .drive(
             &mut state,
             &MemoryCheckpoint,
-            RunControl {
-                events: Some(tx),
-                ..RunControl::default()
-            },
+            RunControl::default().with_events(tx),
         )
         .await
         .unwrap();
@@ -1279,10 +1234,7 @@ async fn concurrent_runs_sharing_a_channel_attribute_every_event() {
     let agent = agent(Arc::new(RunIdEcho), vec![], Limits::default());
     let (mut first, mut second) = (state(&agent), state(&agent));
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-    let control = || RunControl {
-        events: Some(tx.clone()),
-        ..RunControl::default()
-    };
+    let control = || RunControl::default().with_events(tx.clone());
     let (a, b) = tokio::join!(
         agent.drive(&mut first, &MemoryCheckpoint, control()),
         agent.drive(&mut second, &MemoryCheckpoint, control()),
@@ -1362,10 +1314,7 @@ async fn model_context_fits_truncates_suffix_and_repins_current_input() {
     let agent = agent(
         model.clone(),
         vec![tool],
-        Limits {
-            max_context_bytes: max,
-            ..Limits::default()
-        },
+        Limits::default().with_max_context_bytes(max),
     );
     let mut state = agent
         .new_run("test", json!("go"), std::slice::from_ref(&prior), None)
@@ -1404,10 +1353,7 @@ async fn input_and_latest_exchange_that_cannot_fit_fail_inside_the_model_operati
     let agent = agent(
         model.clone(),
         vec![tool],
-        Limits {
-            max_context_bytes: 512,
-            ..Limits::default()
-        },
+        Limits::default().with_max_context_bytes(512),
     );
     let mut state = state(&agent);
     agent
@@ -1423,4 +1369,10 @@ async fn input_and_latest_exchange_that_cannot_fit_fail_inside_the_model_operati
     // the model is never called with an incomplete context.
     assert_eq!(model.calls(), 1);
     assert_eq!(state.usage.model_calls, 2);
+}
+
+/// The current UTC Unix time in milliseconds, the unit of run expiry and timer waits.
+fn now_ms() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    u64::try_from(now.expect("clock after 1970").as_millis()).expect("milliseconds fit u64")
 }

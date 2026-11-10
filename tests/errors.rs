@@ -8,15 +8,9 @@ use tokio_util::sync::CancellationToken;
 use yielded_agent::*;
 
 fn spec(name: &str) -> ToolSpec {
-    ToolSpec {
-        name: name.into(),
-        description: "test".into(),
-        input_schema: json!({}),
-        version: "1".into(),
-        retry: RetryPolicy::ReadOnly,
-        execution: Execution::Parallel,
-        requires_approval: false,
-    }
+    ToolSpec::new(name, "1")
+        .with_description("test")
+        .with_retry(RetryPolicy::ReadOnly)
 }
 fn call(id: &str, name: &str, arguments: Value) -> ToolCall {
     ToolCall {
@@ -166,10 +160,7 @@ fn cases() -> Vec<Case> {
                 ModelResponse::final_output(json!("done")),
             ]))
             .tool(blob)
-            .limits(Limits {
-                max_context_bytes: 512,
-                ..Limits::default()
-            }),
+            .limits(Limits::default().with_max_context_bytes(512)),
             Expect::Fails(&["current input and pinned history exceed context limit"]),
         ),
         Case {
@@ -308,6 +299,20 @@ fn fails_run_separates_failed_runs_from_resumable_ones() {
     }
 }
 
+#[test]
+fn only_stale_and_interrupted_runs_resume_without_a_retry() {
+    for error in [Error::Stale, Error::Interrupted] {
+        assert!(!error.needs_retry(), "{error:?}");
+    }
+    for error in [
+        Error::storage("disk full"),
+        Error::incompatible("agent is not registered"),
+        Error::NotFound,
+    ] {
+        assert!(error.needs_retry(), "{error:?}");
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // How an in-memory run ended, as `run` and `resume` report it.
 // ---------------------------------------------------------------------------------------------
@@ -347,13 +352,14 @@ async fn run_reports_a_waiting_run_and_resume_completes_it() {
         Err(Error::Waiting)
     ));
     let run = conversation.last_run.as_mut().unwrap();
-    resolve(run, "ask", Resolution::Approve(true)).unwrap();
+    run.resolve("ask", Resolution::Approve(true)).unwrap();
     assert!(matches!(
         agent.resume(&mut conversation, RunControl::default()).await,
         Err(Error::Waiting)
     ));
     let run = conversation.last_run.as_mut().unwrap();
-    resolve(run, "ask", Resolution::Input(json!("here"))).unwrap();
+    run.resolve("ask", Resolution::Input(json!("here")))
+        .unwrap();
     let reply = agent
         .resume(&mut conversation, RunControl::default())
         .await
@@ -363,18 +369,10 @@ async fn run_reports_a_waiting_run_and_resume_completes_it() {
 
 #[tokio::test]
 async fn run_reports_a_stopped_run_with_its_reason() {
-    let model = scripted(vec![ModelResponse {
-        output: Some(json!("too long")),
-        tools: vec![],
-        usage: TokenUsage {
-            input: 8,
-            output: 8,
-        },
-    }]);
-    let limits = Limits {
-        max_tokens: 10,
-        ..Limits::default()
-    };
+    let model = scripted(vec![
+        ModelResponse::final_output(json!("too long")).with_usage(TokenUsage::new(8, 8)),
+    ]);
+    let limits = Limits::default().with_max_tokens(10);
     let agent = typed(model, vec![], limits);
     let mut conversation = Conversation::default();
     let error = agent.run(&mut conversation, "go").await.unwrap_err();
@@ -382,7 +380,7 @@ async fn run_reports_a_stopped_run_with_its_reason() {
         matches!(error, Error::Stopped(StopReason::Tokens)),
         "{error:?}"
     );
-    assert_eq!(error.to_string(), "run stopped: Tokens");
+    assert_eq!(error.to_string(), "run stopped: token limit reached");
     assert_eq!(
         conversation.last_run.unwrap().phase,
         Phase::Settled(Settlement::Stopped(StopReason::Tokens))
@@ -465,9 +463,11 @@ fn rejected_requests_name_their_kind() {
         Agent::builder("", done()).build(),
         Err(Error::Config(_))
     ));
+    // The conversation's newest entry cannot fit the context limit beside the new input.
+    let small = Limits::default().with_max_context_bytes(16);
     let entry = HistoryEntry::Input(json!("x".repeat(64)));
     assert!(matches!(
-        select_context(&[entry], 16),
+        typed(done(), vec![], small).new_run("c", json!("go"), &[entry], None),
         Err(Error::Context(_))
     ));
 }
@@ -487,12 +487,7 @@ async fn tool_errors_keep_their_cause() {
     let error = tool.validate(&json!("one")).unwrap_err();
     assert!(matches!(error, Error::ModelOutput(_)), "{error:?}");
     assert!(error.source().unwrap().is::<serde_json::Error>());
-    let context = ToolContext {
-        run_id: RunId::nil(),
-        call_id: "call".into(),
-        idempotency_key: "key".into(),
-        cancel: CancellationToken::new(),
-    };
+    let context = ToolContext::new(RunId::nil(), "call", "key");
     let error = tool.execute(json!(1), context).await.unwrap_err();
     assert!(matches!(error, Error::Tool(_)), "{error:?}");
     assert_eq!(error.to_string(), "tool: cannot encode");

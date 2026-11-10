@@ -3,7 +3,9 @@
 use crate::StopReason;
 use std::{any::Any, borrow::Cow, error::Error as StdError, fmt};
 
-pub type Result<T> = std::result::Result<T, Error>;
+/// The crate's result type. Its error type defaults to [`Error`], so a glob import of the crate
+/// leaves a two-parameter `Result<T, E>` meaning the standard one.
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// A boxed error from anywhere, kept as the cause of an [`Error`].
 type Cause = Box<dyn StdError + Send + Sync>;
@@ -184,6 +186,22 @@ impl Error {
             | Self::Cancelled => true,
         }
     }
+
+    /// Whether a stored run that [`Agent::drive`](crate::Agent::drive) (or claiming it) left
+    /// with this error must wait for an explicit retry before it is driven again.
+    ///
+    /// `true` for every error but two: a [`Host`](crate::Host) records it with
+    /// [`DurableStore::record_error`](crate::DurableStore::record_error), which stops automatic
+    /// discovery of the run until [`DurableStore::retry`](crate::DurableStore::retry) after the
+    /// cause, such as unavailable storage or an unregistered agent, is repaired. Driving it again
+    /// first would fail the same way.
+    ///
+    /// `false` for [`Stale`](Self::Stale), because another execution owns the run, and for
+    /// [`Interrupted`](Self::Interrupted), because shutdown stopped it and the next start resumes
+    /// it from its last checkpoint. Neither says anything is wrong with the run.
+    pub fn needs_retry(&self) -> bool {
+        !matches!(self, Self::Stale | Self::Interrupted)
+    }
 }
 
 impl fmt::Display for Error {
@@ -211,7 +229,7 @@ impl fmt::Display for Error {
             Self::Waiting => {
                 f.write_str("run is waiting; resolve Conversation::last_run and call Agent::resume")
             }
-            Self::Stopped(reason) => write!(f, "run stopped: {reason:?}"),
+            Self::Stopped(reason) => write!(f, "run stopped: {reason}"),
             Self::Failed(detail) => write!(f, "run failed: {detail}"),
             Self::Cancelled => f.write_str("run cancelled"),
         }

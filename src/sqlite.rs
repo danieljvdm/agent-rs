@@ -10,15 +10,19 @@
 //!   `last_error`. Every commit rewrites only this row, fenced on generation and revision.
 //! - `history` holds each entry once, appended in commit order; `operations` retains every
 //!   operation the run recorded, across batches.
-use crate::*;
+use crate::store;
+use crate::types::STATE_VERSION;
+use crate::{
+    Agent, Checkpoint, CheckpointPosition, DurableStore, Error, HistoryEntry, HostSlot,
+    ModelResponse, Operation, Phase, Result, RunId, RunState, RunUpdate, StoreLease, Usage,
+};
 use async_trait::async_trait;
-use fs2::FileExt;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::HashMap,
-    fs::{File, OpenOptions},
+    fs::{File, OpenOptions, TryLockError},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -31,9 +35,13 @@ use tokio::sync::{mpsc, oneshot};
 const STORAGE_VERSION: i64 = 2;
 type Job = Box<dyn FnOnce(&mut Database) + Send>;
 
+/// Work a [`SqliteStore`] has committed since it was opened, from [`SqliteStore::metrics`].
 #[derive(Clone, Copy, Debug, Default)]
+#[non_exhaustive]
 pub struct StoreMetrics {
+    /// Committed write transactions.
     pub transactions: u64,
+    /// Rows inserted or updated by those transactions.
     pub writes: u64,
 }
 #[derive(Default)]
@@ -197,12 +205,11 @@ impl Database {
             .truncate(false)
             .open(PathBuf::from(lock_path))
             .map_err(Error::storage)?;
-        lock.try_lock_exclusive().map_err(|e| {
-            if e.kind() == std::io::ErrorKind::WouldBlock {
-                Error::StoreBusy
-            } else {
-                Error::storage(e)
-            }
+        // An exclusive, non-blocking lock (flock on Unix, LockFileEx on Windows), released when
+        // the file closes: when the store's worker drops the database, or the process exits.
+        lock.try_lock().map_err(|error| match error {
+            TryLockError::WouldBlock => Error::StoreBusy,
+            TryLockError::Error(error) => Error::storage(error),
         })?;
         let connection = Connection::open(canonical).map_err(Error::storage)?;
         connection
@@ -552,6 +559,10 @@ fn accept_in(
 }
 
 impl SqliteStore {
+    /// Opens or creates the database file at `path` and takes its process lock, a `.lock` file
+    /// beside it. Fails with [`Error::StoreBusy`] while another store holds the lock, with
+    /// [`Error::Config`] for an in-memory or hard-linked path, with [`Error::Incompatible`] for
+    /// another schema version, and with [`Error::Storage`] otherwise.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path: PathBuf = path.as_ref().to_owned();
         let counters = Arc::new(Counters::default());
@@ -610,6 +621,7 @@ impl SqliteStore {
             .map_err(|_| Error::storage("store is closed"))?;
         rx.await.map_err(Error::storage)?
     }
+    /// Write transactions and rows committed since the store was opened.
     pub fn metrics(&self) -> StoreMetrics {
         StoreMetrics {
             transactions: self.counters.transactions.load(Ordering::Relaxed),
@@ -928,6 +940,7 @@ impl Drop for SqliteStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ScriptedModel, Settlement, types::now_ms};
     use serde_json::json;
     #[tokio::test]
     async fn failure_during_retirement_rolls_back_history_terminal_state_and_checkpoint() {

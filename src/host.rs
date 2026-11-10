@@ -1,6 +1,10 @@
 //! A bounded resident scheduler over any [`DurableStore`]. Durable discovery is authoritative;
 //! notifications only reduce latency. Call `shutdown().await` before releasing resources.
-use crate::*;
+use crate::types::now_ms;
+use crate::{
+    Agent, Checkpoint, CheckpointPosition, DurableStore, Error, ErrorDetail, ProgressEvent,
+    Resolution, Result, RunControl, RunId, RunState,
+};
 use async_trait::async_trait;
 use std::{
     collections::HashMap,
@@ -13,11 +17,27 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+/// How a [`Host`] schedules runs. Start from [`HostOptions::default`] and change what differs:
+///
+/// ```
+/// # use std::time::Duration;
+/// # use yielded_agent::HostOptions;
+/// let options = HostOptions::default()
+///     .with_max_concurrent_runs(4)
+///     .with_poll_interval(Duration::from_millis(50));
+/// ```
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct HostOptions {
+    /// Runs driven at once, 1..=1024. A run waiting for approval, input or a timer holds no
+    /// slot. Default 16.
     pub max_concurrent_runs: usize,
+    /// How often the host asks its store for due runs. Submissions and updates made through the
+    /// host wake it at once; the interval bounds how late a timer wait, or a change made
+    /// directly in the store, is noticed. Nonzero. Default 100 ms.
     pub poll_interval: Duration,
-    /// Shared by every run this host drives; each event names its run.
+    /// Progress events of every run this host drives; each event names its run. Delivery is best
+    /// effort, as for [`RunControl::events`]. Default none.
     pub events: Option<mpsc::Sender<ProgressEvent>>,
 }
 impl Default for HostOptions {
@@ -27,6 +47,23 @@ impl Default for HostOptions {
             poll_interval: Duration::from_millis(100),
             events: None,
         }
+    }
+}
+impl HostOptions {
+    /// Sets [`max_concurrent_runs`](Self::max_concurrent_runs).
+    pub fn with_max_concurrent_runs(mut self, runs: usize) -> Self {
+        self.max_concurrent_runs = runs;
+        self
+    }
+    /// Sets [`poll_interval`](Self::poll_interval).
+    pub fn with_poll_interval(mut self, interval: Duration) -> Self {
+        self.poll_interval = interval;
+        self
+    }
+    /// Sends progress events to `events`; see [`events`](Self::events).
+    pub fn with_events(mut self, events: mpsc::Sender<ProgressEvent>) -> Self {
+        self.events = Some(events);
+        self
     }
 }
 /// Commits through the host's store. The wrapper lets an unsized store reach the engine's
@@ -120,6 +157,7 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
             task: Some(task),
         })
     }
+    /// The store the host runs over, for its own API and for reading runs and history.
     pub fn store(&self) -> &Arc<S> {
         &self.store
     }
@@ -183,14 +221,20 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
         self.notify.notify_one();
         Ok(id)
     }
+    /// The run's authoritative state, settled or not; [`Error::NotFound`] for an unknown ID.
     pub async fn status(&self, id: RunId) -> Result<RunState> {
         self.store.status(id).await
     }
+    /// Answers the wait of call `call_id` durably, as [`RunState::resolve`] does in memory, and
+    /// wakes the host to drive the run again. Fails with [`Error::NotWaiting`] if that call does
+    /// not wait for this kind of answer.
     pub async fn resolve(&self, id: RunId, call_id: &str, resolution: Resolution) -> Result<()> {
         self.store.resolve(id, call_id, resolution).await?;
         self.notify.notify_one();
         Ok(())
     }
+    /// Requests cancellation durably and interrupts the run if it is executing; it settles as
+    /// [`Settlement::Cancelled`](crate::Settlement::Cancelled). A settled run is unchanged.
     pub async fn cancel(&self, id: RunId) -> Result<()> {
         // Persist first. A running worker's next commit will be fenced even if its token
         // notification is delayed, or it completes before this method observes the map.
@@ -201,6 +245,8 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
         self.notify.notify_one();
         Ok(())
     }
+    /// Clears the error recorded for the run (see [`Error::needs_retry`]), once its cause is
+    /// repaired, so the host drives it again. A settled run is [`Error::Stale`].
     pub async fn retry(&self, id: RunId) -> Result<()> {
         self.store.retry(id).await?;
         self.notify.notify_one();
@@ -319,7 +365,7 @@ async fn schedule<S: DurableStore + ?Sized + 'static>(
                     Some(Ok((id, position, result))) => {
                         running.lock().expect("running map lock").remove(&id);
                         if let Err(error) = result
-                            && !matches!(error, Error::Stale | Error::Interrupted)
+                            && error.needs_retry()
                             && let Some(position) = position
                             && let Err(error) = store.record_error(id, position, error.to_string()).await
                         {
@@ -342,7 +388,7 @@ async fn schedule<S: DurableStore + ?Sized + 'static>(
             Ok((id, position, result)) => {
                 running.lock().expect("running map lock").remove(&id);
                 if let Err(error) = result
-                    && !matches!(error, Error::Stale | Error::Interrupted)
+                    && error.needs_retry()
                     && let Some(position) = position
                 {
                     let _ = store.record_error(id, position, error.to_string()).await;

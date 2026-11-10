@@ -1,5 +1,11 @@
 use crate::context::{assemble, encoded_len, suffix_start};
-use crate::*;
+use crate::types::{STATE_VERSION, now_ms};
+use crate::{
+    AllowAll, Authorizer, ContextPolicy, Error, ErrorDetail, Execution, HistoryEntry, Limits,
+    Model, ModelConfig, ModelEvent, ModelRequest, ModelResponse, Operation, OperationStatus, Phase,
+    ProgressEvent, ProgressKind, Result, RetryPolicy, RunId, RunState, Settlement, StopReason,
+    Tool, ToolCall, ToolContext, ToolOutput, ToolResult, ToolSpec, Usage, WaitRequest,
+};
 use async_trait::async_trait;
 use futures::{StreamExt, stream::FuturesUnordered};
 use schemars::{JsonSchema, schema_for};
@@ -74,8 +80,8 @@ fn validate<T: DeserializeOwned + 'static>(value: &Value) -> serde_json::Result<
 /// # Ok(()) }
 /// ```
 ///
-/// The plain `Agent`, with both types `Value`, is the erased form: a [`Host`](crate::host::Host)
-/// serves agents of different types side by side, and a [`DurableStore`] accepts JSON input for
+/// The plain `Agent`, with both types `Value`, is the erased form: a [`Host`](crate::Host)
+/// serves agents of different types side by side, and a [`DurableStore`](crate::DurableStore) accepts JSON input for
 /// any of them. [`erased`](Self::erased) converts a typed agent, sharing its definition.
 pub struct Agent<I = Value, O = Value> {
     definition: Arc<Definition>,
@@ -121,7 +127,7 @@ impl Agent {
     /// # fn main() -> Result<()> {
     /// let agent = Agent::builder("support", Arc::new(ScriptedModel::new(vec![])))
     ///     .instructions("Answer briefly.")
-    ///     .limits(Limits { max_model_calls: 8, ..Limits::default() })
+    ///     .limits(Limits::default().with_max_model_calls(8))
     ///     .build()?;
     /// assert_eq!(agent.id(), "support");
     /// # Ok(())
@@ -142,9 +148,11 @@ impl Agent {
     }
 }
 impl<I, O> Agent<I, O> {
+    /// The ID given to [`Agent::builder`], recorded with every run the agent accepts.
     pub fn id(&self) -> &str {
         &self.definition.id
     }
+    /// The limits every run of this agent is accepted with.
     pub fn limits(&self) -> &Limits {
         &self.definition.limits
     }
@@ -154,6 +162,11 @@ impl<I, O> Agent<I, O> {
         &self.definition.binding
     }
     /// Accepts `input`, retaining the bounded suffix of `conversation` that fits the context limit.
+    ///
+    /// The run is in memory only; drive it with [`drive`](Self::drive). Fails with
+    /// [`Error::Input`] for input that does not deserialize as the agent's input type or does not
+    /// fit `max_context_bytes`, or a conversation ID outside 1..=1024 bytes, and with
+    /// [`Error::Context`] when the conversation's newest entry cannot fit the limit.
     pub fn new_run(
         &self,
         conversation_id: impl Into<String>,
@@ -243,7 +256,7 @@ impl<I: Serialize + 'static, O: DeserializeOwned> Agent<I, O> {
     ///     Err(Error::Waiting) => {
     ///         let run = conversation.last_run.as_mut().expect("retained");
     ///         let call_id = run.operations[0].call.id.clone();
-    ///         resolve(run, &call_id, Resolution::Approve(true))?;
+    ///         run.resolve(&call_id, Resolution::Approve(true))?;
     ///         let reply = agent.resume(&mut conversation, RunControl::default()).await?;
     ///         println!("{reply}");
     ///     }
@@ -505,8 +518,11 @@ where
 /// commit never fails the run: see [`Error::fails_run`].
 #[async_trait]
 pub trait Checkpoint: Send + Sync {
+    /// Persists `state` as the run's new checkpoint and advances `state.revision`.
     async fn commit(&self, state: &mut RunState) -> Result<()>;
 }
+/// A checkpoint that persists nothing and only advances the revision, for runs that live in
+/// memory, as [`Agent::run`] does.
 #[derive(Default)]
 pub struct MemoryCheckpoint;
 #[async_trait]
@@ -516,19 +532,66 @@ impl Checkpoint for MemoryCheckpoint {
         Ok(())
     }
 }
+/// How the caller of [`Agent::drive`] can stop a run and observe it. The default never stops
+/// and sends no events:
+///
+/// ```
+/// # use tokio_util::sync::CancellationToken;
+/// # use yielded_agent::RunControl;
+/// let cancel = CancellationToken::new();
+/// let control = RunControl::default().with_cancel(cancel.clone());
+/// ```
 #[derive(Clone, Default)]
+#[non_exhaustive]
 pub struct RunControl {
+    /// Cancelling it settles the run as [`Settlement::Cancelled`], interrupting the work in
+    /// flight; an operation dispatched without a recorded outcome is left
+    /// [`Unknown`](OperationStatus::Unknown).
     pub cancel: CancellationToken,
+    /// Cancelling it stops driving the run without settling it: `drive` returns
+    /// [`Error::Interrupted`] and the run resumes from its last checkpoint.
     pub shutdown: CancellationToken,
     /// Best-effort transient events, each naming its run, so one channel may serve many runs.
     /// A full channel drops events and never blocks execution.
     pub events: Option<mpsc::Sender<ProgressEvent>>,
 }
+impl RunControl {
+    /// Sets [`cancel`](Self::cancel).
+    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
+        self.cancel = cancel;
+        self
+    }
+    /// Sets [`shutdown`](Self::shutdown).
+    pub fn with_shutdown(mut self, shutdown: CancellationToken) -> Self {
+        self.shutdown = shutdown;
+        self
+    }
+    /// Sends progress events to `events`; see [`events`](Self::events).
+    pub fn with_events(mut self, events: mpsc::Sender<ProgressEvent>) -> Self {
+        self.events = Some(events);
+        self
+    }
+}
+/// An in-memory conversation for [`Agent::run`] and [`Agent::resume`]: its history and its latest
+/// run. Start an empty one with [`Conversation::default`].
 #[derive(Default, Debug)]
+#[non_exhaustive]
 pub struct Conversation {
+    /// Every entry of every run, in order. A run starts from the suffix that fits its context
+    /// limit; `run` and `resume` append the run's new entries when they return.
     pub history: Vec<HistoryEntry>,
-    /// Retains waits and uncertain outcomes even when the convenience API returns an error.
+    /// The latest run, retained even when `run` or `resume` returns an error, so its waits and
+    /// uncertain outcomes stay visible and resolvable with [`RunState::resolve`].
     pub last_run: Option<RunState>,
+}
+impl Conversation {
+    /// A conversation that continues from `history`, with no run in progress.
+    pub fn with_history(history: Vec<HistoryEntry>) -> Self {
+        Self {
+            history,
+            last_run: None,
+        }
+    }
 }
 /// The state machine runs on the shared definition of the agent being driven.
 impl Definition {
@@ -794,7 +857,6 @@ impl Definition {
                         state.id, state.usage.model_calls, call.id
                     ),
                     status,
-                    approved: false,
                 }
             })
             .collect();
@@ -1577,55 +1639,4 @@ async fn run_work<T>(
         _ = tokio::time::sleep_until(deadline) => WorkOutcome::TimedOut,
         result = future => WorkOutcome::Done(result),
     }
-}
-/// Resolve only the exact outstanding operation. Resolution itself must be committed by the caller.
-/// Reconciliation is allowed after cancellation so uncertainty stays visible and resolvable.
-pub fn resolve(state: &mut RunState, call_id: &str, resolution: Resolution) -> Result<()> {
-    let op = state
-        .operations
-        .iter_mut()
-        .find(|op| op.call.id == call_id)
-        .ok_or(Error::NotWaiting)?;
-    let next = match (&op.status, resolution) {
-        (OperationStatus::Approval, Resolution::Approve(true))
-            if !matches!(state.phase, Phase::Settled(_)) =>
-        {
-            op.approved = true;
-            OperationStatus::Pending
-        }
-        (OperationStatus::Approval, Resolution::Approve(false))
-            if !matches!(state.phase, Phase::Settled(_)) =>
-        {
-            OperationStatus::Complete(ToolResult {
-                call_id: call_id.into(),
-                value: json!({"error":"approval denied"}),
-                is_error: true,
-            })
-        }
-        (OperationStatus::Waiting(WaitRequest::Input { .. }), Resolution::Input(value))
-            if !matches!(state.phase, Phase::Settled(_)) =>
-        {
-            if encoded_len(&value) > state.limits.max_tool_output_bytes {
-                return Err(Error::input("input reply exceeds byte limit"));
-            }
-            OperationStatus::Complete(ToolResult {
-                call_id: call_id.into(),
-                value,
-                is_error: false,
-            })
-        }
-        (OperationStatus::Unknown { .. }, Resolution::Reconcile(result)) => {
-            if result.call_id != call_id
-                || encoded_len(&result.value) > state.limits.max_tool_output_bytes
-            {
-                return Err(Error::input(
-                    "reconciliation result identity or size is invalid",
-                ));
-            }
-            OperationStatus::Complete(result)
-        }
-        _ => return Err(Error::NotWaiting),
-    };
-    op.status = next;
-    Ok(())
 }

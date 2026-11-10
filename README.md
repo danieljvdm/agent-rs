@@ -28,7 +28,7 @@ assert_eq!(output, "hello");
 
 Every fallible call returns the one `Error` type. Its variants say what a caller would do about a failure: configuration or input to fix, a run's own work that went wrong, storage that could not be reached, or a store refusing a request. Errors that wrap another keep it as `source()`. While driving a run, `Error::fails_run` decides between settling the run as failed and returning the error with the run left resumable.
 
-Default features enable `sqlite` and `openai`. `default-features = false` builds the engine and the durable host without either adapter; the host then runs over the in-process `MemoryStore` or any other `DurableStore`. Tokio runs asynchronous work; a dedicated bounded worker keeps SQLite operations off its worker threads.
+Everything except the optional adapters is exported from the crate root, so `use yielded_agent::*;` brings in the engine, the durable host and the storage contract. The adapters live in their own modules, `yielded_agent::sqlite` and `yielded_agent::openai`. Default features enable `sqlite` and `openai`. `default-features = false` builds the engine and the durable host without either adapter; the host then runs over the in-process `MemoryStore` or any other `DurableStore`. Tokio runs asynchronous work; a dedicated bounded worker keeps SQLite operations off its worker threads.
 
 ## Durable execution
 
@@ -36,14 +36,11 @@ Default features enable `sqlite` and `openai`. `default-features = false` builds
 # #[cfg(feature = "sqlite")]
 # async fn durable(agent: yielded_agent::Agent) -> yielded_agent::Result<()> {
 use std::{sync::Arc, time::Duration};
-use yielded_agent::{host::{Host, HostOptions}, sqlite::SqliteStore};
+use yielded_agent::{Host, HostOptions, sqlite::SqliteStore};
 use serde_json::json;
 let store = Arc::new(SqliteStore::open("agent.sqlite").await?);
-let mut host = Host::start(store.clone(), agent, HostOptions {
-    max_concurrent_runs: 16,
-    poll_interval: Duration::from_millis(50),
-    events: None,
-})?;
+let options = HostOptions::default().with_poll_interval(Duration::from_millis(50));
+let mut host = Host::start(store.clone(), agent, options)?;
 let run_id = host.submit("conversation-1", "client-request-1", json!("hello"), None).await?;
 // RunId is returned only after acceptance commits. Reuse the same key to retry admission.
 let state = host.status(run_id).await?;

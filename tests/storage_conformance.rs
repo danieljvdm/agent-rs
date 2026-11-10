@@ -10,10 +10,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::Notify;
-use yielded_agent::{
-    host::{Host, HostOptions},
-    *,
-};
+use yielded_agent::{Host, HostOptions, *};
 
 /// Opens a store and simulates a host restart over the same durable contents.
 #[async_trait]
@@ -69,22 +66,14 @@ fn agent(responses: Vec<ModelResponse>, tools: Vec<Arc<dyn Tool>>) -> Agent {
         .unwrap()
 }
 fn spec(name: &str, retry: RetryPolicy) -> ToolSpec {
-    ToolSpec {
-        name: name.into(),
-        description: name.into(),
-        input_schema: json!({}),
-        version: "1".into(),
-        retry,
-        execution: Execution::Parallel,
-        requires_approval: false,
-    }
+    ToolSpec::new(name, "1")
+        .with_description(name)
+        .with_retry(retry)
 }
 fn options() -> HostOptions {
-    HostOptions {
-        max_concurrent_runs: 2,
-        poll_interval: Duration::from_millis(5),
-        events: None,
-    }
+    HostOptions::default()
+        .with_max_concurrent_runs(2)
+        .with_poll_interval(Duration::from_millis(5))
 }
 fn start(store: &Arc<dyn DurableStore>, agent: Agent) -> Host<dyn DurableStore> {
     Host::start(store.clone(), agent, options()).unwrap()
@@ -270,16 +259,17 @@ async fn safe_replay_and_budgets(fixture: &impl Fixture) {
     state.usage.active_ms = 31_000;
     state.operations = tools
         .iter()
-        .map(|tool| Operation {
-            call: ToolCall {
-                id: tool.spec().name.clone(),
-                name: tool.spec().name.clone(),
-                arguments: json!({}),
-            },
-            spec: tool.spec().clone(),
-            idempotency_key: format!("{id}/{}", tool.spec().name),
-            status: OperationStatus::Dispatched,
-            approved: true,
+        .map(|tool| {
+            Operation::new(
+                ToolCall {
+                    id: tool.spec().name.clone(),
+                    name: tool.spec().name.clone(),
+                    arguments: json!({}),
+                },
+                tool.spec().clone(),
+                format!("{id}/{}", tool.spec().name),
+                OperationStatus::Dispatched,
+            )
         })
         .collect();
     state.pending_response = Some(ModelResponse::tools(
@@ -330,20 +320,21 @@ async fn hidden_dispatch_and_repair(fixture: &impl Fixture) {
     state.phase = Phase::Tools;
     state.operations = ["wait", "effect"]
         .into_iter()
-        .map(|name| Operation {
-            call: ToolCall {
-                id: name.into(),
-                name: "effect".into(),
-                arguments: json!({}),
-            },
-            spec: tool.spec().clone(),
-            idempotency_key: name.into(),
-            status: if name == "wait" {
-                OperationStatus::Waiting(WaitRequest::Input { prompt: "?".into() })
-            } else {
-                OperationStatus::Dispatched
-            },
-            approved: true,
+        .map(|name| {
+            Operation::new(
+                ToolCall {
+                    id: name.into(),
+                    name: "effect".into(),
+                    arguments: json!({}),
+                },
+                tool.spec().clone(),
+                name,
+                if name == "wait" {
+                    OperationStatus::Waiting(WaitRequest::Input { prompt: "?".into() })
+                } else {
+                    OperationStatus::Dispatched
+                },
+            )
         })
         .collect();
     state.pending_response = Some(ModelResponse::tools(
@@ -448,10 +439,7 @@ async fn history_is_ordered_and_context_is_bounded(fixture: &impl Fixture) {
     store.commit(&mut state).await.unwrap();
     let bounded = Agent::builder("bounded", Arc::new(ScriptedModel::new(vec![])))
         .instructions("test")
-        .limits(Limits {
-            max_context_bytes: 512,
-            ..Limits::default()
-        })
+        .limits(Limits::default().with_max_context_bytes(512))
         .build()
         .unwrap();
     let id = store
@@ -492,17 +480,16 @@ async fn due_order_waits_and_expiry(fixture: &impl Fixture) {
             .unwrap();
         let mut state = store.claim(id).await.unwrap();
         state.phase = Phase::Tools;
-        state.operations = vec![Operation {
-            call: ToolCall {
+        state.operations = vec![Operation::new(
+            ToolCall {
                 id: "wait".into(),
                 name: "wait".into(),
                 arguments: json!({}),
             },
-            spec: spec("wait", RetryPolicy::ReadOnly),
-            idempotency_key: "wait".into(),
+            spec("wait", RetryPolicy::ReadOnly),
+            "wait",
             status,
-            approved: true,
-        }];
+        )];
         store.commit(&mut state).await.unwrap();
         (id, state.wake_at())
     };
@@ -736,4 +723,10 @@ mod sqlite_contract {
         }
     }
     conformance_tests!(fixture());
+}
+
+/// The current UTC Unix time in milliseconds, the unit of run expiry and timer waits.
+fn now_ms() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    u64::try_from(now.expect("clock after 1970").as_millis()).expect("milliseconds fit u64")
 }

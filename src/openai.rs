@@ -43,6 +43,8 @@ pub struct OpenAiModel {
 }
 
 impl OpenAiModel {
+    /// An adapter for `https://api.openai.com/v1` with its own HTTP client, which does not follow
+    /// redirects. Fails with [`Error::Config`] for an empty or unusable key.
     pub fn new(api_key: impl Into<String>) -> Result<Self> {
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(15))
@@ -54,9 +56,12 @@ impl OpenAiModel {
         Self::with_client(client, api_key, "https://api.openai.com/v1")
     }
 
+    /// An adapter that sends requests through `client` to `base_url`.
+    ///
     /// `base_url` is the API root, for example `https://api.openai.com/v1`.
     /// Custom clients should disable redirects. Plain HTTP is accepted only for
-    /// loopback test servers; non-local endpoints must use HTTPS.
+    /// loopback test servers; non-local endpoints must use HTTPS. Fails with
+    /// [`Error::Config`] for an empty or unusable key or an unacceptable URL.
     pub fn with_client(
         client: Client,
         api_key: impl Into<String>,
