@@ -934,10 +934,8 @@ async fn convenience_api_requires_reconciliation_before_replacing_cancelled_run(
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
         .await
         .unwrap();
-    let mut conversation = Conversation {
-        history: state.history.clone(),
-        last_run: Some(state),
-    };
+    let mut conversation = Conversation::with_history(state.history.clone());
+    conversation.last_run = Some(state);
     assert!(matches!(
         agent.run(&mut conversation, "next").await,
         Err(Error::ConversationBusy)

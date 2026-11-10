@@ -297,10 +297,7 @@ async fn engine_allocation_budgets() {
     let prior = prior_entries(1024);
     let mut prepared = Vec::new();
     for _ in 0..4 {
-        prepared.push(Conversation {
-            history: prior.clone(),
-            last_run: None,
-        });
+        prepared.push(Conversation::with_history(prior.clone()));
     }
     stable(
         "run_1024_prior_entries",

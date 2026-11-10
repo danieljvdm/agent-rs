@@ -562,11 +562,26 @@ impl RunControl {
         self
     }
 }
+/// An in-memory conversation for [`Agent::run`] and [`Agent::resume`]: its history and its latest
+/// run. Start an empty one with [`Conversation::default`].
 #[derive(Default, Debug)]
+#[non_exhaustive]
 pub struct Conversation {
+    /// Every entry of every run, in order. A run starts from the suffix that fits its context
+    /// limit; `run` and `resume` append the run's new entries when they return.
     pub history: Vec<HistoryEntry>,
-    /// Retains waits and uncertain outcomes even when the convenience API returns an error.
+    /// The latest run, retained even when `run` or `resume` returns an error, so its waits and
+    /// uncertain outcomes stay visible and resolvable with [`RunState::resolve`].
     pub last_run: Option<RunState>,
+}
+impl Conversation {
+    /// A conversation that continues from `history`, with no run in progress.
+    pub fn with_history(history: Vec<HistoryEntry>) -> Self {
+        Self {
+            history,
+            last_run: None,
+        }
+    }
 }
 /// The state machine runs on the shared definition of the agent being driven.
 impl Definition {
