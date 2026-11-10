@@ -5,6 +5,8 @@ edition = "2024"
 rust-version = "1.89"
 description = "A resumable agent engine with an optional SQLite durable host"
 license = "MIT"
+[workspace]
+members = ["apps/personal-agent"]
 [features]
 default = ["sqlite", "openai"]
 sqlite = ["dep:rusqlite"]

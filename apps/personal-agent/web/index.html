@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Yielded · Personal agent</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Yielded home"><span class="mark" aria-hidden="true">y</span>Yielded <span class="brand-detail">Personal agent</span></a>
+    <div class="connection"><span id="connection-dot" class="dot"></span><span id="connection-status" role="status">Not connected</span><button id="disconnect" class="quiet" hidden>Disconnect</button></div>
+  </header>
+
+  <main id="connect-screen" class="connect-screen">
+    <p class="eyebrow">A little help, on your terms</p>
+    <h1>Your work.<br>Your decisions.</h1>
+    <p class="intro">Keep a conversation going, review what your agent wants to do, and pick up where you left off.</p>
+    <form id="connect-form" class="connect-form">
+      <label for="token">Application access token</label>
+      <input id="token" type="password" required autocomplete="off" spellcheck="false" placeholder="Enter your access token">
+      <p class="hint">Your token stays in this tab’s memory. Enter it again after a reload.</p>
+      <button type="submit" class="primary">Connect</button>
+      <p id="connect-error" class="error" role="alert"></p>
+    </form>
+  </main>
+
+  <div id="workspace" class="workspace" hidden>
+    <aside class="sidebar" aria-label="Conversations">
+      <div class="section-heading"><h2>Conversations</h2><button id="new-conversation" class="icon-button" aria-label="New conversation" title="New conversation">+</button></div>
+      <form id="new-conversation-form" hidden>
+        <label for="conversation-name">Conversation name</label>
+        <input id="conversation-name" maxlength="100" required placeholder="What’s on your mind?">
+        <div class="actions"><button type="submit" class="primary small">Create</button><button id="cancel-new" type="button" class="quiet">Cancel</button></div>
+      </form>
+      <nav id="conversation-list" aria-label="Choose a conversation"></nav>
+      <p id="no-conversations" class="hint">A fresh start. Create your first conversation.</p>
+      <button id="more-conversations" class="quiet more" hidden>Load more conversations</button>
+      <div class="sidebar-footer"><span class="dot green"></span><span id="agent-label">Personal agent</span></div>
+    </aside>
+
+    <main class="conversation-panel">
+      <header class="conversation-heading"><div><p class="eyebrow">Your workspace</p><h1 id="conversation-title">Make room for what matters.</h1></div><button id="refresh" class="quiet">Refresh</button></header>
+      <p id="notice" class="notice" role="status" hidden></p>
+      <section id="transcript" class="transcript" aria-label="Conversation history">
+        <div class="empty"><span class="empty-mark" aria-hidden="true">↗</span><h2>One conversation at a time.</h2><p>Create a conversation to get started. Your history and pending decisions will be here when you return.</p></div>
+      </section>
+      <button id="more-history" class="quiet more" hidden>Load more history</button>
+      <form id="message-form" class="composer">
+        <label for="message">Message your agent</label>
+        <textarea id="message" rows="3" maxlength="12000" required placeholder="What would you like help with?" disabled></textarea>
+        <div class="composer-footer"><p id="composer-hint" class="hint">Choose a conversation to begin.</p><button id="send-message" type="submit" class="primary" disabled>Send message <span aria-hidden="true">↑</span></button></div>
+      </form>
+    </main>
+
+    <aside class="inbox-panel" aria-label="Decision inbox">
+      <div class="section-heading"><h2>Needs your decision</h2><span id="decision-count" class="count">0</span></div>
+      <p class="inbox-intro">You have the final say.</p>
+      <div id="inbox"></div>
+      <p id="inbox-empty" class="inbox-empty">All caught up.<br><span>Questions and approvals will appear here.</span></p>
+      <div id="pending-admissions"></div>
+      <button id="more-inbox" class="quiet more" hidden>Load more activity</button>
+    </aside>
+  </div>
+</body>
+</html>
