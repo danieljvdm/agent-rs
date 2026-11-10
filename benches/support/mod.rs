@@ -243,15 +243,9 @@ impl Fixture {
             batch,
             expected_seed_entries: history_entries,
         });
-        let spec = ToolSpec {
-            name: "echo".into(),
-            description: "Return a deterministic integer".into(),
-            input_schema: json!({}),
-            version: "1".into(),
-            retry: RetryPolicy::ReadOnly,
-            execution: Execution::Parallel,
-            requires_approval: false,
-        };
+        let spec = ToolSpec::new("echo", "1")
+            .with_description("Return a deterministic integer")
+            .with_retry(RetryPolicy::ReadOnly);
         let inner = typed_tool::<Arguments, usize, _, _>(spec, |args, _| async move {
             Ok(ToolOutput::Complete(args.n))
         });

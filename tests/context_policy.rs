@@ -85,15 +85,9 @@ impl ContextPolicy for Derived {
 }
 
 fn spec(name: &str) -> ToolSpec {
-    ToolSpec {
-        name: name.into(),
-        description: "test".into(),
-        input_schema: json!({}),
-        version: "1".into(),
-        retry: RetryPolicy::ReadOnly,
-        execution: Execution::Parallel,
-        requires_approval: false,
-    }
+    ToolSpec::new(name, "1")
+        .with_description("test")
+        .with_retry(RetryPolicy::ReadOnly)
 }
 /// `note` and `blob` both return `n` bytes of text.
 fn tools() -> Vec<Arc<dyn Tool>> {

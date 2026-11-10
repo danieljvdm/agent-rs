@@ -66,15 +66,9 @@ fn agent(responses: Vec<ModelResponse>, tools: Vec<Arc<dyn Tool>>) -> Agent {
         .unwrap()
 }
 fn spec(name: &str, retry: RetryPolicy) -> ToolSpec {
-    ToolSpec {
-        name: name.into(),
-        description: name.into(),
-        input_schema: json!({}),
-        version: "1".into(),
-        retry,
-        execution: Execution::Parallel,
-        requires_approval: false,
-    }
+    ToolSpec::new(name, "1")
+        .with_description(name)
+        .with_retry(retry)
 }
 fn options() -> HostOptions {
     HostOptions {

@@ -240,25 +240,22 @@ struct FileTool {
     children: Mutex<HashMap<(RunId, String), JoinHandle<()>>>,
 }
 fn spec(name: &str, description: &str, input_schema: Value, write: bool) -> ToolSpec {
-    ToolSpec {
-        name: name.into(),
-        description: description.into(),
-        input_schema,
-        version: FIXTURE_VERSION.into(),
-        retry: if write {
+    ToolSpec::new(name, FIXTURE_VERSION)
+        .with_description(description)
+        .with_input_schema(input_schema)
+        .with_retry(if write {
             RetryPolicy::Idempotent {
                 contract: "one-reminder-file-per-run-v1".into(),
             }
         } else {
             RetryPolicy::ReadOnly
-        },
-        execution: if write {
+        })
+        .with_execution(if write {
             Execution::Sequential
         } else {
             Execution::Parallel
-        },
-        requires_approval: write,
-    }
+        })
+        .with_requires_approval(write)
 }
 #[async_trait]
 impl Tool for FileTool {

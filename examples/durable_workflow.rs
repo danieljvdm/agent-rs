@@ -15,15 +15,12 @@ mod demo {
     use yielded_agent::{sqlite::SqliteStore, *};
 
     fn spec(name: &str, approval: bool, retry: RetryPolicy) -> ToolSpec {
-        ToolSpec {
-            name: name.into(),
-            description: name.into(),
-            input_schema: Value::Null,
-            version: "1".into(),
-            retry,
-            execution: Execution::Sequential,
-            requires_approval: approval,
-        }
+        ToolSpec::new(name, "1")
+            .with_description(name)
+            .with_input_schema(Value::Null)
+            .with_retry(retry)
+            .with_execution(Execution::Sequential)
+            .with_requires_approval(approval)
     }
     fn call(name: &str) -> ModelResponse {
         ModelResponse::tools(vec![ToolCall {

@@ -21,15 +21,10 @@ fn final_agent() -> Agent {
     agent(vec![ModelResponse::final_output(json!("done"))], vec![])
 }
 fn spec(name: &str, retry: RetryPolicy, requires_approval: bool) -> ToolSpec {
-    ToolSpec {
-        name: name.into(),
-        description: name.into(),
-        input_schema: json!({}),
-        version: "1".into(),
-        retry,
-        execution: Execution::Parallel,
-        requires_approval,
-    }
+    ToolSpec::new(name, "1")
+        .with_description(name)
+        .with_retry(retry)
+        .with_requires_approval(requires_approval)
 }
 async fn store(dir: &TempDir) -> Arc<SqliteStore> {
     Arc::new(

@@ -203,15 +203,9 @@ struct Lookup {
     limit: Option<u32>,
 }
 fn spec(name: &str) -> ToolSpec {
-    ToolSpec {
-        name: name.into(),
-        description: format!("Deterministic {name} tool for cost guards."),
-        input_schema: json!({}),
-        version: "1".into(),
-        retry: RetryPolicy::ReadOnly,
-        execution: Execution::Parallel,
-        requires_approval: false,
-    }
+    ToolSpec::new(name, "1")
+        .with_description(format!("Deterministic {name} tool for cost guards."))
+        .with_retry(RetryPolicy::ReadOnly)
 }
 /// Four typed tools; the scripted model only calls `echo`.
 fn tools() -> Vec<Arc<dyn Tool>> {

@@ -12,15 +12,9 @@ use tokio_util::sync::CancellationToken;
 use yielded_agent::*;
 
 fn spec(name: &str) -> ToolSpec {
-    ToolSpec {
-        name: name.into(),
-        description: "test".into(),
-        input_schema: json!({}),
-        version: "1".into(),
-        retry: RetryPolicy::ReadOnly,
-        execution: Execution::Parallel,
-        requires_approval: false,
-    }
+    ToolSpec::new(name, "1")
+        .with_description("test")
+        .with_retry(RetryPolicy::ReadOnly)
 }
 fn call(id: &str, name: &str, value: Value) -> ToolCall {
     ToolCall {

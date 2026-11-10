@@ -204,15 +204,82 @@ pub enum Execution {
     Parallel,
     Sequential,
 }
+/// What the model is told about a tool, and how the engine may run it. Start from
+/// [`ToolSpec::new`] and set what differs from its defaults:
+///
+/// ```
+/// # use yielded_agent::{RetryPolicy, ToolSpec};
+/// let spec = ToolSpec::new("create_reminder", "1")
+///     .with_description("Create a reminder at a time.")
+///     .with_retry(RetryPolicy::Idempotent { contract: "reminder-key-v1".into() })
+///     .with_requires_approval(true);
+/// assert!(spec.requires_approval);
+/// ```
+///
+/// Every field is part of the agent's [`binding`](crate::Agent::binding), and a recorded operation
+/// keeps the spec it was called under: a stored run resumes only if each tool it called still
+/// has an equal spec. Change [`version`](Self::version) whenever the tool's behaviour changes.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub struct ToolSpec {
+    /// The name the model calls the tool by, unique within an agent and 1..=256 bytes.
     pub name: String,
+    /// What the tool does, for the model. Defaults to empty.
     pub description: String,
+    /// JSON Schema of the arguments, for the model. Defaults to `{}`, which accepts any
+    /// arguments. [`typed_tool`](crate::typed_tool) replaces it with the schema of its
+    /// argument type.
     pub input_schema: Value,
+    /// The version of the tool's contract. Must not be empty.
     pub version: String,
+    /// Whether an execution whose outcome is unknown may run again. Defaults to
+    /// [`RetryPolicy::Never`].
     pub retry: RetryPolicy,
+    /// Whether the call may run beside the batch's other calls. Defaults to
+    /// [`Execution::Parallel`].
     pub execution: Execution,
+    /// Whether each call waits in [`OperationStatus::Approval`] until it is resolved with
+    /// [`Resolution::Approve`]. Defaults to `false`.
     pub requires_approval: bool,
+}
+impl ToolSpec {
+    /// A tool called `name` at contract `version`, with the defaults documented on each field.
+    pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: String::new(),
+            input_schema: json!({}),
+            version: version.into(),
+            retry: RetryPolicy::Never,
+            execution: Execution::Parallel,
+            requires_approval: false,
+        }
+    }
+    /// Sets [`description`](Self::description).
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+    /// Sets [`input_schema`](Self::input_schema).
+    pub fn with_input_schema(mut self, schema: Value) -> Self {
+        self.input_schema = schema;
+        self
+    }
+    /// Sets [`retry`](Self::retry).
+    pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
+        self.retry = retry;
+        self
+    }
+    /// Sets [`execution`](Self::execution).
+    pub fn with_execution(mut self, execution: Execution) -> Self {
+        self.execution = execution;
+        self
+    }
+    /// Sets [`requires_approval`](Self::requires_approval).
+    pub fn with_requires_approval(mut self, requires_approval: bool) -> Self {
+        self.requires_approval = requires_approval;
+        self
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[non_exhaustive]
