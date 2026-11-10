@@ -87,6 +87,7 @@ pub struct ToolResult {
 }
 /// Exchanges are indivisible during context selection; calls never lose their results.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum HistoryEntry {
     Input(Value),
     Exchange {
@@ -95,6 +96,7 @@ pub enum HistoryEntry {
     },
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RetryPolicy {
     Never,
     ReadOnly,
@@ -116,11 +118,13 @@ pub struct ToolSpec {
     pub requires_approval: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum WaitRequest {
     Input { prompt: String },
     Until { unix_ms: u64 },
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum OperationStatus {
     Pending,
     Approval,
@@ -137,6 +141,7 @@ pub struct Operation {
     pub status: OperationStatus,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StopReason {
     ModelCalls,
     ToolCalls,
@@ -163,6 +168,7 @@ pub enum Settlement {
     Cancelled,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub enum Phase {
     Ready,
     ModelInFlight,
@@ -299,6 +305,7 @@ impl RunState {
     }
 }
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum Resolution {
     Approve(bool),
     Input(Value),

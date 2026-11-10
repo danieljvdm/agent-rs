@@ -14,6 +14,7 @@ pub struct ToolContext {
     pub cancel: CancellationToken,
 }
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum ToolOutput<T> {
     Complete(T),
     /// A complete, reported tool failure. Unlike an execution error, its outcome is known.

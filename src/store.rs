@@ -62,6 +62,7 @@ impl Drop for SlotGuard {
 
 /// An application request against a stored run, outside its execution.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum RunUpdate {
     /// Persist explicit cancellation. A settled or already cancelled run is unchanged.
     Cancel,

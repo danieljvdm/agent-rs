@@ -44,6 +44,7 @@ pub struct ModelRequest {
     pub remaining_tokens: u64,
 }
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum ModelEvent {
     TextDelta(String),
     Response(ModelResponse),

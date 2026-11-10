@@ -94,6 +94,7 @@ impl Model for CheckedModel {
                     .as_ref()
                     .and_then(|value| value["answer"].as_str())
                     .is_some_and(|text| text.starts_with("prior answer ")),
+                _ => false,
             })
             .count();
         assert_eq!(
