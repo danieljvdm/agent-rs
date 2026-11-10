@@ -183,7 +183,7 @@ impl SteeringStore for SqliteStore {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::{ScriptedModel, Settlement};
     use rusqlite::trace::{TraceEvent, TraceEventCodes};
@@ -337,7 +337,7 @@ mod tests {
     /// only changes progress, the model dispatch commit, and a completed settlement that appends
     /// its exchange, BEGIN and COMMIT included. Measured on main before steering: the queue check
     /// rides on the delta write's existing first statement, so steering unused adds none.
-    const STATEMENTS_PER_UNSTEERED_COMMIT: [u64; 3] = [4, 4, 5];
+    pub(in crate::sqlite) const STATEMENTS_PER_UNSTEERED_COMMIT: [u64; 3] = [4, 4, 5];
     static STATEMENTS: AtomicU64 = AtomicU64::new(0);
     fn count(_: TraceEvent<'_>) {
         STATEMENTS.fetch_add(1, Ordering::Relaxed);

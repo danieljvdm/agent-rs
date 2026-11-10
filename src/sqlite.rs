@@ -15,6 +15,9 @@
 //!   it to `history` at the run's next ordinals, in the same transaction that marks it applied.
 //!   The table is created additively in `steering_queue`, within schema version 2.
 //! - `children` holds one progress row per child a run's delegations admitted; see `children`.
+//! - `automations`, `automation_cursors` and `automation_occurrences` hold interval
+//!   automations and their firings. They are created additively in `automation`, within schema
+//!   version 2, and no run write touches them.
 mod children;
 use crate::steering::Boundary;
 use crate::store;
@@ -39,6 +42,7 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 
+mod automation;
 #[cfg(feature = "memory")]
 mod memory;
 mod steering_queue;
@@ -312,6 +316,7 @@ impl Database {
             )
             .map_err(Error::storage)?;
         steering_queue::create(&connection)?;
+        automation::create_tables(&connection)?;
         Ok(Self {
             connection,
             _lock: lock,
