@@ -81,6 +81,12 @@ The optional [`memory` feature](docs/memory.md) is one such policy: extractive s
 
 Progress events are transient and best effort through a caller-supplied bounded Tokio channel; a full channel drops events and never blocks a run. Each `ProgressEvent` carries its `run_id`, a child's `parent_run_id`, and a `ProgressKind` (model started, text delta, tools started, committed, settled), so one channel, such as `HostOptions::events`, can serve many concurrent runs. Events are neither persisted nor counted in run state, and both types are `#[non_exhaustive]`: new kinds and fields may be added. Reconnect using durable status/history, not token deltas. Standard `tracing` emits run spans without prompts or credentials.
 
+## Personal agent application
+
+The separate [`yielded-personal-agent` application](docs/personal-agent.md) in `apps/personal-agent` provides a local authenticated API, conversation UI, and approval/input/reconciliation inbox over a `Host<SqliteStore>`. It restores from durable state after reconnect or restart, and maps runtime errors to HTTP statuses by `Error` variant. Product policy, credentials, and presentation stay outside the runtime crate.
+
+With `PERSONAL_AGENT_TOKEN` set to a randomly generated token of at least 32 characters, run `scripts/rust.sh run -p yielded-personal-agent -- --demo` and open `http://127.0.0.1:3000`. The offline notebook workflow asks for details and approval before saving a local note. Omit `--demo` and supply `OPENAI_API_KEY` and `OPENAI_MODEL` to use the existing live adapter. The repository is a Cargo workspace; add `-p yielded-personal-agent` (or `--workspace`) to the commands below to check the application.
+
 ## Development
 
 The checked-in `rust-toolchain.toml` pins Rust and the lint/format components. If Homebrew Cargo takes precedence over rustup, use `scripts/rust.sh` in place of `cargo` to select the pinned toolchain explicitly.
