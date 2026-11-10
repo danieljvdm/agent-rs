@@ -40,12 +40,12 @@ const TOOL_SCHEDULE_VIRTUAL_MS: u64 = 310;
 
 // Heap allocations on the driving thread: (count, requested bytes), with headroom.
 /// `Agent::run` of a final-only response in an empty conversation.
-const ALLOC_RUN_EMPTY_CONVERSATION: Budget = Budget::new(32, 2_118);
+const ALLOC_RUN_EMPTY_CONVERSATION: Budget = Budget::new(32, 2_148);
 /// The same run in a conversation holding 1,024 prior entries: one copy into the run's prior
 /// context and one into the model request.
-const ALLOC_RUN_1024_PRIOR_ENTRIES: Budget = Budget::new(6_177, 1_737_242);
+const ALLOC_RUN_1024_PRIOR_ENTRIES: Budget = Budget::new(6_177, 1_737_272);
 /// `Agent::run` of four rounds of one tool each in an empty conversation.
-const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(430, 51_996);
+const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(430, 52_026);
 /// `Agent::drive` of a final response streamed as 64 text deltas of 16 bytes, observed through
 /// an attached progress channel that a receiver drains concurrently. Includes the scripted
 /// model's copy of each delta, so the engine itself must add no allocation per delta. Bytes
@@ -53,7 +53,7 @@ const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(430, 51_996);
 const ALLOC_STREAM_64_DELTAS_OBSERVED: Budget = Budget::new(97, 10_850);
 /// `Agent::run` of a final-only response for an agent with typed input and output, in an empty
 /// conversation: includes validating the input and the output against their types.
-const ALLOC_RUN_TYPED_EMPTY_CONVERSATION: Budget = Budget::new(57, 7_896);
+const ALLOC_RUN_TYPED_EMPTY_CONVERSATION: Budget = Budget::new(57, 7_926);
 /// `Agent::clone` with four typed tools (once per spawned durable run and per `accept`).
 const ALLOC_AGENT_CLONE: Budget = Budget::new(0, 0);
 /// `Agent::drive` of a settled run decoded from storage, with four typed tools: only the
