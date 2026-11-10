@@ -323,7 +323,7 @@ async fn schedule<S: DurableStore + ?Sized + 'static>(
                     Some(Ok((id, position, result))) => {
                         running.lock().expect("running map lock").remove(&id);
                         if let Err(error) = result
-                            && !matches!(error, Error::Stale | Error::Interrupted)
+                            && error.needs_retry()
                             && let Some(position) = position
                             && let Err(error) = store.record_error(id, position, error.to_string()).await
                         {
@@ -346,7 +346,7 @@ async fn schedule<S: DurableStore + ?Sized + 'static>(
             Ok((id, position, result)) => {
                 running.lock().expect("running map lock").remove(&id);
                 if let Err(error) = result
-                    && !matches!(error, Error::Stale | Error::Interrupted)
+                    && error.needs_retry()
                     && let Some(position) = position
                 {
                     let _ = store.record_error(id, position, error.to_string()).await;

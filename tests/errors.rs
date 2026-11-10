@@ -308,6 +308,20 @@ fn fails_run_separates_failed_runs_from_resumable_ones() {
     }
 }
 
+#[test]
+fn only_stale_and_interrupted_runs_resume_without_a_retry() {
+    for error in [Error::Stale, Error::Interrupted] {
+        assert!(!error.needs_retry(), "{error:?}");
+    }
+    for error in [
+        Error::storage("disk full"),
+        Error::incompatible("agent is not registered"),
+        Error::NotFound,
+    ] {
+        assert!(error.needs_retry(), "{error:?}");
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // How an in-memory run ended, as `run` and `resume` report it.
 // ---------------------------------------------------------------------------------------------
