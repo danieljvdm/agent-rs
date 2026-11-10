@@ -70,7 +70,10 @@ impl Inner {
         };
         if run.state.is_terminal() {
             run.last_error = None;
-            self.unsettled.remove(&run.state.conversation_id);
+            // A settled run stays resolvable after a newer run took its conversation.
+            if self.unsettled.get(&run.state.conversation_id) == Some(&id) {
+                self.unsettled.remove(&run.state.conversation_id);
+            }
         }
         self.conversations
             .entry(run.state.conversation_id.clone())

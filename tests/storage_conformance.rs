@@ -669,6 +669,8 @@ async fn shutdown_and_recovery(fixture: &impl Fixture) {
         wait_for(&host, id, RunState::is_terminal).await.phase,
         Phase::Settled(Settlement::Cancelled)
     );
+    // The conversation moves on while the settled run's uncertainty is still open.
+    host.submit("c", "next", json!(2), None).await.unwrap();
     host.resolve(
         id,
         "op",
@@ -680,6 +682,10 @@ async fn shutdown_and_recovery(fixture: &impl Fixture) {
     )
     .await
     .unwrap();
+    assert!(matches!(
+        host.submit("c", "third", json!(3), None).await,
+        Err(Error::ConversationBusy)
+    ));
     assert!(matches!(
         store.operations(id).await.unwrap()[0].status,
         OperationStatus::Complete(_)
