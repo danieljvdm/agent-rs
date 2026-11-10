@@ -55,7 +55,7 @@ Model/tool implementations must not detach child tasks. If they own asynchronous
 
 Schema/state versions and immutable agent bindings are checked explicitly. A database or run written with another schema or state version is rejected with `Error::Incompatible`, and corrupt or foreign data with `Error::Storage`; there is no compatibility decoding. Instructions, model configuration, schemas, tool versions, retry contracts, and limits are retained. Change the agent/tool version when implementation semantics change; function bodies and credentials are not serialized. An incompatible binding leaves the accepted obligation retained with a visible host/store error until the application repairs the binding and retries it.
 
-Status and history are authoritative after reconnect. Progress events and text deltas are bounded, transient, and may be dropped. A run carries bounded prior context, stored once at acceptance, and current-run evidence; recovery does not replay the conversation's entire lifetime. Context retains whole model/tool exchanges and the current input; an oversized newest group fails explicitly.
+Status and history are authoritative after reconnect. Progress events and text deltas are bounded, transient, and may be dropped; each names its run, and none is persisted. A run carries bounded prior context, stored once at acceptance, and current-run evidence; recovery does not replay the conversation's entire lifetime. Context retains whole model/tool exchanges and the current input; an oversized newest group fails explicitly.
 
 ## Deliberate differences from Yielded Agent
 

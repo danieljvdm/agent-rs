@@ -49,7 +49,7 @@ def diagnostic_report(instrumented, scale):
             elapsed = round((index + 1) * 10_000 * scale * (1 + sample / 100))
             samples.append({
                 "case": case, "completed_runs": runs, "model_calls": model_calls, "tool_calls": tool_calls,
-                "elapsed_ns": elapsed, "process_cpu_ns": elapsed // 2, "events": 8 * model_calls,
+                "elapsed_ns": elapsed, "process_cpu_ns": elapsed // 2,
                 "first_output_ns": elapsed // 3 if case.endswith("_observed") else None,
                 "operation_latencies_ns": [elapsed // runs] * runs if case.startswith("conversations_") else [],
                 "allocations": 100 * (index + 1) if instrumented else None,

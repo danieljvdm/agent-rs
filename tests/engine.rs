@@ -421,12 +421,27 @@ async fn empty_stream_events_have_a_hard_bound() {
         },
     );
     let mut state = state(&agent);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
     Engine::new(agent)
-        .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+        .drive(
+            &mut state,
+            &MemoryCheckpoint,
+            RunControl {
+                events: Some(tx),
+                ..RunControl::default()
+            },
+        )
         .await
         .unwrap();
     assert!(matches!(state.phase, Phase::Settled(Settlement::Failed(_))));
-    assert!(state.usage.events < 30);
+    let mut deltas = 0;
+    while let Some(event) = rx.recv().await {
+        deltas += usize::from(matches!(event.kind, ProgressKind::TextDelta(_)));
+    }
+    assert_eq!(
+        deltas, 16,
+        "the model event bound is the response byte limit"
+    );
 }
 
 struct FailBeforeModel;
@@ -764,7 +779,7 @@ async fn settlement_event_is_emitted_only_after_a_successful_commit() {
         Err(Error::Storage(_))
     ));
     while let Some(event) = rx.recv().await {
-        assert!(!matches!(event, ProgressEvent::Settled { .. }));
+        assert!(!matches!(event.kind, ProgressKind::Settled));
     }
 }
 
@@ -1098,16 +1113,16 @@ async fn progress_events_for_one_tool_round_are_exact() {
         .await
         .unwrap();
     let mut events = Vec::new();
-    while let Some(event) = rx.recv().await {
-        events.push(match event {
-            ProgressEvent::ModelStarted { run_id } if run_id == state.id => "model".to_owned(),
-            ProgressEvent::TextDelta(text) => format!("delta:{text}"),
-            ProgressEvent::ToolsStarted { count } => format!("tools:{count}"),
-            ProgressEvent::Committed { run_id, revision } if run_id == state.id => {
-                format!("commit:{revision}")
-            }
-            ProgressEvent::Settled { run_id } if run_id == state.id => "settled".to_owned(),
-            other => panic!("event for another run: {other:?}"),
+    while let Some(ProgressEvent { run_id, kind, .. }) = rx.recv().await {
+        // Every event, text deltas and tool starts included, identifies its run.
+        assert_eq!(run_id, state.id, "{kind:?} is not attributed to its run");
+        events.push(match kind {
+            ProgressKind::ModelStarted => "model".to_owned(),
+            ProgressKind::TextDelta(text) => format!("delta:{text}"),
+            ProgressKind::ToolsStarted { count, .. } => format!("tools:{count}"),
+            ProgressKind::Committed { revision, .. } => format!("commit:{revision}"),
+            ProgressKind::Settled => "settled".to_owned(),
+            other => panic!("unexpected event: {other:?}"),
         });
     }
     assert_eq!(
@@ -1132,6 +1147,68 @@ async fn progress_events_for_one_tool_round_are_exact() {
         ]
     );
     assert_eq!(state.revision, 8);
+}
+
+/// Streams its own run ID as every text delta, yielding between deltas so concurrent runs
+/// interleave on a shared channel.
+struct RunIdEcho;
+#[async_trait]
+impl Model for RunIdEcho {
+    async fn stream(&self, request: ModelRequest, _: CancellationToken) -> Result<ModelStream> {
+        let run_id = request.run_id.to_string();
+        Ok(Box::pin(stream::unfold(0, move |n| {
+            let run_id = run_id.clone();
+            async move {
+                tokio::task::yield_now().await;
+                let event = match n {
+                    0..3 => ModelEvent::TextDelta(run_id),
+                    3 => ModelEvent::Response(ModelResponse::final_output(json!("done"))),
+                    _ => return None,
+                };
+                Some((Ok(event), n + 1))
+            }
+        })))
+    }
+}
+#[tokio::test]
+async fn concurrent_runs_sharing_a_channel_attribute_every_event() {
+    let agent = agent(Arc::new(RunIdEcho), vec![], Limits::default());
+    let (mut first, mut second) = (state(&agent), state(&agent));
+    let engine = Engine::new(agent);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let control = || RunControl {
+        events: Some(tx.clone()),
+        ..RunControl::default()
+    };
+    let (a, b) = tokio::join!(
+        engine.drive(&mut first, &MemoryCheckpoint, control()),
+        engine.drive(&mut second, &MemoryCheckpoint, control()),
+    );
+    a.unwrap();
+    b.unwrap();
+    drop(tx);
+    let mut deltas = std::collections::HashMap::new();
+    let mut previous = None;
+    let mut interleaved = false;
+    while let Some(event) = rx.recv().await {
+        assert!([first.id, second.id].contains(&event.run_id));
+        interleaved |= previous.is_some_and(|run| run != event.run_id);
+        previous = Some(event.run_id);
+        if let ProgressKind::TextDelta(text) = event.kind {
+            assert_eq!(
+                text,
+                event.run_id.to_string(),
+                "delta attributed to another run"
+            );
+            *deltas.entry(event.run_id).or_insert(0) += 1;
+        }
+    }
+    assert!(
+        interleaved,
+        "the runs did not share the channel concurrently"
+    );
+    assert_eq!(deltas[&first.id], 3);
+    assert_eq!(deltas[&second.id], 3);
 }
 
 struct RecordingModel {

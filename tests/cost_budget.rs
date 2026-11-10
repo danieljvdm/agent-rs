@@ -31,7 +31,7 @@ const SQLITE_CONTEXT_COPIES_FOUR_TOOL_ROUNDS: u64 = 1;
 /// 27 transactions do not depend on how much context the conversation retains.
 const SQLITE_CONTEXT_COPIES_CLAIM_TO_SETTLEMENT: u64 = 0;
 /// Record bytes written by the same four-round run with no retained context (with headroom).
-const SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS: u64 = 27_591;
+const SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS: u64 = 27_263;
 
 // Tool scheduling under paused Tokio time (exact virtual milliseconds).
 /// Five parallel calls sleeping 300/10/10/10/300 ms with `max_parallel_tools = 4`. The sliding
@@ -46,6 +46,11 @@ const ALLOC_RUN_EMPTY_CONVERSATION: Budget = Budget::new(398, 36_326);
 const ALLOC_RUN_1024_PRIOR_ENTRIES: Budget = Budget::new(6_543, 1_771_450);
 /// `Engine::run` of four rounds of one tool each in an empty conversation.
 const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(804, 88_768);
+/// `Engine::drive` of a final response streamed as 64 text deltas of 16 bytes, observed through
+/// an attached progress channel that a receiver drains concurrently. Includes the scripted
+/// model's copy of each delta, so the engine itself must add no allocation per delta. Bytes
+/// include the channel's two 32-slot blocks of 40-byte `ProgressEvent`s, a per-channel cost.
+const ALLOC_STREAM_64_DELTAS_OBSERVED: Budget = Budget::new(169, 17_986);
 /// `Agent::clone` with four typed tools (once per spawned durable run and per `accept`).
 const ALLOC_AGENT_CLONE: Budget = Budget::new(7, 764);
 /// `Agent::binding` with four typed tools (rebuilt on every `drive` and `accept`).
@@ -318,6 +323,88 @@ async fn engine_allocation_budgets() {
             let mut conversation = Conversation::default();
             let _: Value = engine.run(&mut conversation, "go").await.unwrap();
             assert_completed(conversation.last_run.as_ref().unwrap(), 4, 1);
+        },
+    )
+    .await;
+}
+
+const STREAM_DELTAS: usize = 64;
+/// Yields before every event, as a network stream would, so the receiver drains each delta
+/// while the run is still streaming.
+struct PacedModel(Vec<ModelEvent>);
+#[async_trait::async_trait]
+impl Model for PacedModel {
+    async fn stream(
+        &self,
+        _: ModelRequest,
+        _: tokio_util::sync::CancellationToken,
+    ) -> Result<ModelStream> {
+        Ok(Box::pin(futures::StreamExt::then(
+            futures::stream::iter(self.0.clone()),
+            |event| async move {
+                tokio::task::yield_now().await;
+                Ok(event)
+            },
+        )))
+    }
+}
+#[tokio::test]
+async fn observed_stream_allocation_budget() {
+    let agent = Agent::new::<Value, Value>(
+        "cost",
+        "Stream the scripted answer.",
+        Arc::new(PacedModel(
+            std::iter::repeat_n(ModelEvent::TextDelta("x".repeat(16)), STREAM_DELTAS)
+                .chain([ModelEvent::Response(ModelResponse::final_output(json!(
+                    "done"
+                )))])
+                .collect(),
+        )),
+        ModelConfig::default(),
+        vec![],
+        Limits::default(),
+    )
+    .unwrap();
+    let engine = Engine::new(agent);
+    stable(
+        "stream_64_deltas_observed",
+        ALLOC_STREAM_64_DELTAS_OBSERVED,
+        || async {
+            let mut state = engine
+                .agent()
+                .new_run("cost", json!("go"), &[], None)
+                .unwrap();
+            let run_id = state.id;
+            // Room for every event, so nothing is dropped and the count stays deterministic.
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(2 * STREAM_DELTAS);
+            let drive = engine.drive(
+                &mut state,
+                &MemoryCheckpoint,
+                RunControl {
+                    events: Some(sender),
+                    ..RunControl::default()
+                },
+            );
+            let drain = async {
+                let mut deltas = 0;
+                while let Some(event) = receiver.recv().await {
+                    assert_eq!(event.run_id, run_id);
+                    if let ProgressKind::TextDelta(text) = event.kind {
+                        assert_eq!(text.len(), 16);
+                        deltas += 1;
+                    }
+                }
+                deltas
+            };
+            // Without cooperative budgeting the interleaving is fixed, not carried across repeats.
+            let (driven, deltas) =
+                tokio::task::unconstrained(async { tokio::join!(drive, drain) }).await;
+            driven.unwrap();
+            assert_eq!(deltas, STREAM_DELTAS);
+            assert_eq!(
+                state.phase,
+                Phase::Settled(Settlement::Completed(json!("done")))
+            );
         },
     )
     .await;

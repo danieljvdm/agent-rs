@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 pub struct HostOptions {
     pub max_concurrent_runs: usize,
     pub poll_interval: Duration,
+    /// Shared by every run this host drives; each event names its run.
     pub events: Option<mpsc::Sender<ProgressEvent>>,
 }
 impl Default for HostOptions {
