@@ -58,6 +58,9 @@ required-features = ["sqlite"]
 [[example]]
 name = "mcp_filesystem"
 required-features = ["mcp"]
+[[example]]
+name = "postgres_workflow"
+required-features = ["postgres"]
 [[bench]]
 name = "agent_loop"
 harness = false
