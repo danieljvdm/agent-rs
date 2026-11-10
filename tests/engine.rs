@@ -467,7 +467,6 @@ async fn cancellation_retains_unknown_mutation_and_allows_reconciliation() {
         spec: tool.spec().clone(),
         idempotency_key: "stable".into(),
         status: OperationStatus::Dispatched,
-        approved: false,
     });
     state.cancel_requested = true;
     agent
@@ -978,7 +977,6 @@ async fn convenience_api_requires_reconciliation_before_replacing_cancelled_run(
         spec: tool.spec().clone(),
         idempotency_key: "stable".into(),
         status: OperationStatus::Dispatched,
-        approved: false,
     });
     state.cancel_requested = true;
     agent
@@ -1037,7 +1035,6 @@ async fn recovered_dispatched_work_becomes_resolvable_when_budgets_or_expiry_sto
             spec: tool.spec().clone(),
             idempotency_key: "same-external-key".into(),
             status: OperationStatus::Dispatched,
-            approved: false,
         });
         if expired {
             state.expires_at_ms = Some(now_ms().saturating_sub(1));

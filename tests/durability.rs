@@ -266,7 +266,6 @@ async fn ordinary_dispatched_effect_recovers_as_unknown_and_can_be_reconciled() 
         spec: tool.spec().clone(),
         idempotency_key: format!("{id}/op"),
         status: OperationStatus::Dispatched,
-        approved: true,
     }];
     db.commit(&mut interrupted).await.unwrap();
     db.close().await.unwrap();
@@ -473,7 +472,6 @@ async fn terminal_uncertainty_remains_resolvable() {
         status: OperationStatus::Unknown {
             reason: "cancelled in flight".into(),
         },
-        approved: true,
     });
     db.commit(&mut state).await.unwrap();
     assert!(db.due(now_ms(), 10).await.unwrap().is_empty());
@@ -580,14 +578,12 @@ async fn safe_retry_reuses_key_and_completed_batch_members_are_not_repeated() {
                 value: json!(1),
                 is_error: false,
             }),
-            approved: true,
         },
         Operation {
             call: second,
             spec: tool.spec().clone(),
             idempotency_key: "key-b".into(),
             status: OperationStatus::Dispatched,
-            approved: true,
         },
     ];
     db.commit(&mut state).await.unwrap();
@@ -692,14 +688,12 @@ async fn waiting_sibling_does_not_hide_an_abandoned_dispatched_effect() {
             status: OperationStatus::Waiting(WaitRequest::Input {
                 prompt: "continue?".into(),
             }),
-            approved: true,
         },
         Operation {
             call: calls[1].clone(),
             spec: tool.spec().clone(),
             idempotency_key: "b".into(),
             status: OperationStatus::Dispatched,
-            approved: true,
         },
     ];
     db.commit(&mut state).await.unwrap();
@@ -754,7 +748,6 @@ async fn late_error_cannot_suppress_cancel_resolution_or_repair() {
         spec: spec("ask", RetryPolicy::ReadOnly, false),
         idempotency_key: "wait".into(),
         status: OperationStatus::Waiting(WaitRequest::Input { prompt: "?".into() }),
-        approved: true,
     });
     db.commit(&mut state).await.unwrap();
     let old = CheckpointPosition::from(&state);
@@ -815,7 +808,6 @@ async fn safe_dispatched_sibling_with_wait_is_recovered_once_without_busy_loop()
             } else {
                 OperationStatus::Dispatched
             },
-            approved: true,
         })
         .collect();
     state.pending_response = Some(ModelResponse::tools(
@@ -864,7 +856,6 @@ async fn repaired_binding_retries_abandoned_dispatch_behind_an_input_wait() {
             } else {
                 OperationStatus::Dispatched
             },
-            approved: true,
         })
         .collect();
     state.pending_response = Some(ModelResponse::tools(

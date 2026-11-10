@@ -800,7 +800,6 @@ impl Definition {
                         state.id, state.usage.model_calls, call.id
                     ),
                     status,
-                    approved: false,
                 }
             })
             .collect();

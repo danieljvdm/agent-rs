@@ -134,7 +134,6 @@ pub struct Operation {
     pub spec: ToolSpec,
     pub idempotency_key: String,
     pub status: OperationStatus,
-    pub approved: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum StopReason {
@@ -252,7 +251,6 @@ impl RunState {
             .ok_or(Error::NotWaiting)?;
         let next = match (&op.status, resolution) {
             (OperationStatus::Approval, Resolution::Approve(true)) if !settled => {
-                op.approved = true;
                 OperationStatus::Pending
             }
             (OperationStatus::Approval, Resolution::Approve(false)) if !settled => {

@@ -31,7 +31,7 @@ const SQLITE_CONTEXT_COPIES_FOUR_TOOL_ROUNDS: u64 = 1;
 /// 27 transactions do not depend on how much context the conversation retains.
 const SQLITE_CONTEXT_COPIES_CLAIM_TO_SETTLEMENT: u64 = 0;
 /// Record bytes written by the same four-round run with no retained context (with headroom).
-const SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS: u64 = 27_263;
+const SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS: u64 = 26_787;
 
 // Tool scheduling under paused Tokio time (exact virtual milliseconds).
 /// Five parallel calls sleeping 300/10/10/10/300 ms with `max_parallel_tools = 4`. The sliding
@@ -45,7 +45,7 @@ const ALLOC_RUN_EMPTY_CONVERSATION: Budget = Budget::new(32, 2_118);
 /// context and one into the model request.
 const ALLOC_RUN_1024_PRIOR_ENTRIES: Budget = Budget::new(6_177, 1_737_242);
 /// `Agent::run` of four rounds of one tool each in an empty conversation.
-const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(430, 52_028);
+const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(430, 51_996);
 /// `Agent::drive` of a final response streamed as 64 text deltas of 16 bytes, observed through
 /// an attached progress channel that a receiver drains concurrently. Includes the scripted
 /// model's copy of each delta, so the engine itself must add no allocation per delta. Bytes

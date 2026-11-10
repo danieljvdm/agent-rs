@@ -276,7 +276,6 @@ async fn safe_replay_and_budgets(fixture: &impl Fixture) {
             spec: tool.spec().clone(),
             idempotency_key: format!("{id}/{}", tool.spec().name),
             status: OperationStatus::Dispatched,
-            approved: true,
         })
         .collect();
     state.pending_response = Some(ModelResponse::tools(
@@ -340,7 +339,6 @@ async fn hidden_dispatch_and_repair(fixture: &impl Fixture) {
             } else {
                 OperationStatus::Dispatched
             },
-            approved: true,
         })
         .collect();
     state.pending_response = Some(ModelResponse::tools(
@@ -498,7 +496,6 @@ async fn due_order_waits_and_expiry(fixture: &impl Fixture) {
             spec: spec("wait", RetryPolicy::ReadOnly),
             idempotency_key: "wait".into(),
             status,
-            approved: true,
         }];
         store.commit(&mut state).await.unwrap();
         (id, state.wake_at())
