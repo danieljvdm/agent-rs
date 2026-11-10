@@ -336,6 +336,53 @@ fn binding_encoding_is_stable_for_an_unchanged_definition() {
     );
 }
 
+/// A model adapter's identity adds one `model_adapter` key and changes nothing else; a model
+/// without one (the default `null`) adds no key, as in the pinned encoding above.
+#[tokio::test]
+async fn model_adapter_binding_adds_one_key() {
+    struct Routed(Capture);
+    #[async_trait]
+    impl Model for Routed {
+        fn binding(&self) -> Value {
+            json!({"api": "responses", "endpoint": "https://example.test/v1/responses"})
+        }
+        async fn stream(
+            &self,
+            request: ModelRequest,
+            cancel: CancellationToken,
+        ) -> Result<ModelStream> {
+            self.0.stream(request, cancel).await
+        }
+    }
+    let unrouted = Agent::builder("binding", Capture::new(vec![]))
+        .instructions("Answer briefly.")
+        .build()
+        .unwrap();
+    let routed = Agent::builder(
+        "binding",
+        Arc::new(Routed(Arc::into_inner(Capture::new(vec![])).unwrap())),
+    )
+    .instructions("Answer briefly.")
+    .build()
+    .unwrap();
+    assert!(unrouted.binding().get("model_adapter").is_none());
+    assert_eq!(
+        serde_json::to_string(&routed.binding()).unwrap(),
+        r#"{"id":"binding","input_schema":{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"AnyValue"},"instructions":"Answer briefly.","limits":{"active_budget_ms":600000,"cleanup_timeout_ms":1000,"max_context_bytes":2097152,"max_model_calls":32,"max_parallel_tools":4,"max_response_bytes":1048576,"max_tokens":100000,"max_tool_calls":128,"max_tool_output_bytes":262144,"operation_timeout_ms":30000},"model":{"model":"scripted","temperature":null},"model_adapter":{"api":"responses","endpoint":"https://example.test/v1/responses"},"output_schema":{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"AnyValue"},"tools":[]}"#
+    );
+    let mut without = routed.binding().clone();
+    without.as_object_mut().unwrap().remove("model_adapter");
+    assert_eq!(&without, unrouted.binding());
+    // A run accepted through the route cannot be driven without it.
+    let mut state = routed.new_run("c", json!("go"), &[], None).unwrap();
+    assert!(matches!(
+        unrouted
+            .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+            .await,
+        Err(Error::Incompatible(_))
+    ));
+}
+
 /// Never finishes preparing; counts cleanups.
 #[derive(Default)]
 struct Pending {
