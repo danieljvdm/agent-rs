@@ -28,6 +28,8 @@ enum Scenario {
     Waits,
     LongWait,
     Delegation,
+    /// The run is admitted by an automation firing instead of `accept`.
+    Recurring,
 }
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 enum CrashPoint {
@@ -243,6 +245,7 @@ fn agent(config: &Config) -> Agent {
             ));
             responses.push(call("timer"));
         }
+        Scenario::Recurring => (),
     }
     responses.push(ModelResponse::final_output(json!("done")));
     Agent::builder(
@@ -423,15 +426,7 @@ fn ready(state: &RunState, condition: ReadyWhen) -> bool {
 async fn child(config: Config) -> Result<()> {
     let store = Arc::new(SqliteStore::open(config.directory.join("runtime.sqlite")).await?);
     let agent = agent(&config);
-    let id = store
-        .accept(
-            &agent,
-            "conversation",
-            "request-1",
-            json!({"task":"process recovery"}),
-            None,
-        )
-        .await?;
+    let id = accept(&config, &store, &agent).await?;
     match config.action {
         Action::None => (),
         Action::Approve => {
@@ -521,6 +516,39 @@ async fn child(config: Config) -> Result<()> {
     })
     .await
     .expect("child did not reach requested durable state")
+}
+
+/// Accept the scenario's run directly, or by firing an automation whose definition and clock
+/// are the same in every relaunched child.
+async fn accept(config: &Config, store: &SqliteStore, agent: &Agent) -> Result<RunId> {
+    let input = json!({"task":"process recovery"});
+    if !matches!(config.scenario, Scenario::Recurring) {
+        return store
+            .accept(agent, "conversation", "request-1", input, None)
+            .await;
+    }
+    let schedule = IntervalAutomation::new("conversation", input, 100, 100);
+    store
+        .create_automation(agent, "recurring", schedule)
+        .await?;
+    store
+        .fire_due(
+            std::slice::from_ref(agent),
+            100,
+            AutomationOptions::default(),
+        )
+        .await?;
+    let occurrences = store.occurrences("recurring", 0, 10).await?;
+    assert_eq!(
+        occurrences.len(),
+        1,
+        "duplicate occurrence after process death"
+    );
+    assert_eq!(store.automation("recurring").await?.next_at_ms, 200);
+    match occurrences[0].outcome {
+        OccurrenceOutcome::Admitted { run_id } => Ok(run_id),
+        _ => panic!("expected the recurring run to be admitted"),
+    }
 }
 
 // A normal test run skips this entrypoint. Each parent launches only this test with --ignored.
@@ -895,6 +923,25 @@ fn persisted_wait_process_restart_soak() {
         started.elapsed().as_secs_f64(),
         initial.state.usage.active_ms
     );
+}
+
+#[test]
+fn automation_admission_survives_sigkill_without_duplicate_occurrences_or_runs() {
+    let dir = TempDir::new().unwrap();
+    let mut config = Config::new(dir.path(), Scenario::Recurring);
+    config.crash = CrashPoint::Accepted;
+    // Each child repeats the creation and the firing at the same clock reading.
+    let first = step(config.clone());
+    let retried = step(config.clone());
+    assert_eq!(first.state.id, retried.state.id);
+    assert_eq!(first.state.phase, Phase::Ready);
+    assert!(lines(dir.path(), "model-attempts.log").is_empty());
+    let completed = step(config.resume(ReadyWhen::Terminal, Action::None));
+    assert_done(&completed);
+    let restarted = step(config.resume(ReadyWhen::Terminal, Action::None));
+    assert_done(&restarted);
+    assert_eq!(first.state.id, restarted.state.id);
+    assert_eq!(lines(dir.path(), "model-attempts.log"), ["1"]);
 }
 
 /// The current UTC Unix time in milliseconds, the unit of run expiry and timer waits.
