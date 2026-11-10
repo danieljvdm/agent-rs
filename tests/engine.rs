@@ -36,6 +36,38 @@ fn state(agent: &Agent) -> RunState {
 }
 
 #[tokio::test]
+async fn typed_mutation_can_report_a_complete_failure_without_becoming_unknown() {
+    let mut contract = spec("mutation");
+    contract.retry = RetryPolicy::Never;
+    let tool = typed_tool::<u32, Value, _, _>(contract, |_, _| async {
+        Ok(ToolOutput::Failed(json!({"reason":"rejected"})))
+    });
+    let agent = agent(
+        Arc::new(ScriptedModel::new(vec![
+            ModelResponse::tools(vec![call("op", "mutation", json!(1))]),
+            ModelResponse::final_output(json!("handled")),
+        ])),
+        vec![tool],
+        Limits::default(),
+    );
+    let mut state = state(&agent);
+    Engine::new(agent)
+        .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        state.phase,
+        Phase::Settled(Settlement::Completed(json!("handled")))
+    );
+    let HistoryEntry::Exchange { results, .. } = &state.history[1] else {
+        panic!("missing failure")
+    };
+    assert_eq!(results[0].value, json!({"reason":"rejected"}));
+    assert!(results[0].is_error);
+    assert_eq!(state.usage.tool_calls, 1);
+}
+
+#[tokio::test]
 async fn validates_whole_response_before_dispatch_and_preserves_rejected_response() {
     let calls = Arc::new(AtomicUsize::new(0));
     let counter = calls.clone();
@@ -1088,18 +1120,18 @@ async fn progress_events_for_one_tool_round_are_exact() {
             "commit:3",
             "tools:1",
             "commit:4",
+            // The tool outcome carries the active-time refund.
             "commit:5",
             "commit:6",
-            "commit:7",
             "model",
-            "commit:8",
+            "commit:7",
             "delta:do",
             "delta:ne",
-            "commit:9",
+            "commit:8",
             "settled",
         ]
     );
-    assert_eq!(state.revision, 9);
+    assert_eq!(state.revision, 8);
 }
 
 struct RecordingModel {

@@ -15,24 +15,25 @@
 // SQLite transactions for `SqliteStore::claim` plus `Engine::drive` to settlement (exact).
 /// A run whose first model response is final: claim, model intent, settlement.
 const SQLITE_TRANSACTIONS_NO_TOOLS: u64 = 3;
-/// One round of one tool: seven commits per single-tool round.
-const SQLITE_TRANSACTIONS_ONE_TOOL_ROUND: u64 = 10;
+/// One round of one tool: six commits per single-tool round (model intent, model outcome, tool
+/// reservation, tool intent, tool outcome with the refund, return to the model).
+const SQLITE_TRANSACTIONS_ONE_TOOL_ROUND: u64 = 9;
 /// Four rounds of one tool each.
-const SQLITE_TRANSACTIONS_FOUR_TOOL_ROUNDS: u64 = 31;
+const SQLITE_TRANSACTIONS_FOUR_TOOL_ROUNDS: u64 = 27;
 /// One round of four parallel tools: one commit per tool outcome.
-const SQLITE_TRANSACTIONS_FOUR_PARALLEL_TOOLS: u64 = 13;
+const SQLITE_TRANSACTIONS_FOUR_PARALLEL_TOOLS: u64 = 12;
 
 // Bytes of SQLite records written (every inserted or updated row), from `accept` to settlement.
 /// Full copies of the retained prior context written by one four-round run (exact). Every
 /// checkpoint rewrites the whole state, so bytes written grow linearly with retained context.
-const SQLITE_CONTEXT_COPIES_FOUR_TOOL_ROUNDS: u64 = 32;
+const SQLITE_CONTEXT_COPIES_FOUR_TOOL_ROUNDS: u64 = 28;
 /// Record bytes written by the same four-round run with no retained context (with headroom).
-const SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS: u64 = 126_623;
+const SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS: u64 = 111_423;
 
 // Tool scheduling under paused Tokio time (exact virtual milliseconds).
-/// Five parallel calls sleeping 300/10/10/10/300 ms with `max_parallel_tools = 4`. Fixed batches
-/// wait for their slowest member; a sliding window would finish in 310 ms.
-const TOOL_SCHEDULE_VIRTUAL_MS: u64 = 600;
+/// Five parallel calls sleeping 300/10/10/10/300 ms with `max_parallel_tools = 4`. The sliding
+/// window starts the fifth call when the first 10 ms call frees its slot.
+const TOOL_SCHEDULE_VIRTUAL_MS: u64 = 310;
 
 // Heap allocations on the driving thread: (count, requested bytes), with headroom.
 /// `Engine::run` of a final-only response in an empty conversation.
@@ -41,7 +42,7 @@ const ALLOC_RUN_EMPTY_CONVERSATION: Budget = Budget::new(398, 36_326);
 /// context and one into the model request.
 const ALLOC_RUN_1024_PRIOR_ENTRIES: Budget = Budget::new(6_543, 1_771_450);
 /// `Engine::run` of four rounds of one tool each in an empty conversation.
-const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(1_012, 104_564);
+const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(804, 88_768);
 /// `Agent::clone` with four typed tools (once per spawned durable run and per `accept`).
 const ALLOC_AGENT_CLONE: Budget = Budget::new(7, 764);
 /// `Agent::binding` with four typed tools (rebuilt on every `drive` and `accept`).
@@ -333,7 +334,7 @@ async fn agent_allocation_budgets() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn fixed_batches_wait_for_their_slowest_member() {
+async fn sliding_window_starts_the_next_call_when_a_slot_frees() {
     let tool = typed_tool::<u64, u64, _, _>(spec("sleep"), |ms, _| async move {
         tokio::time::sleep(Duration::from_millis(ms)).await;
         Ok(ToolOutput::Complete(ms))

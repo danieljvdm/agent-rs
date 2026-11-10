@@ -5,7 +5,7 @@ use futures::{StreamExt, stream::FuturesUnordered};
 use schemars::{JsonSchema, schema_for};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{collections::HashSet, future::Future, sync::Arc, time::Duration};
 use tokio::{sync::mpsc, time::Instant};
 use tokio_util::sync::CancellationToken;
 
@@ -650,225 +650,21 @@ impl Engine {
         checkpoint: &dyn Checkpoint,
         control: &RunControl,
     ) -> Result<()> {
-        let now = now_ms();
-        let mut changed = false;
-        for op in &mut state.operations {
-            if matches!(op.status, OperationStatus::Waiting(WaitRequest::Until { unix_ms }) if unix_ms <= now)
-            {
-                op.status = OperationStatus::Complete(ToolResult {
-                    call_id: op.call.id.clone(),
-                    value: Value::Null,
-                    is_error: false,
-                });
-                changed = true;
-            }
-        }
-        if changed {
-            commit(checkpoint, state, control).await?;
-        }
+        complete_due_waits(state, checkpoint, control).await?;
         // Approval, user input and uncertainty stop the batch at a semantic boundary.
-        if state.operations.iter().any(|op| {
-            matches!(
-                op.status,
-                OperationStatus::Approval
-                    | OperationStatus::Waiting(_)
-                    | OperationStatus::Unknown { .. }
-            )
-        }) {
+        if state
+            .operations
+            .iter()
+            .any(|op| matches!(op.status, OperationStatus::Approval) || stops_dispatch(&op.status))
+        {
             return Ok(());
         }
-        while let Some(first) = state.operations.iter().position(|op| {
-            matches!(
-                op.status,
-                OperationStatus::Pending | OperationStatus::Dispatched
-            )
-        }) {
+        loop {
+            let runnable = state.operations.iter().filter(|op| is_runnable(op)).count();
+            if runnable == 0 {
+                break;
+            }
             if control.cancel.is_cancelled() || control.shutdown.is_cancelled() {
-                return Err(Error::Interrupted);
-            }
-            if state.expires_at_ms.is_some_and(|t| t <= now_ms()) {
-                return settle(
-                    checkpoint,
-                    state,
-                    control,
-                    Settlement::Stopped(StopReason::Expired),
-                )
-                .await;
-            }
-            let mut indices = vec![first];
-            if state.operations[first].spec.execution == Execution::Parallel {
-                for index in first + 1..state.operations.len() {
-                    let op = &state.operations[index];
-                    if op.spec.execution == Execution::Sequential {
-                        break;
-                    }
-                    if matches!(
-                        op.status,
-                        OperationStatus::Pending | OperationStatus::Dispatched
-                    ) {
-                        indices.push(index);
-                    }
-                    if indices.len() >= state.limits.max_parallel_tools {
-                        break;
-                    }
-                }
-            }
-            indices.truncate(state.limits.max_parallel_tools);
-            if let Some(reason) = exhausted(state, false, indices.len() as u32) {
-                return settle(checkpoint, state, control, Settlement::Stopped(reason)).await;
-            }
-            let (reservation, work_ms) = reserve(state)?;
-            state.usage.tool_calls += indices.len() as u32;
-            // Reserve before authorization too, so retries cannot replenish its active-work budget.
-            commit(checkpoint, state, control).await?;
-            let started = Instant::now();
-            let deadline = work_deadline(state, started, work_ms);
-            for &index in &indices {
-                let op = state.operations[index].clone();
-                if self.agent.tool(&op.call.name)?.spec() != &op.spec {
-                    return Err(Error::Incompatible(format!(
-                        "tool contract differs: {}",
-                        op.call.name
-                    )));
-                }
-                match run_work(
-                    self.agent.authorizer.authorize(state, &op.call),
-                    deadline,
-                    control,
-                )
-                .await
-                {
-                    WorkOutcome::Done(Ok(true)) => {}
-                    WorkOutcome::Done(Ok(false)) => {
-                        refund(state, reservation, started.elapsed());
-                        return Err(Error::Invalid(format!(
-                            "authorization denied for {}",
-                            op.call.name
-                        )));
-                    }
-                    WorkOutcome::Done(Err(error)) => {
-                        refund(state, reservation, started.elapsed());
-                        return Err(Error::Invalid(format!("authorization failed: {error}")));
-                    }
-                    WorkOutcome::TimedOut => {
-                        refund(state, reservation, started.elapsed());
-                        if is_expired(state) {
-                            return settle(
-                                checkpoint,
-                                state,
-                                control,
-                                Settlement::Stopped(StopReason::Expired),
-                            )
-                            .await;
-                        }
-                        return Err(Error::Invalid("authorization timed out".into()));
-                    }
-                    WorkOutcome::Interrupted => {
-                        refund(state, reservation, started.elapsed());
-                        commit(checkpoint, state, control).await?;
-                        return Err(Error::Interrupted);
-                    }
-                }
-            }
-            for &index in &indices {
-                state.operations[index].status = OperationStatus::Dispatched;
-            }
-            emit(
-                state,
-                control,
-                ProgressEvent::ToolsStarted {
-                    count: indices.len(),
-                },
-            );
-            commit(checkpoint, state, control).await?;
-            let mut futures = FuturesUnordered::new();
-            for index in indices {
-                let op = state.operations[index].clone();
-                let tool = self.agent.tool(&op.call.name)?;
-                let context = ToolContext {
-                    run_id: state.id,
-                    call_id: op.call.id.clone(),
-                    idempotency_key: op.idempotency_key,
-                    cancel: CancellationToken::new(),
-                };
-                let control = control.clone();
-                let cleanup_ms = state.limits.cleanup_timeout_ms;
-                futures.push(async move {
-                    let outcome = run_work(
-                        tool.execute(op.call.arguments, context.clone()),
-                        deadline,
-                        &control,
-                    )
-                    .await;
-                    context.cancel.cancel();
-                    let cleanup = tokio::time::timeout(
-                        Duration::from_millis(cleanup_ms),
-                        tool.cleanup(context),
-                    )
-                    .await;
-                    (index, outcome, cleanup)
-                });
-            }
-            let mut commit_error = None;
-            let mut interrupted = false;
-            while let Some((index, outcome, cleanup)) = futures.next().await {
-                let op = &mut state.operations[index];
-                let was_interrupted = matches!(&outcome, WorkOutcome::Interrupted);
-                let mut value = match outcome {
-                    WorkOutcome::Done(result) => result,
-                    WorkOutcome::TimedOut => Err(Error::Tool("tool operation timed out".into())),
-                    WorkOutcome::Interrupted => {
-                        interrupted = true;
-                        Err(Error::Interrupted)
-                    }
-                };
-                if let Err(error) = cleanup
-                    .map_err(|_| Error::Tool("tool cleanup timed out".into()))
-                    .and_then(|v| v)
-                {
-                    value = Err(error);
-                }
-                op.status = match value {
-                    Ok(ToolOutput::Complete(value))
-                        if encoded_len(&value)? <= state.limits.max_tool_output_bytes =>
-                    {
-                        OperationStatus::Complete(ToolResult {
-                            call_id: op.call.id.clone(),
-                            value,
-                            is_error: false,
-                        })
-                    }
-                    Ok(ToolOutput::Wait(wait))
-                        if encoded_len(&wait)? <= state.limits.max_tool_output_bytes =>
-                    {
-                        OperationStatus::Waiting(wait)
-                    }
-                    Ok(_) => failure_status(
-                        op,
-                        "tool output exceeds byte limit",
-                        state.limits.max_tool_output_bytes,
-                        false,
-                    ),
-                    Err(error) => failure_status(
-                        op,
-                        &error.to_string(),
-                        state.limits.max_tool_output_bytes,
-                        was_interrupted || matches!(error, Error::Interrupted),
-                    ),
-                };
-                // A storage failure never drops other live children. Drain and clean all of them first.
-                if commit_error.is_none()
-                    && let Err(error) = commit(checkpoint, state, control).await
-                {
-                    commit_error = Some(error);
-                }
-            }
-            if let Some(error) = commit_error {
-                return Err(error);
-            }
-            refund(state, reservation, started.elapsed());
-            commit(checkpoint, state, control).await?;
-            if interrupted {
                 return Err(Error::Interrupted);
             }
             if is_expired(state) {
@@ -880,43 +676,545 @@ impl Engine {
                 )
                 .await;
             }
-            if state.operations.iter().any(|op| {
-                matches!(
-                    op.status,
-                    OperationStatus::Waiting(_) | OperationStatus::Unknown { .. }
+            // Every remaining call must fit the call budget before any of them starts.
+            let runnable = u32::try_from(runnable).unwrap_or(u32::MAX);
+            if let Some(reason) = exhausted(state, false, runnable) {
+                return settle(checkpoint, state, control, Settlement::Stopped(reason)).await;
+            }
+            self.tool_window(state, checkpoint, control).await?;
+            if is_expired(state) {
+                return settle(
+                    checkpoint,
+                    state,
+                    control,
+                    Settlement::Stopped(StopReason::Expired),
                 )
-            }) {
+                .await;
+            }
+            if state.operations.iter().any(|op| stops_dispatch(&op.status)) {
                 return Ok(());
             }
         }
-        if state
-            .operations
-            .iter()
-            .all(|op| matches!(op.status, OperationStatus::Complete(_)))
-        {
-            let results = state
-                .operations
-                .iter()
-                .map(|op| match &op.status {
-                    OperationStatus::Complete(result) => result.clone(),
-                    _ => unreachable!(),
-                })
-                .collect();
-            let response = state
-                .pending_response
-                .take()
-                .ok_or_else(|| Error::Invalid("tool batch has no model response".into()))?;
-            state
-                .history
-                .push(HistoryEntry::Exchange { response, results });
-            state.operations.clear();
-            state.phase = Phase::Ready;
-            commit(checkpoint, state, control).await?;
+        finish_tool_batch(state, checkpoint, control).await
+    }
+    /// Runs runnable operations in declaration order through a sliding window of at most
+    /// `max_parallel_tools` slots: the next operation starts as soon as a slot frees. Returns once
+    /// nothing more can start and every started operation has finished and been recorded.
+    ///
+    /// Each commit records the outcomes finished since the previous one together with the
+    /// `Dispatched` intent of the operations about to take their slots, so no operation runs
+    /// before its intent is durable and no unstarted operation is committed as dispatched.
+    async fn tool_window(
+        &self,
+        state: &mut RunState,
+        checkpoint: &dyn Checkpoint,
+        control: &RunControl,
+    ) -> Result<()> {
+        let (reservation, _) = reserve(state)?;
+        // Reserve before authorization too, so retries cannot replenish its active-work budget.
+        commit(checkpoint, state, control).await?;
+        let mut window = Window::new(reservation);
+        let mut in_flight = FuturesUnordered::new();
+        loop {
+            let mut admitted = if window.open {
+                self.admit(state, control, &mut window, &mut in_flight)
+                    .await
+            } else {
+                Vec::new()
+            };
+            let closing = in_flight.is_empty() && admitted.is_empty();
+            if closing {
+                // Nothing runs any more and nothing has an effect before the next commit, so the
+                // refund rides on the commit of the last outcome instead of a commit of its own.
+                window.refund(state);
+            }
+            if window.storage.is_none()
+                && (window.unsaved || !admitted.is_empty() || closing && window.interrupted)
+            {
+                if !admitted.is_empty() {
+                    let count = admitted.len();
+                    emit(state, control, ProgressEvent::ToolsStarted { count });
+                }
+                match commit(checkpoint, state, control).await {
+                    Ok(()) => window.unsaved = false,
+                    Err(error) => {
+                        // Work whose intent is not durable never starts, and nothing new does.
+                        window.revert(state, &mut admitted);
+                        window.open = false;
+                        window.storage = Some(error);
+                    }
+                }
+            }
+            if closing {
+                break;
+            }
+            for admission in admitted {
+                let op = &state.operations[admission.index];
+                let context = ToolContext {
+                    run_id: state.id,
+                    call_id: op.call.id.clone(),
+                    idempotency_key: op.idempotency_key.clone(),
+                    cancel: CancellationToken::new(),
+                };
+                in_flight.push(execute(
+                    admission,
+                    op.call.arguments.clone(),
+                    context,
+                    control,
+                    state.limits.cleanup_timeout_ms,
+                ));
+                window.running += 1;
+            }
+            // A storage failure never drops other live children. Drain and clean all of them first.
+            if let Some(finished) = in_flight.next().await {
+                window.record(state, finished);
+            }
         }
-        Ok(())
+        window.result()
+    }
+    /// Fills free slots in declaration order. A `Sequential` operation waits for every earlier
+    /// one to finish and holds the window alone. Admitted operations are authorized, counted,
+    /// covered by the window's reservation and marked `Dispatched` in memory; the caller commits
+    /// that intent before starting them. If dispatch stops, this round's admissions are undone.
+    async fn admit<F: Future<Output = Finished>>(
+        &self,
+        state: &mut RunState,
+        control: &RunControl,
+        window: &mut Window,
+        in_flight: &mut FuturesUnordered<F>,
+    ) -> Vec<Admitted> {
+        let mut admitted = Vec::new();
+        while window.open
+            && !window.sequential
+            && window.running + admitted.len() < state.limits.max_parallel_tools
+        {
+            let Some(index) =
+                (window.next..state.operations.len()).find(|&i| is_runnable(&state.operations[i]))
+            else {
+                break;
+            };
+            let sequential = state.operations[index].spec.execution == Execution::Sequential;
+            if sequential && window.running + admitted.len() > 0 {
+                break;
+            }
+            match self
+                .admit_one(state, control, window, in_flight, index)
+                .await
+            {
+                Admission::Start(admission) => {
+                    window.next = index + 1;
+                    window.sequential = sequential;
+                    admitted.push(admission);
+                }
+                Admission::Full => {
+                    window.open = false;
+                }
+                Admission::Stop => {
+                    window.open = false;
+                    window.revert(state, &mut admitted);
+                }
+            }
+        }
+        admitted
+    }
+    async fn admit_one<F: Future<Output = Finished>>(
+        &self,
+        state: &mut RunState,
+        control: &RunControl,
+        window: &mut Window,
+        in_flight: &mut FuturesUnordered<F>,
+        index: usize,
+    ) -> Admission {
+        if control.cancel.is_cancelled() || control.shutdown.is_cancelled() {
+            window.interrupted = true;
+            return Admission::Stop;
+        }
+        if is_expired(state) {
+            return Admission::Stop;
+        }
+        let op = &state.operations[index];
+        let tool = match self.agent.tool(&op.call.name) {
+            Ok(tool) if tool.spec() == &op.spec => tool,
+            Ok(_) => {
+                let error = Error::Incompatible(format!("tool contract differs: {}", op.call.name));
+                window.failure = Some(error);
+                return Admission::Stop;
+            }
+            Err(error) => {
+                window.failure = Some(error);
+                return Admission::Stop;
+            }
+        };
+        let Some(deadline) = window.cover(state) else {
+            return Admission::Full;
+        };
+        let mut finished = Vec::new();
+        let authorization = authorize_beside(
+            &*self.agent.authorizer,
+            state,
+            &state.operations[index].call,
+            deadline,
+            control,
+            in_flight,
+            &mut finished,
+        )
+        .await;
+        for finished in finished {
+            window.record(state, finished);
+        }
+        let name = &state.operations[index].call.name;
+        match authorization {
+            WorkOutcome::Done(Ok(true)) => {}
+            WorkOutcome::Done(Ok(false)) => {
+                window.failure = Some(Error::Invalid(format!("authorization denied for {name}")));
+                return Admission::Stop;
+            }
+            WorkOutcome::Done(Err(error)) => {
+                window.failure = Some(Error::Invalid(format!("authorization failed: {error}")));
+                return Admission::Stop;
+            }
+            // Expiry settles the run once the window drains.
+            WorkOutcome::TimedOut if is_expired(state) => return Admission::Stop,
+            WorkOutcome::TimedOut => {
+                window.failure = Some(Error::Invalid("authorization timed out".into()));
+                return Admission::Stop;
+            }
+            WorkOutcome::Interrupted => {
+                window.interrupted = true;
+                return Admission::Stop;
+            }
+        }
+        // An outcome recorded during authorization may have stopped dispatch.
+        if !window.open {
+            return Admission::Stop;
+        }
+        // Measure the operation's own timeout from now, after its authorization.
+        let Some(deadline) = window.cover(state) else {
+            return Admission::Full;
+        };
+        let op = &mut state.operations[index];
+        let previous = std::mem::replace(&mut op.status, OperationStatus::Dispatched);
+        state.usage.tool_calls += 1;
+        Admission::Start(Admitted {
+            index,
+            previous,
+            sequential: op.spec.execution == Execution::Sequential,
+            tool,
+            deadline,
+        })
+    }
+}
+/// Completes timer waits whose deadline has passed.
+async fn complete_due_waits(
+    state: &mut RunState,
+    checkpoint: &dyn Checkpoint,
+    control: &RunControl,
+) -> Result<()> {
+    let now = now_ms();
+    let mut changed = false;
+    for op in &mut state.operations {
+        if matches!(op.status, OperationStatus::Waiting(WaitRequest::Until { unix_ms }) if unix_ms <= now)
+        {
+            op.status = OperationStatus::Complete(ToolResult {
+                call_id: op.call.id.clone(),
+                value: Value::Null,
+                is_error: false,
+            });
+            changed = true;
+        }
+    }
+    if changed {
+        commit(checkpoint, state, control).await?;
+    }
+    Ok(())
+}
+/// Once every operation is complete, appends the exchange to history and returns to the model.
+async fn finish_tool_batch(
+    state: &mut RunState,
+    checkpoint: &dyn Checkpoint,
+    control: &RunControl,
+) -> Result<()> {
+    if !state
+        .operations
+        .iter()
+        .all(|op| matches!(op.status, OperationStatus::Complete(_)))
+    {
+        return Ok(());
+    }
+    let results = state
+        .operations
+        .iter()
+        .map(|op| match &op.status {
+            OperationStatus::Complete(result) => result.clone(),
+            _ => unreachable!(),
+        })
+        .collect();
+    let response = state
+        .pending_response
+        .take()
+        .ok_or_else(|| Error::Invalid("tool batch has no model response".into()))?;
+    state
+        .history
+        .push(HistoryEntry::Exchange { response, results });
+    state.operations.clear();
+    state.phase = Phase::Ready;
+    commit(checkpoint, state, control).await
+}
+/// Not yet started in this process: never dispatched, or dispatched before a crash and safe to retry.
+fn is_runnable(op: &Operation) -> bool {
+    matches!(
+        op.status,
+        OperationStatus::Pending | OperationStatus::Dispatched
+    )
+}
+/// Outcomes after which no further operation of the batch may start until they are resolved.
+fn stops_dispatch(status: &OperationStatus) -> bool {
+    matches!(
+        status,
+        OperationStatus::Waiting(_) | OperationStatus::Unknown { .. }
+    )
+}
+
+/// Whole milliseconds, rounded up, as active time is charged.
+fn ceil_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos().div_ceil(1_000_000)).unwrap_or(u64::MAX)
+}
+
+/// One sliding window of tool operations. Its reservation covers the wall-clock time from
+/// `started` while any operation may be in flight, so overlapping work is charged once.
+struct Window {
+    started: Instant,
+    /// Active milliseconds reserved from `started`, already included in `usage.active_ms`.
+    reserved_ms: u64,
+    /// Declaration-order position of the next operation to consider.
+    next: usize,
+    running: usize,
+    /// A `Sequential` operation is admitted or running, so nothing else may start.
+    sequential: bool,
+    /// Further operations may still be admitted.
+    open: bool,
+    /// Outcomes have been recorded since the last commit.
+    unsaved: bool,
+    interrupted: bool,
+    /// An authorization or contract failure that fails the run once the window drains.
+    failure: Option<Error>,
+    storage: Option<Error>,
+}
+impl Window {
+    fn new(reserved_ms: u64) -> Self {
+        Self {
+            started: Instant::now(),
+            reserved_ms,
+            next: 0,
+            running: 0,
+            sequential: false,
+            open: true,
+            unsaved: false,
+            interrupted: false,
+            failure: None,
+            storage: None,
+        }
+    }
+    /// Extends the reservation so that an operation starting now can use its whole timeout and
+    /// cleanup allowance, as far as the active budget allows. Returns that operation's deadline,
+    /// or `None` when the budget leaves it no time. The extension becomes durable with the commit
+    /// that records the operation's intent, before the operation starts.
+    fn cover(&mut self, state: &mut RunState) -> Option<Instant> {
+        let timeout_ms = state.limits.operation_timeout_ms;
+        let cleanup_ms = state.limits.cleanup_timeout_ms;
+        let now = Instant::now();
+        let wanted = ceil_ms(now.duration_since(self.started))
+            .saturating_add(timeout_ms)
+            .saturating_add(cleanup_ms);
+        if wanted > self.reserved_ms {
+            let available = state
+                .limits
+                .active_budget_ms
+                .saturating_sub(state.usage.active_ms);
+            let extra = (wanted - self.reserved_ms).min(available);
+            self.reserved_ms += extra;
+            state.usage.active_ms += extra;
+        }
+        let work_end =
+            self.started + Duration::from_millis(self.reserved_ms.saturating_sub(cleanup_ms));
+        let deadline = work_deadline(state, now, timeout_ms).min(work_end);
+        (deadline > now).then_some(deadline)
+    }
+    fn record(&mut self, state: &mut RunState, finished: Finished) {
+        let Finished {
+            index,
+            outcome,
+            cleanup,
+        } = finished;
+        if matches!(outcome, WorkOutcome::Interrupted) {
+            self.interrupted = true;
+        }
+        let op = &mut state.operations[index];
+        op.status = outcome_status(op, outcome, cleanup, state.limits.max_tool_output_bytes);
+        if self.interrupted || stops_dispatch(&op.status) {
+            self.open = false;
+        }
+        if op.spec.execution == Execution::Sequential {
+            self.sequential = false;
+        }
+        self.running -= 1;
+        self.unsaved = true;
+    }
+    /// Undoes admissions whose intent was never committed. Those operations never started.
+    fn revert(&mut self, state: &mut RunState, admitted: &mut Vec<Admitted>) {
+        for admission in admitted.drain(..) {
+            state.operations[admission.index].status = admission.previous;
+            state.usage.tool_calls -= 1;
+            if admission.sequential {
+                self.sequential = false;
+            }
+        }
+    }
+    /// Charges the wall-clock time the window was open and returns the rest of its reservation.
+    fn refund(&self, state: &mut RunState) {
+        refund(state, self.reserved_ms, self.started.elapsed());
+    }
+    fn result(self) -> Result<()> {
+        if let Some(error) = self.storage {
+            return Err(error);
+        }
+        if self.interrupted {
+            return Err(Error::Interrupted);
+        }
+        self.failure.map_or(Ok(()), Err)
+    }
+}
+/// An operation marked `Dispatched` in memory, waiting for its intent to be committed.
+struct Admitted {
+    index: usize,
+    previous: OperationStatus,
+    sequential: bool,
+    tool: Arc<dyn Tool>,
+    deadline: Instant,
+}
+enum Admission {
+    Start(Admitted),
+    /// The active budget leaves no time for another operation in this window.
+    Full,
+    /// Nothing more may start; this round's admissions are undone.
+    Stop,
+}
+struct Finished {
+    index: usize,
+    outcome: WorkOutcome<ToolOutput<Value>>,
+    cleanup: std::result::Result<Result<()>, tokio::time::error::Elapsed>,
+}
+/// Executes one admitted operation, then always runs its cleanup.
+async fn execute(
+    admission: Admitted,
+    arguments: Value,
+    context: ToolContext,
+    control: &RunControl,
+    cleanup_ms: u64,
+) -> Finished {
+    let tool = admission.tool;
+    let outcome = run_work(
+        tool.execute(arguments, context.clone()),
+        admission.deadline,
+        control,
+    )
+    .await;
+    context.cancel.cancel();
+    let cleanup =
+        tokio::time::timeout(Duration::from_millis(cleanup_ms), tool.cleanup(context)).await;
+    Finished {
+        index: admission.index,
+        outcome,
+        cleanup,
+    }
+}
+/// Authorizes one call while the operations already in flight keep running. Their outcomes are
+/// buffered, because recording them needs the state the authorizer is reading.
+async fn authorize_beside<F: Future<Output = Finished>>(
+    authorizer: &dyn Authorizer,
+    state: &RunState,
+    call: &ToolCall,
+    deadline: Instant,
+    control: &RunControl,
+    in_flight: &mut FuturesUnordered<F>,
+    finished: &mut Vec<Finished>,
+) -> WorkOutcome<bool> {
+    let mut authorization = std::pin::pin!(run_work(
+        authorizer.authorize(state, call),
+        deadline,
+        control
+    ));
+    loop {
+        tokio::select! {
+            outcome = &mut authorization => return outcome,
+            Some(done) = in_flight.next(), if !in_flight.is_empty() => finished.push(done),
+        }
+    }
+}
+fn outcome_status(
+    op: &Operation,
+    outcome: WorkOutcome<ToolOutput<Value>>,
+    cleanup: std::result::Result<Result<()>, tokio::time::error::Elapsed>,
+    max_bytes: usize,
+) -> OperationStatus {
+    let interrupted = matches!(outcome, WorkOutcome::Interrupted);
+    let mut value = match outcome {
+        WorkOutcome::Done(result) => result,
+        WorkOutcome::TimedOut => Err(Error::Tool("tool operation timed out".into())),
+        WorkOutcome::Interrupted => Err(Error::Interrupted),
+    };
+    if let Err(error) = cleanup
+        .map_err(|_| Error::Tool("tool cleanup timed out".into()))
+        .and_then(|v| v)
+    {
+        value = Err(error);
+    }
+    match value {
+        Ok(output) => output_status(op, output, max_bytes)
+            .unwrap_or_else(|message| failure_status(op, &message, max_bytes, false)),
+        Err(error) => failure_status(
+            op,
+            &error.to_string(),
+            max_bytes,
+            interrupted || matches!(error, Error::Interrupted),
+        ),
     }
 }
 
+/// Records a returned output, or explains why it cannot be recorded. Never returns early, so an
+/// unencodable output cannot drop the outcomes of sibling operations still in flight.
+fn output_status(
+    op: &Operation,
+    output: ToolOutput<Value>,
+    max_bytes: usize,
+) -> std::result::Result<OperationStatus, String> {
+    let fits = |len: Result<usize>| match len {
+        Ok(len) if len <= max_bytes => Ok(()),
+        Ok(_) => Err("tool output exceeds byte limit".to_owned()),
+        Err(error) => Err(format!("tool output cannot be encoded: {error}")),
+    };
+    let result = |value, is_error| {
+        OperationStatus::Complete(ToolResult {
+            call_id: op.call.id.clone(),
+            value,
+            is_error,
+        })
+    };
+    Ok(match output {
+        ToolOutput::Complete(value) => {
+            fits(encoded_len(&value))?;
+            result(value, false)
+        }
+        ToolOutput::Failed(value) => {
+            fits(encoded_len(&value))?;
+            result(value, true)
+        }
+        ToolOutput::Wait(wait) => {
+            fits(encoded_len(&wait))?;
+            OperationStatus::Waiting(wait)
+        }
+    })
+}
 fn failure_status(
     op: &Operation,
     message: &str,
