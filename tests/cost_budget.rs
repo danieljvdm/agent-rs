@@ -31,7 +31,7 @@ const SQLITE_CONTEXT_COPIES_FOUR_TOOL_ROUNDS: u64 = 1;
 /// 27 transactions do not depend on how much context the conversation retains.
 const SQLITE_CONTEXT_COPIES_CLAIM_TO_SETTLEMENT: u64 = 0;
 /// Record bytes written by the same four-round run with no retained context (with headroom).
-const SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS: u64 = 27_591;
+const SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS: u64 = 27_263;
 
 // Tool scheduling under paused Tokio time (exact virtual milliseconds).
 /// Five parallel calls sleeping 300/10/10/10/300 ms with `max_parallel_tools = 4`. The sliding

@@ -79,7 +79,6 @@ struct Sample {
     allocated_bytes: Option<u64>,
     model_calls: usize,
     tool_calls: usize,
-    events: u64,
     first_output_ns: Option<u64>,
     operation_latencies_ns: Vec<u64>,
     transactions: Option<u64>,
@@ -141,7 +140,6 @@ async fn collect(samples: usize, filter: &str) -> Vec<Sample> {
             let (state, mut sample) = measure(name, 1, fixture.execute(prepared)).await;
             fixture.verify_state(&state);
             fixture.verify_counts(&before, 1, 1);
-            sample.events = state.usage.events;
             counts(&mut sample, &fixture, &before);
             results.push(sample);
         }
@@ -188,7 +186,6 @@ async fn collect(samples: usize, filter: &str) -> Vec<Sample> {
                 assert_eq!(text, "x".repeat(1024));
                 assert_eq!(observed_chunks, chunks);
                 sample.first_output_ns = first;
-                sample.events = state.usage.events;
                 counts(&mut sample, &fixture, &before);
                 results.push(sample);
             }
@@ -212,7 +209,6 @@ async fn collect(samples: usize, filter: &str) -> Vec<Sample> {
             assert_eq!(completed.len(), CONCURRENT_TOTAL);
             for (state, latency) in completed {
                 fixture.verify_state(&state);
-                sample.events += state.usage.events;
                 sample
                     .operation_latencies_ns
                     .push(latency.as_nanos() as u64);
@@ -243,7 +239,6 @@ async fn collect(samples: usize, filter: &str) -> Vec<Sample> {
                 .await;
                 for (state, latency) in completed {
                     fixture.verify_state(&state);
-                    sample.events += state.usage.events;
                     sample
                         .operation_latencies_ns
                         .push(latency.as_nanos() as u64);
@@ -267,7 +262,6 @@ async fn collect(samples: usize, filter: &str) -> Vec<Sample> {
                     measure("durable_four_tool_rounds", 1, resident.run(&fixture)).await;
                 fixture.verify_state(&state);
                 fixture.verify_counts(&before, 1, 1);
-                sample.events = state.usage.events;
                 counts(&mut sample, &fixture, &before);
                 let after = resident.store.metrics();
                 sample.transactions = Some(after.transactions - writes.transactions);
@@ -293,7 +287,6 @@ async fn collect(samples: usize, filter: &str) -> Vec<Sample> {
                 fixture.verify_state(&state);
                 template.verify_counts(&fixture, &before);
                 counts(&mut sample, &fixture, &before);
-                sample.events = state.usage.events;
                 let writes = store.metrics();
                 sample.transactions = Some(writes.transactions);
                 sample.writes = Some(writes.writes);

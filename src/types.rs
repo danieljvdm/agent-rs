@@ -69,7 +69,6 @@ pub struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub active_ms: u64,
-    pub events: u64,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TokenUsage {

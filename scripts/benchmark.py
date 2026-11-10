@@ -15,7 +15,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE_VERSION = "agent-loop-v3"
+FIXTURE_VERSION = "agent-loop-v4"
 EXPECTED_BENCHMARK_CASES = {
     "engine/minimal", "engine/four_tool_rounds", "engine/context_entries_0", "engine/context_entries_1024",
     *(f"engine/tools_8_bound_{n}" for n in (1, 4, 8)),
@@ -276,7 +276,6 @@ def diagnostic_summary(output):
         latencies = sorted(value for sample in samples for value in sample["operation_latencies_ns"])
         row = {"case": case, "samples": len(samples), "runs_per_sample": runs,
                "model_calls_per_sample": samples[0]["model_calls"], "tool_calls_per_sample": samples[0]["tool_calls"],
-               "event_counts_per_sample": [sample["events"] for sample in samples],
                "median_elapsed_ns_per_run": statistics.median(s["elapsed_ns"] / divisor for s in samples),
                "median_process_cpu_ns_per_run": statistics.median(s["process_cpu_ns"] / divisor for s in samples),
                "median_runs_per_second": statistics.median(runs * 1e9 / s["elapsed_ns"] for s in samples) if runs else None,

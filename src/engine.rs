@@ -425,15 +425,10 @@ impl Engine {
         let (reservation, work_ms) = reserve(state)?;
         state.usage.model_calls += 1;
         state.phase = Phase::ModelInFlight;
-        emit(
-            state,
-            control,
-            ProgressEvent::ModelStarted { run_id: state.id },
-        );
+        emit(control, ProgressEvent::ModelStarted { run_id: state.id });
         commit(checkpoint, state, control).await?;
         let started = Instant::now();
         let operation_cancel = CancellationToken::new();
-        let mut delta_events = 0_u64;
         let outcome = {
             let future = async {
                 // Assemble context after the dispatch checkpoint and inside the operation's
@@ -484,7 +479,6 @@ impl Engine {
                                     "stream exceeds response byte limit".into(),
                                 ));
                             }
-                            delta_events += 1;
                             if let Some(sender) = &control.events {
                                 let _ = sender.try_send(ProgressEvent::TextDelta(text));
                             }
@@ -519,7 +513,6 @@ impl Engine {
         )
         .await;
         refund(state, reservation, started.elapsed());
-        state.usage.events = state.usage.events.saturating_add(delta_events);
         state.phase = Phase::Ready;
         let response_result = match outcome {
             WorkOutcome::Done(result) => result,
@@ -733,7 +726,7 @@ impl Engine {
             {
                 if !admitted.is_empty() {
                     let count = admitted.len();
-                    emit(state, control, ProgressEvent::ToolsStarted { count });
+                    emit(control, ProgressEvent::ToolsStarted { count });
                 }
                 match commit(checkpoint, state, control).await {
                     Ok(()) => window.unsaved = false,
@@ -1315,8 +1308,9 @@ fn refund(state: &mut RunState, reservation: u64, elapsed: Duration) {
         .min(reservation);
     state.usage.active_ms = state.usage.active_ms.saturating_sub(reservation - charged);
 }
-fn emit(state: &mut RunState, control: &RunControl, event: ProgressEvent) {
-    state.usage.events = state.usage.events.saturating_add(1);
+/// Best-effort and non-blocking: a closed or full channel drops the event. Events are not
+/// counted or retained in run state.
+fn emit(control: &RunControl, event: ProgressEvent) {
     if let Some(sender) = &control.events {
         let _ = sender.try_send(event);
     }
@@ -1326,8 +1320,6 @@ async fn commit(
     state: &mut RunState,
     control: &RunControl,
 ) -> Result<()> {
-    // Count committed progress before writing so the final counter is retained too.
-    state.usage.events = state.usage.events.saturating_add(1);
     checkpoint
         .commit(state)
         .await
@@ -1351,7 +1343,6 @@ async fn settle(
 ) -> Result<()> {
     uncertain_dispatched(state, "execution settled without a recorded tool outcome");
     state.phase = Phase::Settled(settlement);
-    state.usage.events = state.usage.events.saturating_add(1);
     commit(checkpoint, state, control).await?;
     if let Some(sender) = &control.events {
         let _ = sender.try_send(ProgressEvent::Settled { run_id: state.id });

@@ -421,12 +421,27 @@ async fn empty_stream_events_have_a_hard_bound() {
         },
     );
     let mut state = state(&agent);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1024);
     Engine::new(agent)
-        .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+        .drive(
+            &mut state,
+            &MemoryCheckpoint,
+            RunControl {
+                events: Some(tx),
+                ..RunControl::default()
+            },
+        )
         .await
         .unwrap();
     assert!(matches!(state.phase, Phase::Settled(Settlement::Failed(_))));
-    assert!(state.usage.events < 30);
+    let mut deltas = 0;
+    while let Some(event) = rx.recv().await {
+        deltas += usize::from(matches!(event, ProgressEvent::TextDelta(_)));
+    }
+    assert_eq!(
+        deltas, 16,
+        "the model event bound is the response byte limit"
+    );
 }
 
 struct FailBeforeModel;

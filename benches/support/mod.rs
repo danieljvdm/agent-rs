@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 use yielded_agent::*;
 
-pub const FIXTURE_VERSION: &str = "agent-loop-v3";
+pub const FIXTURE_VERSION: &str = "agent-loop-v4";
 pub const WORKERS: usize = 4;
 pub const CONCURRENT_TOTAL: usize = 64;
 
