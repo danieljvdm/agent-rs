@@ -3,7 +3,7 @@
 //! returns the error, leaving the run as of its last checkpoint so it can be driven again.
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{error::Error as _, sync::Arc};
 use tokio_util::sync::CancellationToken;
 use yielded_agent::*;
 
@@ -306,4 +306,225 @@ fn fails_run_separates_failed_runs_from_resumable_ones() {
     ] {
         assert!(error.fails_run(), "{error:?}");
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// How an in-memory run ended, as `run` and `resume` report it.
+// ---------------------------------------------------------------------------------------------
+
+fn typed(
+    model: Arc<dyn Model>,
+    tools: Vec<Arc<dyn Tool>>,
+    limits: Limits,
+) -> Agent<String, String> {
+    builder(model)
+        .tools(tools)
+        .limits(limits)
+        .input::<String>()
+        .output::<String>()
+        .build()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn run_reports_a_waiting_run_and_resume_completes_it() {
+    let mut contract = spec("ask");
+    contract.requires_approval = true;
+    let ask = typed_tool::<u32, Value, _, _>(contract, |_, _| async {
+        Ok(ToolOutput::Wait(WaitRequest::Input {
+            prompt: "Where?".into(),
+        }))
+    });
+    let model = scripted(vec![
+        ModelResponse::tools(vec![call("ask", "ask", json!(1))]),
+        ModelResponse::final_output(json!("done")),
+    ]);
+    let agent = typed(model, vec![ask], Limits::default());
+    let mut conversation = Conversation::default();
+    // Waiting for approval, then for the tool's input request.
+    assert!(matches!(
+        agent.run(&mut conversation, "go").await,
+        Err(Error::Waiting)
+    ));
+    let run = conversation.last_run.as_mut().unwrap();
+    resolve(run, "ask", Resolution::Approve(true)).unwrap();
+    assert!(matches!(
+        agent.resume(&mut conversation, RunControl::default()).await,
+        Err(Error::Waiting)
+    ));
+    let run = conversation.last_run.as_mut().unwrap();
+    resolve(run, "ask", Resolution::Input(json!("here"))).unwrap();
+    let reply = agent
+        .resume(&mut conversation, RunControl::default())
+        .await
+        .unwrap();
+    assert_eq!(reply, "done");
+}
+
+#[tokio::test]
+async fn run_reports_a_stopped_run_with_its_reason() {
+    let model = scripted(vec![ModelResponse {
+        output: Some(json!("too long")),
+        tools: vec![],
+        usage: TokenUsage {
+            input: 8,
+            output: 8,
+        },
+    }]);
+    let limits = Limits {
+        max_tokens: 10,
+        ..Limits::default()
+    };
+    let agent = typed(model, vec![], limits);
+    let mut conversation = Conversation::default();
+    let error = agent.run(&mut conversation, "go").await.unwrap_err();
+    assert!(
+        matches!(error, Error::Stopped(StopReason::Tokens)),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), "run stopped: Tokens");
+    assert_eq!(
+        conversation.last_run.unwrap().phase,
+        Phase::Settled(Settlement::Stopped(StopReason::Tokens))
+    );
+}
+
+#[tokio::test]
+async fn run_reports_a_failed_run_with_its_settled_message() {
+    let model = scripted(vec![ModelResponse::tools(vec![call(
+        "a",
+        "missing",
+        json!(1),
+    )])]);
+    let agent = typed(model, vec![], Limits::default());
+    let mut conversation = Conversation::default();
+    let error = agent.run(&mut conversation, "go").await.unwrap_err();
+    let Error::Failed(reason) = &error else {
+        panic!("{error:?}");
+    };
+    assert_eq!(
+        reason.to_string(),
+        "invalid model output: unknown tool missing"
+    );
+    assert_eq!(
+        error.to_string(),
+        "run failed: invalid model output: unknown tool missing"
+    );
+    assert_eq!(
+        conversation.last_run.unwrap().phase,
+        Phase::Settled(Settlement::Failed(reason.to_string()))
+    );
+}
+
+#[tokio::test]
+async fn resume_reports_a_cancelled_run() {
+    let wait = typed_tool::<u32, Value, _, _>(spec("wait"), |_, _| async {
+        Ok(ToolOutput::Wait(WaitRequest::Input {
+            prompt: "Continue?".into(),
+        }))
+    });
+    let model = scripted(vec![ModelResponse::tools(vec![call(
+        "w",
+        "wait",
+        json!(1),
+    )])]);
+    let agent = typed(model, vec![wait], Limits::default());
+    let mut conversation = Conversation::default();
+    assert!(matches!(
+        agent.run(&mut conversation, "go").await,
+        Err(Error::Waiting)
+    ));
+    let control = RunControl::default();
+    control.cancel.cancel();
+    assert!(matches!(
+        agent.resume(&mut conversation, control).await,
+        Err(Error::Cancelled)
+    ));
+    assert_eq!(
+        conversation.last_run.unwrap().phase,
+        Phase::Settled(Settlement::Cancelled)
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Requests rejected before they run, and the causes errors keep.
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn rejected_requests_name_their_kind() {
+    let erased = typed(done(), vec![], Limits::default()).erased();
+    // Input that fails the agent's type keeps the decoding error.
+    let error = erased.new_run("c", json!(42), &[], None).unwrap_err();
+    assert!(matches!(error, Error::Input(_)), "{error:?}");
+    assert!(error.source().unwrap().is::<serde_json::Error>());
+    assert!(matches!(
+        erased.new_run("", json!("go"), &[], None),
+        Err(Error::Input(_))
+    ));
+    assert!(matches!(
+        Agent::builder("", done()).build(),
+        Err(Error::Config(_))
+    ));
+    let entry = HistoryEntry::Input(json!("x".repeat(64)));
+    assert!(matches!(
+        select_context(&[entry], 16),
+        Err(Error::Context(_))
+    ));
+}
+
+#[tokio::test]
+async fn tool_errors_keep_their_cause() {
+    struct Unencodable;
+    impl serde::Serialize for Unencodable {
+        fn serialize<S: serde::Serializer>(&self, _: S) -> std::result::Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("cannot encode"))
+        }
+    }
+    let tool = typed_tool::<u32, _, _, _>(spec("bad"), |_, _| async {
+        Ok(ToolOutput::Complete(Unencodable))
+    });
+    // The model's arguments fail the tool's type.
+    let error = tool.validate(&json!("one")).unwrap_err();
+    assert!(matches!(error, Error::ModelOutput(_)), "{error:?}");
+    assert!(error.source().unwrap().is::<serde_json::Error>());
+    let context = ToolContext {
+        run_id: RunId::nil(),
+        call_id: "call".into(),
+        idempotency_key: "key".into(),
+        cancel: CancellationToken::new(),
+    };
+    let error = tool.execute(json!(1), context).await.unwrap_err();
+    assert!(matches!(error, Error::Tool(_)), "{error:?}");
+    assert_eq!(error.to_string(), "tool: cannot encode");
+    assert!(error.source().unwrap().is::<serde_json::Error>());
+}
+
+#[test]
+fn implementor_errors_keep_their_cause() {
+    let reset = || std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset by peer");
+    for (error, prefix) in [
+        (Error::provider(reset()), "provider: "),
+        (Error::tool(reset()), "tool: "),
+        (Error::storage(reset()), "storage: "),
+    ] {
+        assert_eq!(error.to_string(), format!("{prefix}reset by peer"));
+        let cause = error.source().unwrap().downcast_ref::<std::io::Error>();
+        assert_eq!(cause.unwrap().kind(), std::io::ErrorKind::ConnectionReset);
+    }
+    // A message is not a cause.
+    assert!(Error::storage("revision exhausted").source().is_none());
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn sqlite_storage_errors_keep_the_database_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("not-a-database.sqlite");
+    std::fs::write(&path, vec![b'x'; 4096]).unwrap();
+    let error = match sqlite::SqliteStore::open(&path).await {
+        Err(error) => error,
+        Ok(_) => panic!("a file that is not a database opened"),
+    };
+    assert!(matches!(error, Error::Storage(_)), "{error:?}");
+    assert!(error.source().unwrap().is::<rusqlite::Error>(), "{error:?}");
 }

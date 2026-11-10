@@ -152,5 +152,11 @@ async fn corrupt_or_foreign_data_is_a_storage_error() {
             matches!(result, Err(Error::Storage(_))),
             "{case}: {result:?}"
         );
+        // Undecodable data keeps the decoder's error as the cause.
+        if case == "malformed progress" {
+            let error = result.unwrap_err();
+            let cause = std::error::Error::source(&error).unwrap();
+            assert!(cause.is::<serde_json::Error>(), "{case}: {cause:?}");
+        }
     }
 }

@@ -640,7 +640,16 @@ mod tests {
         );
         assert_eq!(response.tools[1].arguments, json!({"x":42}));
         let broken = source.replace("42}", "42");
-        assert!(Parser::new(1024).feed(broken.as_bytes()).is_err());
+        let error = Parser::new(1024).feed(broken.as_bytes()).unwrap_err();
+        assert!(matches!(error, Error::Provider(_)), "{error:?}");
+        assert!(
+            error
+                .to_string()
+                .starts_with("provider: OpenAI: invalid JSON tool arguments: "),
+            "{error}"
+        );
+        let cause = std::error::Error::source(&error).unwrap();
+        assert!(cause.is::<serde_json::Error>());
     }
     #[test]
     fn protocol_failures_never_publish_completed_response() {
