@@ -51,10 +51,16 @@ const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(804, 88_768);
 /// model's copy of each delta, so the engine itself must add no allocation per delta. Bytes
 /// include the channel's two 32-slot blocks of 40-byte `ProgressEvent`s, a per-channel cost.
 const ALLOC_STREAM_64_DELTAS_OBSERVED: Budget = Budget::new(169, 17_986);
+/// `Engine::run` of a final-only response for an agent with typed input and output, in an empty
+/// conversation: includes validating the input and the output against their types.
+const ALLOC_RUN_TYPED_EMPTY_CONVERSATION: Budget = Budget::new(489, 50_818);
 /// `Agent::clone` with four typed tools (once per spawned durable run and per `accept`).
 const ALLOC_AGENT_CLONE: Budget = Budget::new(7, 764);
-/// `Agent::binding` with four typed tools (rebuilt on every `drive` and `accept`).
-const ALLOC_AGENT_BINDING: Budget = Budget::new(182, 17_101);
+/// `Engine::drive` of a settled run decoded from storage, with four typed tools: only the
+/// compatibility check every `drive` performs against the agent's binding.
+const ALLOC_DRIVE_BINDING_CHECK: Budget = Budget::new(182, 17_101);
+/// `Tool::validate` then `Tool::execute` of one typed tool call with a string argument.
+const ALLOC_TYPED_TOOL_CALL: Budget = Budget::new(8, 1_022);
 
 /// Allowance above a measured allocation or record-byte budget.
 const HEADROOM_PERCENT: u64 = 2;
@@ -417,8 +423,83 @@ async fn agent_allocation_budgets() {
         drop(std::hint::black_box(agent.clone()));
     })
     .await;
-    stable("agent_binding", ALLOC_AGENT_BINDING, || async {
-        drop(std::hint::black_box(agent.binding()));
+
+    // A stored run shares nothing with the agent in memory, so this is what a host pays.
+    let engine = Engine::new(agent);
+    let mut settled = engine
+        .agent()
+        .new_run("cost", json!("go"), &[], None)
+        .unwrap();
+    settled.phase = Phase::Settled(Settlement::Cancelled);
+    let stored = serde_json::to_string(&settled).unwrap();
+    // Cloned, not created, per drive: a new token's first lock allocates its mutex.
+    let control = RunControl::default();
+    stable("drive_binding_check", ALLOC_DRIVE_BINDING_CHECK, || {
+        let mut state: RunState = serde_json::from_str(&stored).unwrap();
+        let control = control.clone();
+        let engine = &engine;
+        async move {
+            engine
+                .drive(&mut state, &MemoryCheckpoint, control)
+                .await
+                .unwrap();
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn typed_allocation_budgets() {
+    #[derive(serde::Serialize, Deserialize, JsonSchema)]
+    struct Question {
+        text: String,
+    }
+    #[derive(serde::Serialize, Deserialize, JsonSchema, Debug, PartialEq)]
+    struct Answer {
+        text: String,
+        confidence: u32,
+    }
+    let agent = Agent::new::<Question, Answer>(
+        "cost",
+        "Answer with the scripted result.",
+        Arc::new(ScriptedModel::new(vec![ModelResponse::final_output(
+            json!({"text": "done", "confidence": 9}),
+        )])),
+        ModelConfig::default(),
+        tools(),
+        Limits::default(),
+    )
+    .unwrap();
+    let engine = Engine::new(agent);
+    stable(
+        "run_typed_empty_conversation",
+        ALLOC_RUN_TYPED_EMPTY_CONVERSATION,
+        || async {
+            let mut conversation = Conversation::default();
+            let output: Answer = engine
+                .run(&mut conversation, Question { text: "go".into() })
+                .await
+                .unwrap();
+            assert_eq!(output.confidence, 9);
+        },
+    )
+    .await;
+
+    let tool = tools().remove(1);
+    let arguments = json!({"key": "a key long enough to need its own allocation", "limit": 3});
+    let context = ToolContext {
+        run_id: RunId::nil(),
+        call_id: "call".into(),
+        idempotency_key: "key".into(),
+        cancel: tokio_util::sync::CancellationToken::new(),
+    };
+    stable("typed_tool_call", ALLOC_TYPED_TOOL_CALL, || {
+        let (arguments, context, tool) = (arguments.clone(), context.clone(), &tool);
+        async move {
+            tool.validate(&arguments).unwrap();
+            let output = tool.execute(arguments, context).await.unwrap();
+            assert!(matches!(output, ToolOutput::Complete(Value::String(_))));
+        }
     })
     .await;
 }
