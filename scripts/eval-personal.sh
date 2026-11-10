@@ -4,7 +4,13 @@ set -eu
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 agent_build_json=$(mktemp)
 trap 'rm -f "$agent_build_json"' EXIT HUP INT TERM
-scripts/rust.sh build --locked --release --example personal_workflow_eval --message-format=json > "$agent_build_json"
+agent_service_features=
+for agent_arg in "$@"; do
+    case "$agent_arg" in
+        --services|--cleanup-sandbox) agent_service_features=--features=google-calendar ;;
+    esac
+done
+scripts/rust.sh build --locked --release $agent_service_features --example personal_workflow_eval --message-format=json > "$agent_build_json"
 AGENT_EVAL_BIN=$(python3 - "$agent_build_json" <<'PY'
 import json, sys
 paths = []
