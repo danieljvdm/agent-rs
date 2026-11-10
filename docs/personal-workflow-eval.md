@@ -30,17 +30,19 @@ From this repository, run:
 
 ```sh
 scripts/eval-personal.sh --trials 3 --out eval-results/live-local
+# Select the Responses API explicitly, with the same exact model:
+scripts/eval-personal.sh --api responses --model gpt-4.1-2025-04-14 --trials 1 --out eval-results/responses-local
 ```
 
 The wrapper builds the executable before loading credentials. It then uses the path-selected Yielded Infisical machine identity and the existing agent project (`e27bd4e8-050b-4b7b-ab72-045abb9463cc`), `dev`, `/`, to inject `OPENAI_API_KEY` into the evaluation process. It does not print credentials or write them to reports. Output paths must be new; failed attempts are retained rather than overwritten. Alternatively, inject `OPENAI_API_KEY` through your own environment and call the executable with `--mode live`.
 
-The default is the pinned `gpt-4.1-2025-04-14` snapshot, which supports this library's Chat Completions tool and structured-output adapter. [Official model documentation](https://developers.openai.com/api/docs/models/gpt-4.1) describes those capabilities. `--model` may select another compatible model. [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) requires Responses for tool calling, so substituting its name alone does not make it compatible with this adapter.
+The default is `--api chat-completions` with the pinned `gpt-4.1-2025-04-14` snapshot. [Official model documentation](https://developers.openai.com/api/docs/models/gpt-4.1) describes its tool and structured-output capabilities. `--api responses` selects the Responses adapter; `--model` always passes the exact name unchanged. [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) requires Responses for tool calling, so substituting its name alone does not make it compatible with Chat Completions. The [adapter contract](model-adapters.md) lists the supported capabilities and what is deferred, such as reasoning and hosted-tool replay. Selecting a different model or API does not by itself establish compatibility.
 
 Each attempt allows at most eight model calls, twelve tool calls, 20,000 cumulative tokens, 60 seconds per operation, four minutes of active work, and five minutes of wall time. Live mode consumes API tokens. Tests in ordinary CI use scripted mode; live inference is a separate evaluation, not a required network dependency for library tests.
 
 ## Evidence and interpretation
 
-`report.json` records every attempted case, including failures, alongside mode, model, fixture version, source blob, and revision. Each case retains `result.json`, the synthetic input files, and any reminder effect. Runtime state contains model/tool counts, token usage, and committed history. Failed checks cause a nonzero exit status. SQLite files remain local and are ignored by Git; the JSON evidence contains the retained state needed to inspect the result.
+`report.json` records every attempted case, including failures, alongside mode, API, model, fixture version, source blob, and revision. Each case retains `result.json`, the synthetic input files, and any reminder effect. Runtime state contains model/tool counts, token usage, and committed history. Failed checks cause a nonzero exit status. SQLite files remain local and are ignored by Git; the JSON evidence contains the retained state needed to inspect the result.
 
 Each invocation writes a new directory, and `eval-results/` is ignored by Git. Keep failed attempts when comparing prompts or runtime changes, and retain reports you want to cite outside the repository. Reports contain synthetic calendar/reminder data, model outputs, counts, and grading results, never credentials.
 

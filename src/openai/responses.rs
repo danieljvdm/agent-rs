@@ -49,6 +49,21 @@ use tokio_util::sync::CancellationToken;
 ///
 /// There are no implicit retries or fallbacks. Network and protocol errors omit request URLs,
 /// server bodies and credentials, as they are persisted with failed runs.
+///
+/// Select it by building the agent with it; its API and endpoint join the agent's binding:
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use yielded_agent::{Agent, ModelConfig, openai::OpenAiResponsesModel};
+/// # fn main() -> yielded_agent::Result<()> {
+/// # let key = String::from("example-key");
+/// let agent = Agent::builder("assistant", Arc::new(OpenAiResponsesModel::new(key)?))
+///     .config(ModelConfig::new("gpt-4.1-2025-04-14"))
+///     .output::<String>()
+///     .build()?;
+/// assert_eq!(agent.binding()["model_adapter"]["api"], "responses");
+/// # Ok(()) }
+/// ```
 #[derive(Clone)]
 pub struct OpenAiResponsesModel {
     transport: Transport,
