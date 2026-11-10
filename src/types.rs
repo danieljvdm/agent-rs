@@ -4,38 +4,9 @@ use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
-use thiserror::Error;
 use uuid::Uuid;
 pub const STATE_VERSION: u32 = 1;
 pub type RunId = Uuid;
-pub type Result<T> = std::result::Result<T, Error>;
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("invalid input: {0}")]
-    Invalid(String),
-    #[error("provider: {0}")]
-    Provider(String),
-    #[error("tool: {0}")]
-    Tool(String),
-    #[error("storage: {0}")]
-    Storage(String),
-    #[error("conflicting idempotency key")]
-    IdempotencyConflict,
-    #[error("conversation already has an active run")]
-    ConversationBusy,
-    #[error("database already has an owner")]
-    DatabaseBusy,
-    #[error("stale execution generation or checkpoint revision")]
-    Stale,
-    #[error("incompatible state or agent binding: {0}")]
-    Incompatible(String),
-    #[error("run not found")]
-    NotFound,
-    #[error("operation is not waiting for this resolution")]
-    NotWaiting,
-    #[error("execution interrupted")]
-    Interrupted,
-}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Limits {
     pub max_model_calls: u32,

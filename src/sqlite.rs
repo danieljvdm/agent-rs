@@ -150,28 +150,23 @@ enum Written {
     NeedHistoryFrom(usize),
 }
 
-fn storage(error: impl std::fmt::Display) -> Error {
-    Error::Storage(error.to_string())
-}
 fn encode(value: &impl Serialize) -> Result<String> {
-    serde_json::to_string(value).map_err(storage)
+    serde_json::to_string(value).map_err(Error::storage)
 }
 fn decode<T: serde::de::DeserializeOwned>(text: &str) -> Result<T> {
-    serde_json::from_str(text).map_err(storage)
+    serde_json::from_str(text).map_err(Error::storage)
 }
 fn sql_time(value: Option<u64>) -> Option<i64> {
     value.map(|v| v.min(i64::MAX as u64) as i64)
 }
 fn run_id(text: &str) -> Result<RunId> {
-    RunId::parse_str(text).map_err(storage)
+    RunId::parse_str(text).map_err(Error::storage)
 }
 
 impl Database {
     fn open(path: &Path, counters: Arc<Counters>) -> Result<Self> {
         if path.as_os_str().is_empty() || path == Path::new(":memory:") {
-            return Err(Error::Invalid(
-                "a file-backed database path is required".into(),
-            ));
+            return Err(Error::config("a file-backed database path is required"));
         }
         let database_file = OpenOptions::new()
             .read(true)
@@ -179,15 +174,17 @@ impl Database {
             .create(true)
             .truncate(false)
             .open(path)
-            .map_err(storage)?;
+            .map_err(Error::storage)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            if database_file.metadata().map_err(storage)?.nlink() != 1 {
-                return Err(Error::Invalid("hard-linked SQLite databases are unsupported because WAL sidecars are path-specific".into()));
+            if database_file.metadata().map_err(Error::storage)?.nlink() != 1 {
+                return Err(Error::config(
+                    "hard-linked SQLite databases are unsupported because WAL sidecars are path-specific",
+                ));
             }
         }
-        let canonical = std::fs::canonicalize(path).map_err(storage)?;
+        let canonical = std::fs::canonicalize(path).map_err(Error::storage)?;
         // A separate canonical sidecar avoids conflicting with SQLite's own advisory
         // locks (flock and fcntl interact on some Unix platforms). Hard links are
         // rejected above; symlink aliases therefore converge on this one owner lock.
@@ -199,29 +196,29 @@ impl Database {
             .create(true)
             .truncate(false)
             .open(PathBuf::from(lock_path))
-            .map_err(storage)?;
+            .map_err(Error::storage)?;
         lock.try_lock_exclusive().map_err(|e| {
             if e.kind() == std::io::ErrorKind::WouldBlock {
-                Error::DatabaseBusy
+                Error::StoreBusy
             } else {
-                storage(e)
+                Error::storage(e)
             }
         })?;
-        let connection = Connection::open(canonical).map_err(storage)?;
+        let connection = Connection::open(canonical).map_err(Error::storage)?;
         connection
             .pragma_update(None, "journal_mode", "WAL")
-            .map_err(storage)?;
+            .map_err(Error::storage)?;
         connection
             .pragma_update(None, "synchronous", "FULL")
-            .map_err(storage)?;
+            .map_err(Error::storage)?;
         connection
             .pragma_update(None, "foreign_keys", "ON")
-            .map_err(storage)?;
+            .map_err(Error::storage)?;
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |r| r.get(0))
-            .map_err(storage)?;
+            .map_err(Error::storage)?;
         if version != 0 && version != STORAGE_VERSION {
-            return Err(Error::Incompatible(format!(
+            return Err(Error::incompatible(format!(
                 "SQLite schema version {version}"
             )));
         }
@@ -255,7 +252,7 @@ impl Database {
                 PRIMARY KEY(run_id, call_id));
             PRAGMA user_version=2; COMMIT;",
             )
-            .map_err(storage)?;
+            .map_err(Error::storage)?;
         Ok(Self {
             connection,
             _lock: lock,
@@ -277,7 +274,7 @@ fn load(connection: &Connection, id: RunId) -> Result<RunState> {
                 r.prior_context,c.generation,c.revision,c.history_len,c.progress
             FROM runs r JOIN checkpoints c ON c.run_id=r.id WHERE r.id=?1",
         )
-        .map_err(storage)?
+        .map_err(Error::storage)?
         .query_row([&key], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
@@ -295,31 +292,31 @@ fn load(connection: &Connection, id: RunId) -> Result<RunState> {
             ))
         })
         .optional()
-        .map_err(storage)?
+        .map_err(Error::storage)?
         .ok_or(Error::NotFound)?;
     let (version, conversation_id, agent_id, binding, input, limits, expires_at, prior_context) =
         (row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7);
     let (generation, revision, history_len, progress) = (row.8, row.9, row.10, row.11);
     if version != i64::from(STATE_VERSION) {
-        return Err(Error::Incompatible(format!(
+        return Err(Error::incompatible(format!(
             "checkpoint state version {version}"
         )));
     }
-    let history_len = usize::try_from(history_len).map_err(storage)?;
+    let history_len = usize::try_from(history_len).map_err(Error::storage)?;
     let history = {
         let mut stmt = connection
             .prepare_cached(
                 "SELECT entry FROM history WHERE run_id=?1 AND ordinal<?2 ORDER BY ordinal",
             )
-            .map_err(storage)?;
+            .map_err(Error::storage)?;
         let rows = stmt
             .query_map(params![key, history_len as i64], |r| r.get::<_, String>(0))
-            .map_err(storage)?;
-        rows.map(|row| decode(&row.map_err(storage)?))
+            .map_err(Error::storage)?;
+        rows.map(|row| decode(&row.map_err(Error::storage)?))
             .collect::<Result<Vec<HistoryEntry>>>()?
     };
     if history.len() != history_len {
-        return Err(storage(format!(
+        return Err(Error::storage(format!(
             "run {id} records {history_len} history entries but {} are stored",
             history.len()
         )));
@@ -334,10 +331,10 @@ fn load(connection: &Connection, id: RunId) -> Result<RunState> {
         input: decode(&input)?,
         limits: decode(&limits)?,
         expires_at_ms: expires_at
-            .map(|at| u64::try_from(at).map_err(storage))
+            .map(|at| u64::try_from(at).map_err(Error::storage))
             .transpose()?,
-        generation: u64::try_from(generation).map_err(storage)?,
-        revision: u64::try_from(revision).map_err(storage)?,
+        generation: u64::try_from(generation).map_err(Error::storage)?,
+        revision: u64::try_from(revision).map_err(Error::storage)?,
         cancel_requested: progress.cancel_requested,
         phase: progress.phase,
         usage: progress.usage,
@@ -358,7 +355,7 @@ fn insert_history(
         .prepare_cached(
             "INSERT INTO history(run_id,conversation,ordinal,entry) VALUES(?1,?2,?3,?4)",
         )
-        .map_err(storage)?;
+        .map_err(Error::storage)?;
     for (offset, entry) in entries.iter().enumerate() {
         stmt.execute(params![
             id,
@@ -366,7 +363,7 @@ fn insert_history(
             (first_ordinal + offset) as i64,
             entry
         ])
-        .map_err(storage)?;
+        .map_err(Error::storage)?;
     }
     Ok(entries.len() as u64)
 }
@@ -381,12 +378,12 @@ fn upsert_operations(
             ON CONFLICT(run_id,call_id) DO UPDATE SET operation=excluded.operation
             WHERE operations.operation<>excluded.operation",
         )
-        .map_err(storage)?;
+        .map_err(Error::storage)?;
     let mut writes = 0;
     for (call_id, operation) in operations {
         writes += stmt
             .execute(params![id, call_id, operation])
-            .map_err(storage)? as u64;
+            .map_err(Error::storage)? as u64;
     }
     Ok(writes)
 }
@@ -400,12 +397,12 @@ fn write_delta(
 ) -> Result<Written> {
     let stored: i64 = tx
         .prepare_cached("SELECT history_len FROM checkpoints WHERE run_id=?1")
-        .map_err(storage)?
+        .map_err(Error::storage)?
         .query_row([&delta.id], |r| r.get(0))
         .optional()
-        .map_err(storage)?
+        .map_err(Error::storage)?
         .ok_or(Error::NotFound)?;
-    let stored = usize::try_from(stored).map_err(storage)?;
+    let stored = usize::try_from(stored).map_err(Error::storage)?;
     let (expected, allow_settled) = match fence {
         Fence::Commit(position) => (position, false),
         Fence::Update(position) => (position, true),
@@ -416,7 +413,7 @@ fn write_delta(
                 recover=?9,last_error=CASE WHEN ?10 THEN NULL ELSE last_error END
             WHERE run_id=?1 AND generation=?2 AND revision=?3 AND (?11 OR settled=0)",
         )
-        .map_err(storage)?
+        .map_err(Error::storage)?
         .execute(params![
             delta.id,
             expected.generation,
@@ -430,12 +427,12 @@ fn write_delta(
             clear_error || delta.settled,
             allow_settled,
         ])
-        .map_err(storage)?;
+        .map_err(Error::storage)?;
     if changed == 0 {
         return Err(Error::Stale);
     }
     if delta.history_len < stored {
-        return Err(Error::Invalid("history is append-only".into()));
+        return Err(Error::input("history is append-only"));
     }
     if stored < delta.history_from {
         return Ok(Written::NeedHistoryFrom(stored));
@@ -453,12 +450,12 @@ fn bounded_history(
 ) -> Result<Vec<HistoryEntry>> {
     let mut stmt = connection
         .prepare_cached("SELECT entry FROM history WHERE conversation=?1 ORDER BY sequence DESC")
-        .map_err(storage)?;
-    let mut rows = stmt.query([conversation]).map_err(storage)?;
+        .map_err(Error::storage)?;
+    let mut rows = stmt.query([conversation]).map_err(Error::storage)?;
     let mut result = Vec::new();
     let mut bytes = 2usize;
-    while let Some(row) = rows.next().map_err(storage)? {
-        let text: String = row.get(0).map_err(storage)?;
+    while let Some(row) = rows.next().map_err(Error::storage)? {
+        let text: String = row.get(0).map_err(Error::storage)?;
         let next = bytes.saturating_add(text.len()).saturating_add(1);
         if next > limit {
             break;
@@ -484,12 +481,12 @@ fn accept_in(
         .prepare_cached(
             "SELECT id,input,binding,expires_at FROM runs WHERE conversation=?1 AND idempotency_key=?2",
         )
-        .map_err(storage)?
+        .map_err(Error::storage)?
         .query_row(params![conversation, key], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
         })
         .optional()
-        .map_err(storage)?;
+        .map_err(Error::storage)?;
     if let Some((id, old_input, old_binding, old_expiry)) = existing {
         if old_input != encode(&input)?
             || old_expiry != sql_time(expires_at_ms)
@@ -503,9 +500,9 @@ fn accept_in(
         .prepare_cached(
             "SELECT EXISTS(SELECT 1 FROM checkpoints WHERE conversation=?1 AND settled=0)",
         )
-        .map_err(storage)?
+        .map_err(Error::storage)?
         .query_row([conversation], |r| r.get(0))
-        .map_err(storage)?;
+        .map_err(Error::storage)?;
     if busy {
         return Err(Error::ConversationBusy);
     }
@@ -516,7 +513,7 @@ fn accept_in(
         "INSERT INTO runs(id,conversation,idempotency_key,version,agent_id,binding,input,limits,
             expires_at,prior_context) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
     )
-    .map_err(storage)?
+    .map_err(Error::storage)?
     .execute(params![
         id,
         conversation,
@@ -529,13 +526,13 @@ fn accept_in(
         sql_time(state.expires_at_ms),
         encode(&state.prior_context)?,
     ])
-    .map_err(storage)?;
+    .map_err(Error::storage)?;
     let delta = Delta::encode(&state, state.revision, 0, false)?;
     tx.prepare_cached(
         "INSERT INTO checkpoints(run_id,conversation,generation,revision,history_len,progress,
             settled,wake_at,recover) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
     )
-    .map_err(storage)?
+    .map_err(Error::storage)?
     .execute(params![
         id,
         conversation,
@@ -547,7 +544,7 @@ fn accept_in(
         delta.wake_at,
         delta.recover,
     ])
-    .map_err(storage)?;
+    .map_err(Error::storage)?;
     let writes = 2
         + insert_history(tx, &id, conversation, 0, &delta.history)?
         + upsert_operations(tx, &id, &delta.operations)?;
@@ -576,8 +573,8 @@ impl SqliteStore {
                     let _ = ready_tx.send(Err(error));
                 }
             })
-            .map_err(storage)?;
-        match ready_rx.await.map_err(storage)? {
+            .map_err(Error::storage)?;
+        match ready_rx.await.map_err(Error::storage)? {
             Ok(()) => Ok(Self {
                 worker: Mutex::new(Worker {
                     sender: Some(sender),
@@ -600,18 +597,18 @@ impl SqliteStore {
         let sender = self
             .worker
             .lock()
-            .map_err(storage)?
+            .map_err(|_| Error::storage("SQLite worker lock poisoned"))?
             .sender
             .clone()
-            .ok_or_else(|| Error::Storage("store is closed".into()))?;
+            .ok_or_else(|| Error::storage("store is closed"))?;
         let (tx, rx) = oneshot::channel();
         sender
             .send(Box::new(move |database| {
                 let _ = tx.send(action(database));
             }))
             .await
-            .map_err(storage)?;
-        rx.await.map_err(storage)?
+            .map_err(|_| Error::storage("store is closed"))?;
+        rx.await.map_err(Error::storage)?
     }
     pub fn metrics(&self) -> StoreMetrics {
         StoreMetrics {
@@ -622,15 +619,18 @@ impl SqliteStore {
     /// Stop accepting work, drain queued transactions, and release the process file lock.
     pub async fn close(&self) -> Result<()> {
         let thread = {
-            let mut worker = self.worker.lock().map_err(storage)?;
+            let mut worker = self
+                .worker
+                .lock()
+                .map_err(|_| Error::storage("SQLite worker lock poisoned"))?;
             worker.sender.take();
             worker.thread.take()
         };
         if let Some(thread) = thread {
             tokio::task::spawn_blocking(move || thread.join())
                 .await
-                .map_err(storage)?
-                .map_err(|_| Error::Storage("SQLite worker panicked".into()))?;
+                .map_err(Error::storage)?
+                .map_err(|_| Error::storage("SQLite worker panicked"))?;
         }
         Ok(())
     }
@@ -666,10 +666,10 @@ impl DurableStore for SqliteStore {
     ) -> Result<RunId> {
         let (agent, conversation, key) = (agent.clone(), conversation.to_owned(), key.to_owned());
         self.call(move |db| {
-            let tx = db.connection.transaction().map_err(storage)?;
+            let tx = db.connection.transaction().map_err(Error::storage)?;
             let (id, writes) = accept_in(&tx, &agent, &conversation, &key, input, expires_at_ms)?;
             if writes > 0 {
-                tx.commit().map_err(storage)?;
+                tx.commit().map_err(Error::storage)?;
                 db.count(writes);
             }
             Ok(id)
@@ -685,11 +685,12 @@ impl DurableStore for SqliteStore {
             let mut stmt = db
                 .connection
                 .prepare_cached("SELECT entry FROM history WHERE conversation=?1 ORDER BY sequence")
-                .map_err(storage)?;
+                .map_err(Error::storage)?;
             let rows = stmt
                 .query_map([conversation], |r| r.get::<_, String>(0))
-                .map_err(storage)?;
-            rows.map(|row| decode(&row.map_err(storage)?)).collect()
+                .map_err(Error::storage)?;
+            rows.map(|row| decode(&row.map_err(Error::storage)?))
+                .collect()
         })
         .await
     }
@@ -699,11 +700,12 @@ impl DurableStore for SqliteStore {
             let mut stmt = db
                 .connection
                 .prepare_cached("SELECT operation FROM operations WHERE run_id=?1 ORDER BY rowid")
-                .map_err(storage)?;
+                .map_err(Error::storage)?;
             let rows = stmt
                 .query_map([id.to_string()], |r| r.get::<_, String>(0))
-                .map_err(storage)?;
-            rows.map(|row| decode(&row.map_err(storage)?)).collect()
+                .map_err(Error::storage)?;
+            rows.map(|row| decode(&row.map_err(Error::storage)?))
+                .collect()
         })
         .await
     }
@@ -711,7 +713,7 @@ impl DurableStore for SqliteStore {
     async fn claim(&self, id: RunId) -> Result<RunState> {
         let state = self
             .call(move |db| {
-                let tx = db.connection.transaction().map_err(storage)?;
+                let tx = db.connection.transaction().map_err(Error::storage)?;
                 let mut state = load(&tx, id)?;
                 if state.is_terminal() {
                     return Err(Error::Stale);
@@ -724,7 +726,7 @@ impl DurableStore for SqliteStore {
                         "UPDATE checkpoints SET generation=?4,revision=?5,wake_at=?6,recover=?7
                         WHERE run_id=?1 AND generation=?2 AND revision=?3 AND settled=0",
                     )
-                    .map_err(storage)?
+                    .map_err(Error::storage)?
                     .execute(params![
                         id.to_string(),
                         old.generation,
@@ -734,11 +736,11 @@ impl DurableStore for SqliteStore {
                         sql_time(state.wake_at()),
                         state.needs_recovery(),
                     ])
-                    .map_err(storage)?;
+                    .map_err(Error::storage)?;
                 if changed == 0 {
                     return Err(Error::Stale);
                 }
-                tx.commit().map_err(storage)?;
+                tx.commit().map_err(Error::storage)?;
                 db.count(1);
                 Ok(state)
             })
@@ -748,7 +750,7 @@ impl DurableStore for SqliteStore {
     }
     async fn update(&self, id: RunId, update: RunUpdate) -> Result<()> {
         self.call(move |db| {
-            let tx = db.connection.transaction().map_err(storage)?;
+            let tx = db.connection.transaction().map_err(Error::storage)?;
             let mut state = load(&tx, id)?;
             let fence = Fence::Update(CheckpointPosition::from(&state));
             let durable = state.history.len();
@@ -760,11 +762,13 @@ impl DurableStore for SqliteStore {
             let delta = Delta::encode(&state, revision, durable, effect.wake_now)?;
             match write_delta(&tx, &delta, fence, effect.clear_error)? {
                 Written::Done { writes } => {
-                    tx.commit().map_err(storage)?;
+                    tx.commit().map_err(Error::storage)?;
                     db.count(writes);
                     Ok(())
                 }
-                Written::NeedHistoryFrom(_) => Err(storage("run history changed during update")),
+                Written::NeedHistoryFrom(_) => {
+                    Err(Error::storage("run history changed during update"))
+                }
             }
         })
         .await
@@ -776,13 +780,13 @@ impl DurableStore for SqliteStore {
                 .prepare_cached(
                     "SELECT run_id FROM checkpoints WHERE wake_at<=?1 ORDER BY wake_at,run_id LIMIT ?2",
                 )
-                .map_err(storage)?;
+                .map_err(Error::storage)?;
             let rows = stmt
                 .query_map(params![sql_time(Some(now)), limit.min(4096) as i64], |r| {
                     r.get::<_, String>(0)
                 })
-                .map_err(storage)?;
-            rows.map(|row| run_id(&row.map_err(storage)?)).collect()
+                .map_err(Error::storage)?;
+            rows.map(|row| run_id(&row.map_err(Error::storage)?)).collect()
         })
         .await
     }
@@ -792,7 +796,7 @@ impl DurableStore for SqliteStore {
                 .prepare_cached(
                     "SELECT generation,revision FROM checkpoints WHERE run_id=?1 AND settled=0",
                 )
-                .map_err(storage)?
+                .map_err(Error::storage)?
                 .query_row([id.to_string()], |row| {
                     Ok(CheckpointPosition {
                         generation: row.get(0)?,
@@ -800,7 +804,7 @@ impl DurableStore for SqliteStore {
                     })
                 })
                 .optional()
-                .map_err(storage)?
+                .map_err(Error::storage)?
                 .ok_or(Error::NotFound)
         })
         .await
@@ -815,14 +819,15 @@ impl DurableStore for SqliteStore {
                     "SELECT run_id FROM checkpoints WHERE recover=1 AND last_error IS NULL
                     AND run_id>?1 ORDER BY run_id LIMIT ?2",
                 )
-                .map_err(storage)?;
+                .map_err(Error::storage)?;
             let after = after.map(|id| id.to_string()).unwrap_or_default();
             let rows = stmt
                 .query_map(params![after, limit.min(4096) as i64], |r| {
                     r.get::<_, String>(0)
                 })
-                .map_err(storage)?;
-            rows.map(|row| run_id(&row.map_err(storage)?)).collect()
+                .map_err(Error::storage)?;
+            rows.map(|row| run_id(&row.map_err(Error::storage)?))
+                .collect()
         })
         .await
     }
@@ -841,14 +846,14 @@ impl DurableStore for SqliteStore {
                     "UPDATE checkpoints SET wake_at=NULL,last_error=?4
                     WHERE run_id=?1 AND generation=?2 AND revision=?3 AND settled=0",
                 )
-                .map_err(storage)?
+                .map_err(Error::storage)?
                 .execute(params![
                     id.to_string(),
                     expected.generation,
                     expected.revision,
                     message
                 ])
-                .map_err(storage)?;
+                .map_err(Error::storage)?;
             if changed > 0 {
                 db.count(1);
             }
@@ -860,10 +865,10 @@ impl DurableStore for SqliteStore {
         self.call(move |db| {
             db.connection
                 .prepare_cached("SELECT last_error FROM checkpoints WHERE run_id=?1")
-                .map_err(storage)?
+                .map_err(Error::storage)?
                 .query_row([id.to_string()], |r| r.get(0))
                 .optional()
-                .map_err(storage)?
+                .map_err(Error::storage)?
                 .ok_or(Error::NotFound)
         })
         .await
@@ -881,10 +886,10 @@ impl Checkpoint for SqliteStore {
             let delta = Delta::encode(state, revision, from, false)?;
             let written = self
                 .call(move |db| {
-                    let tx = db.connection.transaction().map_err(storage)?;
+                    let tx = db.connection.transaction().map_err(Error::storage)?;
                     let written = write_delta(&tx, &delta, fence, false)?;
                     if let Written::Done { writes } = written {
-                        tx.commit().map_err(storage)?;
+                        tx.commit().map_err(Error::storage)?;
                         db.count(writes);
                     }
                     Ok(written)
@@ -895,7 +900,7 @@ impl Checkpoint for SqliteStore {
                 // The hint ran ahead of durable history; resend from the stored length.
                 Ok(Written::NeedHistoryFrom(stored)) if stored < from => from = stored,
                 Ok(Written::NeedHistoryFrom(_)) => {
-                    return Err(storage("checkpoint history changed during commit"));
+                    return Err(Error::storage("checkpoint history changed during commit"));
                 }
                 Err(error) => {
                     self.hint(state.id, None);
@@ -939,7 +944,7 @@ mod tests {
         let old_revision = state.revision;
         // Fail the final history append, after the fenced checkpoint update has run.
         db.call(|db| {
-            db.connection.execute_batch("CREATE TRIGGER fail_retirement BEFORE INSERT ON history WHEN NEW.ordinal=1 BEGIN SELECT RAISE(FAIL, 'injected retirement failure'); END;").map_err(storage)
+            db.connection.execute_batch("CREATE TRIGGER fail_retirement BEFORE INSERT ON history WHEN NEW.ordinal=1 BEGIN SELECT RAISE(FAIL, 'injected retirement failure'); END;").map_err(Error::storage)
         }).await.unwrap();
         state.history.push(HistoryEntry::Exchange {
             response: ModelResponse::final_output(json!("done")),
@@ -964,7 +969,7 @@ mod tests {
         db.call(|db| {
             db.connection
                 .execute_batch("DROP TRIGGER fail_retirement")
-                .map_err(storage)
+                .map_err(Error::storage)
         })
         .await
         .unwrap();

@@ -112,7 +112,7 @@ async fn acceptance_is_durable_idempotent_and_exclusive() {
     ));
     assert!(matches!(
         SqliteStore::open(dir.path().join("state.sqlite")).await,
-        Err(Error::DatabaseBusy)
+        Err(Error::StoreBusy)
     ));
     db.close().await.unwrap();
     let db = store(&dir).await;
@@ -444,7 +444,7 @@ async fn shutdown_keeps_accepted_work_and_single_host_ownership() {
     let mut host = Host::start(db.clone(), agent.clone(), options()).unwrap();
     assert!(matches!(
         Host::start(db.clone(), agent.clone(), options()),
-        Err(Error::DatabaseBusy)
+        Err(Error::StoreBusy)
     ));
     host.shutdown().await.unwrap();
     assert!(!db.status(id).await.unwrap().cancel_requested);
@@ -516,7 +516,7 @@ async fn symlink_owner_is_exclusive_and_hardlinked_databases_are_rejected() {
     .unwrap();
     assert!(matches!(
         SqliteStore::open(dir.path().join("alias.sqlite")).await,
-        Err(Error::DatabaseBusy)
+        Err(Error::StoreBusy)
     ));
     db.close().await.unwrap();
     std::fs::hard_link(
@@ -526,7 +526,7 @@ async fn symlink_owner_is_exclusive_and_hardlinked_databases_are_rejected() {
     .unwrap();
     assert!(matches!(
         SqliteStore::open(dir.path().join("hard.sqlite")).await,
-        Err(Error::Invalid(_))
+        Err(Error::Config(_))
     ));
 }
 

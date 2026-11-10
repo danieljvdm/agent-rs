@@ -131,7 +131,7 @@ async fn admission_and_fencing(fixture: &impl Fixture) {
     ));
     assert!(matches!(
         store.accept(&agent, "", "key", json!(1), None).await,
-        Err(Error::Invalid(_))
+        Err(Error::Input(_))
     ));
     assert_eq!(
         store.history("c").await.unwrap(),
@@ -160,7 +160,7 @@ async fn admission_and_fencing(fixture: &impl Fixture) {
     shrunk.history.clear();
     assert!(matches!(
         store.commit(&mut shrunk).await,
-        Err(Error::Invalid(_))
+        Err(Error::Input(_))
     ));
     assert_eq!(store.status(id).await.unwrap().revision, committed);
 
@@ -190,7 +190,7 @@ async fn admission_and_fencing(fixture: &impl Fixture) {
     let mut host = start(&store, agent.clone());
     assert!(matches!(
         Host::start(store.clone(), agent.clone(), options()),
-        Err(Error::DatabaseBusy)
+        Err(Error::StoreBusy)
     ));
     assert_eq!(
         wait_for(&host, id, RunState::is_terminal).await.phase,
@@ -544,11 +544,11 @@ async fn several_agents_share_one_store(fixture: &impl Fixture) {
     };
     assert!(matches!(
         Host::start_agents(store.clone(), [named("alpha"), named("alpha")], options()),
-        Err(Error::Invalid(_))
+        Err(Error::Config(_))
     ));
     assert!(matches!(
         Host::start_agents(store.clone(), [], options()),
-        Err(Error::Invalid(_))
+        Err(Error::Config(_))
     ));
     let absent = store
         .accept(&named("gamma"), "gamma", "k", json!(0), None)
@@ -558,11 +558,11 @@ async fn several_agents_share_one_store(fixture: &impl Fixture) {
         Host::start_agents(store.clone(), [named("alpha"), named("beta")], options()).unwrap();
     assert!(matches!(
         host.submit("c", "k", json!(1), None).await,
-        Err(Error::Invalid(_))
+        Err(Error::Input(_))
     ));
     assert!(matches!(
         host.submit_to("gamma", "c", "k", json!(1), None).await,
-        Err(Error::Invalid(_))
+        Err(Error::Input(_))
     ));
     let alpha = host
         .submit_to("alpha", "alpha", "k", json!(1), None)

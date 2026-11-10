@@ -69,7 +69,7 @@ fn build_rejects_each_invalid_definition() {
         })
     };
     let reason = |builder: AgentBuilder| match builder.build() {
-        Err(Error::Invalid(reason)) => reason,
+        Err(Error::Config(reason)) => reason.to_string(),
         Err(error) => panic!("unexpected error {error}"),
         Ok(_) => panic!("invalid definition was built"),
     };
@@ -558,7 +558,7 @@ struct FailBeforeModel;
 #[async_trait]
 impl Checkpoint for FailBeforeModel {
     async fn commit(&self, _: &mut RunState) -> Result<()> {
-        Err(Error::Storage("injected".into()))
+        Err(Error::storage("injected"))
     }
 }
 #[tokio::test]
@@ -618,7 +618,7 @@ impl Tool for CancellableEffect {
     }
     async fn cleanup(&self, _: ToolContext) -> Result<()> {
         self.cleanup.fetch_add(1, Ordering::SeqCst);
-        Err(Error::Tool("cleanup could not establish outcome".into()))
+        Err(Error::tool("cleanup could not establish outcome"))
     }
 }
 #[tokio::test]
@@ -676,7 +676,7 @@ impl Model for FailedModelCleanup {
         ))])))
     }
     async fn cleanup(&self, _: RunId) -> Result<()> {
-        Err(Error::Provider("cleanup failed".into()))
+        Err(Error::provider("cleanup failed"))
     }
 }
 #[tokio::test]
@@ -736,7 +736,7 @@ impl Checkpoint for FailAfterFirstTool {
             .iter()
             .any(|op| matches!(op.status, OperationStatus::Complete(_)))
         {
-            return Err(Error::Storage("injected outcome commit failure".into()));
+            return Err(Error::storage("injected outcome commit failure"));
         }
         state.revision += 1;
         Ok(())
@@ -856,7 +856,7 @@ struct FailSettlement;
 impl Checkpoint for FailSettlement {
     async fn commit(&self, state: &mut RunState) -> Result<()> {
         if state.is_terminal() {
-            return Err(Error::Storage("settlement unavailable".into()));
+            return Err(Error::storage("settlement unavailable"));
         }
         state.revision += 1;
         Ok(())
@@ -1118,7 +1118,7 @@ async fn wait_or_unknown_outcome_stops_further_dispatch_until_resolved() {
         let mut mutation = spec("fail");
         mutation.retry = RetryPolicy::Never;
         let fail = typed_tool::<u32, u32, _, _>(mutation, |_, _| async {
-            Err(Error::Tool("outcome unknown".into()))
+            Err(Error::tool("outcome unknown"))
         });
         let first = if blocking == "wait" { "wait" } else { "fail" };
         let model = Arc::new(ScriptedModel::new(vec![

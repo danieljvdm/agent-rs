@@ -16,8 +16,8 @@
 //! - <https://developers.openai.com/api/docs/guides/structured-outputs>
 
 use crate::{
-    Error, HistoryEntry, Model, ModelEvent, ModelRequest, ModelResponse, ModelStream, Result,
-    TokenUsage, ToolCall,
+    Error, ErrorDetail, HistoryEntry, Model, ModelEvent, ModelRequest, ModelResponse, ModelStream,
+    Result, TokenUsage, ToolCall,
 };
 use async_trait::async_trait;
 use futures::stream;
@@ -48,7 +48,9 @@ impl OpenAiModel {
             .connect_timeout(Duration::from_secs(15))
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .map_err(|_| protocol("could not build HTTP client"))?;
+            .map_err(|error| {
+                Error::Config(ErrorDetail::caused_by("could not build HTTP client", error))
+            })?;
         Self::with_client(client, api_key, "https://api.openai.com/v1")
     }
 
@@ -62,16 +64,16 @@ impl OpenAiModel {
     ) -> Result<Self> {
         let key = api_key.into();
         if key.trim().is_empty() {
-            return Err(Error::Invalid("empty OpenAI API key".into()));
+            return Err(Error::config("empty OpenAI API key"));
         }
         let mut authorization = HeaderValue::from_str(&format!("Bearer {key}"))
-            .map_err(|_| Error::Invalid("invalid OpenAI API key header".into()))?;
+            .map_err(|_| Error::config("invalid OpenAI API key header"))?;
         authorization.set_sensitive(true);
         let endpoint = Url::parse(&format!(
             "{}/chat/completions",
             base_url.as_ref().trim_end_matches('/')
         ))
-        .map_err(|_| Error::Invalid("invalid OpenAI base URL".into()))?;
+        .map_err(|error| Error::Config(ErrorDetail::caused_by("invalid OpenAI base URL", error)))?;
         let local = matches!(
             endpoint.host_str(),
             Some("localhost" | "127.0.0.1" | "[::1]")
@@ -82,7 +84,9 @@ impl OpenAiModel {
             || endpoint.query().is_some()
             || endpoint.fragment().is_some()
         {
-            return Err(Error::Invalid("OpenAI base URL requires HTTPS (or loopback HTTP), without credentials/query/fragment".into()));
+            return Err(Error::config(
+                "OpenAI base URL requires HTTPS (or loopback HTTP), without credentials/query/fragment",
+            ));
         }
         Ok(Self {
             client,
@@ -100,7 +104,7 @@ impl Model for OpenAiModel {
         cancel: CancellationToken,
     ) -> Result<ModelStream> {
         if request.max_response_bytes == 0 {
-            return Err(Error::Invalid("zero response byte limit".into()));
+            return Err(Error::input("zero response byte limit"));
         }
         let limit = request.max_response_bytes;
         let body = request_body(request)?;
@@ -109,7 +113,7 @@ impl Model for OpenAiModel {
             _ = cancel.cancelled() => return Err(Error::Interrupted),
             response = self.client.post(self.endpoint.clone()).header(AUTHORIZATION, self.authorization.clone())
                 .header("Accept", "text/event-stream").json(&body).send() =>
-                response.map_err(|_| protocol("HTTP request failed"))?,
+                response.map_err(|error| protocol_caused_by("HTTP request failed", error.without_url()))?,
         };
         if !response.status().is_success() {
             return Err(protocol(&format!(
@@ -151,7 +155,7 @@ impl Model for OpenAiModel {
                     let chunk = tokio::select! {
                         biased;
                         _ = state.cancel.cancelled() => return Err(Error::Interrupted),
-                        chunk = state.response.chunk() => chunk.map_err(|_| protocol("HTTP response read failed"))?,
+                        chunk = state.response.chunk() => chunk.map_err(|error| protocol_caused_by("HTTP response read failed", error.without_url()))?,
                     };
                     match chunk {
                         Some(bytes) => state.pending.extend(state.parser.feed(&bytes)?),
@@ -165,10 +169,10 @@ impl Model for OpenAiModel {
 
 fn request_body(request: ModelRequest) -> Result<Value> {
     if request.remaining_tokens == 0 {
-        return Err(Error::Invalid("zero remaining token budget".into()));
+        return Err(Error::input("zero remaining token budget"));
     }
     if request.config.model.trim().is_empty() {
-        return Err(Error::Invalid("empty model name".into()));
+        return Err(Error::config("empty model name"));
     }
     let mut messages = vec![json!({"role":"developer", "content": &*request.instructions})];
     if !request.derived_context.is_empty() {
@@ -186,9 +190,9 @@ fn request_body(request: ModelRequest) -> Result<Value> {
                 if response.tools.is_empty() {
                     let output = response
                         .output
-                        .ok_or_else(|| Error::Invalid("history has no model output".into()))?;
+                        .ok_or_else(|| Error::input("history has no model output"))?;
                     if !results.is_empty() {
-                        return Err(Error::Invalid("history has orphan tool results".into()));
+                        return Err(Error::input("history has orphan tool results"));
                     }
                     messages.push(
                         json!({"role":"assistant", "content": json!({"value":output}).to_string()}),
@@ -202,9 +206,7 @@ fn request_body(request: ModelRequest) -> Result<Value> {
                             .zip(&results)
                             .any(|(call, result)| call.id != result.call_id)
                     {
-                        return Err(Error::Invalid(
-                            "history has incomplete tool exchange".into(),
-                        ));
+                        return Err(Error::input("history has incomplete tool exchange"));
                     }
                     let calls: Vec<_> = response.tools.into_iter().map(|call| json!({
                         "id":call.id, "type":"function", "function":{"name":call.name,"arguments":call.arguments.to_string()}
@@ -233,8 +235,8 @@ fn request_body(request: ModelRequest) -> Result<Value> {
     });
     if let Some(temperature) = request.config.temperature {
         if !temperature.is_finite() || !(0.0..=2.0).contains(&temperature) {
-            return Err(Error::Invalid(
-                "temperature must be finite and between zero and two".into(),
+            return Err(Error::config(
+                "temperature must be finite and between zero and two",
             ));
         }
         body["temperature"] = json!(temperature);
@@ -373,7 +375,7 @@ impl Parser {
                 self.line.pop();
             }
             let line = String::from_utf8(std::mem::take(&mut self.line))
-                .map_err(|_| protocol("invalid UTF-8 in SSE"))?;
+                .map_err(|error| protocol_caused_by("invalid UTF-8 in SSE", error))?;
             if line.is_empty() {
                 if !self.data.is_empty() {
                     let data = std::mem::take(&mut self.data);
@@ -429,7 +431,7 @@ impl Parser {
                     .filter(|name| !name.is_empty())
                     .ok_or_else(|| protocol("missing tool name"))?;
                 let arguments = serde_json::from_str(&call.arguments)
-                    .map_err(|_| protocol("invalid JSON tool arguments"))?;
+                    .map_err(|error| protocol_caused_by("invalid JSON tool arguments", error))?;
                 tools.push(ToolCall {
                     id,
                     name,
@@ -439,7 +441,7 @@ impl Parser {
             let output = match (finish, tools.is_empty()) {
                 ("stop", true) => {
                     let mut value: Value = serde_json::from_str(&self.output)
-                        .map_err(|_| protocol("invalid JSON model output"))?;
+                        .map_err(|error| protocol_caused_by("invalid JSON model output", error))?;
                     let object = value
                         .as_object_mut()
                         .ok_or_else(|| protocol("missing output envelope"))?;
@@ -560,7 +562,15 @@ fn set_identity(target: &mut Option<String>, value: String) -> Result<()> {
     Ok(())
 }
 fn protocol(message: &str) -> Error {
-    Error::Provider(format!("OpenAI: {message}"))
+    Error::provider(format!("OpenAI: {message}"))
+}
+/// A protocol failure caused by `error`, which is kept as the source and shown in the message.
+/// Pass only causes whose text cannot quote server content or the request URL.
+fn protocol_caused_by(
+    message: &'static str,
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> Error {
+    Error::Provider(ErrorDetail::caused_by(format!("OpenAI: {message}"), error))
 }
 
 #[cfg(test)]
@@ -631,7 +641,22 @@ mod tests {
         );
         assert_eq!(response.tools[1].arguments, json!({"x":42}));
         let broken = source.replace("42}", "42");
-        assert!(Parser::new(1024).feed(broken.as_bytes()).is_err());
+        let error = Parser::new(1024).feed(broken.as_bytes()).unwrap_err();
+        assert!(matches!(error, Error::Provider(_)), "{error:?}");
+        assert!(
+            error
+                .to_string()
+                .starts_with("provider: OpenAI: invalid JSON tool arguments: "),
+            "{error}"
+        );
+        let cause = std::error::Error::source(&error).unwrap();
+        assert!(cause.is::<serde_json::Error>());
+    }
+    #[test]
+    fn malformed_chunk_error_does_not_quote_server_content() {
+        let source = event(json!({"choices":[{"index":"leaked-server-text","delta":{}}]}));
+        let error = Parser::new(1024).feed(source.as_bytes()).unwrap_err();
+        assert_eq!(error.to_string(), "provider: OpenAI: malformed SSE chunk");
     }
     #[test]
     fn protocol_failures_never_publish_completed_response() {
@@ -702,7 +727,7 @@ mod tests {
         };
         let mut exhausted = request.clone();
         exhausted.remaining_tokens = 0;
-        assert!(matches!(request_body(exhausted), Err(Error::Invalid(_))));
+        assert!(matches!(request_body(exhausted), Err(Error::Input(_))));
         let mut derived = request.clone();
         let body = request_body(request).unwrap();
         assert_eq!(body["max_completion_tokens"], 256);

@@ -27,7 +27,7 @@ struct Run {
 }
 
 fn encode(value: &impl serde::Serialize) -> Result<String> {
-    serde_json::to_string(value).map_err(|error| Error::Storage(error.to_string()))
+    serde_json::to_string(value).map_err(Error::storage)
 }
 fn sizes(entries: &[HistoryEntry]) -> Result<Vec<(HistoryEntry, usize)>> {
     entries
@@ -43,7 +43,7 @@ impl MemoryStore {
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, Inner>> {
         self.inner
             .lock()
-            .map_err(|_| Error::Storage("memory store lock poisoned".into()))
+            .map_err(|_| Error::storage("memory store lock poisoned"))
     }
 }
 impl Inner {
@@ -95,7 +95,7 @@ impl Checkpoint for MemoryStore {
             return Err(Error::Stale);
         }
         if state.history.len() < stored.history.len() {
-            return Err(Error::Invalid("history is append-only".into()));
+            return Err(Error::input("history is append-only"));
         }
         let revision = advance(state.revision, "revision")?;
         let appended = sizes(&state.history[stored.history.len()..])?;

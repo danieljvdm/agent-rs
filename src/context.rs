@@ -32,7 +32,7 @@ pub struct ContextRequest<'a> {
 /// - Everything else may be dropped. Unpinned entries are taken newest first while they fit; the
 ///   first that does not fit ends the selection, so an older entry never displaces a newer one.
 /// - If the pinned entries alone exceed `max_context_bytes`, the turn fails with
-///   [`Error::Invalid`] and the run settles as failed. Pinned entries are never dropped.
+///   [`Error::Context`] and the run settles as failed. Pinned entries are never dropped.
 ///
 /// **Derived context.** [`prepare`](Self::prepare) may return lower-trust reference data, such as
 /// summaries or retrieved items, highest priority first. It reaches the model in
@@ -92,10 +92,13 @@ impl io::Write for Counter {
     }
 }
 /// Length of the compact JSON encoding, measured without allocating it.
-pub(crate) fn encoded_len<T: Serialize + ?Sized>(value: &T) -> Result<usize> {
+///
+/// For the crate's JSON types, which cannot fail to encode: the counter never fails to write,
+/// and a `Value` has only string keys and finite numbers.
+pub(crate) fn encoded_len<T: Serialize + ?Sized>(value: &T) -> usize {
     let mut counter = Counter(0);
-    serde_json::to_writer(&mut counter, value).map_err(|e| Error::Invalid(e.to_string()))?;
-    Ok(counter.0)
+    serde_json::to_writer(&mut counter, value).expect("JSON values always encode");
+    counter.0
 }
 
 /// The encoded size of a JSON array as entries are added to it.
@@ -107,7 +110,7 @@ struct Window {
 impl Window {
     fn new(max: usize) -> Result<Self> {
         if max < 2 {
-            return Err(Error::Invalid("context limit too small".into()));
+            return Err(Error::context("context limit too small"));
         }
         Ok(Self {
             max,
@@ -116,17 +119,17 @@ impl Window {
         })
     }
     /// Adds the entry if the array still fits; separators count once per added entry.
-    fn add(&mut self, entry: &HistoryEntry) -> Result<bool> {
+    fn add(&mut self, entry: &HistoryEntry) -> bool {
         let next = self
             .bytes
-            .saturating_add(encoded_len(entry)?)
+            .saturating_add(encoded_len(entry))
             .saturating_add(usize::from(self.entries > 0));
         if next > self.max {
-            return Ok(false);
+            return false;
         }
         self.bytes = next;
         self.entries += 1;
-        Ok(true)
+        true
     }
 }
 
@@ -139,11 +142,9 @@ pub(crate) fn suffix_start(history: &[HistoryEntry], max_bytes: usize) -> Result
     let mut window = Window::new(max_bytes)?;
     let mut start = history.len();
     for (index, entry) in history.iter().enumerate().rev() {
-        if !window.add(entry)? {
+        if !window.add(entry) {
             if start == history.len() {
-                return Err(Error::Invalid(
-                    "newest history group exceeds context limit".into(),
-                ));
+                return Err(Error::context("newest history group exceeds context limit"));
             }
             break;
         }
@@ -174,25 +175,25 @@ fn select_history(
         |index: usize| index == 0 || Some(index) == latest_exchange || pinned(&history[index]);
     let mut window = Window::new(max_bytes)?;
     for (index, entry) in history.iter().enumerate() {
-        if is_pinned(index) && !window.add(entry)? {
-            return Err(Error::Invalid(
-                "current input and pinned history exceed context limit".into(),
+        if is_pinned(index) && !window.add(entry) {
+            return Err(Error::context(
+                "current input and pinned history exceed context limit",
             ));
         }
     }
-    window.max -= fit_derived(derived, max_derived_bytes, max_bytes - window.bytes)?;
+    window.max -= fit_derived(derived, max_derived_bytes, max_bytes - window.bytes);
     // Run history at or after `cut` is kept whole; before it, only pinned entries survive.
     let mut cut = 0;
     let mut prior_start = prior.len();
     'fill: {
         for index in (0..history.len()).rev() {
-            if !is_pinned(index) && !window.add(&history[index])? {
+            if !is_pinned(index) && !window.add(&history[index]) {
                 cut = index + 1;
                 break 'fill;
             }
         }
         for (index, entry) in prior.iter().enumerate().rev() {
-            if !window.add(entry)? {
+            if !window.add(entry) {
                 break 'fill;
             }
             prior_start = index;
@@ -212,12 +213,12 @@ fn select_history(
 
 /// Keeps the items whose array fits `cap`, in order, then drops the lowest-priority items until the
 /// array fits `room`. Returns the array's size, zero when no item is kept.
-fn fit_derived(items: &mut Vec<Value>, cap: usize, room: usize) -> Result<usize> {
+fn fit_derived(items: &mut Vec<Value>, cap: usize, room: usize) -> usize {
     let mut bytes = 2_usize;
     let mut index = 0;
     while index < items.len() {
         let next = bytes
-            .saturating_add(encoded_len(&items[index])?)
+            .saturating_add(encoded_len(&items[index]))
             .saturating_add(usize::from(index > 0));
         if next <= cap {
             bytes = next;
@@ -229,9 +230,9 @@ fn fit_derived(items: &mut Vec<Value>, cap: usize, room: usize) -> Result<usize>
     while bytes > room
         && let Some(item) = items.pop()
     {
-        bytes -= encoded_len(&item)? + usize::from(!items.is_empty());
+        bytes -= encoded_len(&item) + usize::from(!items.is_empty());
     }
-    Ok(if items.is_empty() { 0 } else { bytes })
+    if items.is_empty() { 0 } else { bytes }
 }
 
 /// History and derived context for one model turn. Without a policy this is the default context:
@@ -294,7 +295,7 @@ mod tests {
                 let size = len(entry).saturating_add(usize::from(start < history.len()));
                 if bytes.saturating_add(size) > max_bytes {
                     if start == history.len() {
-                        return Err(Error::Invalid("newest".into()));
+                        return Err(Error::context("newest"));
                     }
                     break;
                 }
@@ -302,7 +303,7 @@ mod tests {
                 start = index;
             }
             if bytes > max_bytes {
-                return Err(Error::Invalid("too small".into()));
+                return Err(Error::context("too small"));
             }
             Ok(history[start..].to_vec())
         }
@@ -337,7 +338,7 @@ mod tests {
             for exchanges in 0..4 {
                 let prior: Vec<_> = (0..prior_len).map(|n| entry(n % 2 == 1)).collect();
                 let history: Vec<_> = (0..=exchanges).map(|n| entry(n > 0)).collect();
-                let total = encoded_len(&prior).unwrap() + encoded_len(&history).unwrap();
+                let total = encoded_len(&prior) + encoded_len(&history);
                 for max in 0..total + 4 {
                     let expected = previous(&prior, &history, max).ok();
                     let actual =

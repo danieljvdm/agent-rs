@@ -62,6 +62,11 @@ const ALLOC_DRIVE_BINDING_CHECK: Budget = Budget::new(0, 0);
 /// `Tool::validate` then `Tool::execute` of one typed tool call with a string argument.
 const ALLOC_TYPED_TOOL_CALL: Budget = Budget::new(5, 382);
 
+// Type sizes (exact bytes). `Result<T, Error>` is returned on every hot path, so the error must
+// stay small: large payloads belong behind a box.
+/// `size_of::<Error>()`.
+const ERROR_SIZE_BYTES: usize = 16;
+
 /// Allowance above a measured allocation or record-byte budget.
 const HEADROOM_PERCENT: u64 = 2;
 
@@ -491,6 +496,13 @@ async fn typed_allocation_budgets() {
         }
     })
     .await;
+}
+
+#[test]
+fn error_size() {
+    let size = std::mem::size_of::<Error>();
+    eprintln!("error_size: {size} bytes (budget {ERROR_SIZE_BYTES})");
+    assert_eq!(size, ERROR_SIZE_BYTES);
 }
 
 #[tokio::test(start_paused = true)]

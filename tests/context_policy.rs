@@ -301,7 +301,7 @@ async fn policy_binding_is_part_of_the_agent_binding() {
         agent(Capture::new(vec![]), 1024)
             .context_policy(Arc::new(PinNotes), 1025)
             .build(),
-        Err(Error::Invalid(message)) if message == "derived context cap must fit the context limit"
+        Err(Error::Config(message)) if message.to_string() == "derived context cap must fit the context limit"
     ));
     // A run accepted under the policy cannot be driven without it.
     let mut state = bound.new_run("c", json!("go"), &[], None).unwrap();

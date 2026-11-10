@@ -40,8 +40,8 @@ mod demo {
             if state.operations.iter().any(|op| {
                 op.call.id == "record" && matches!(op.status, OperationStatus::Complete(_))
             }) {
-                return Err(Error::Storage(
-                    "injected loss before recording external outcome".into(),
+                return Err(Error::storage(
+                    "injected loss before recording external outcome",
                 ));
             }
             self.0.commit(state).await
@@ -53,7 +53,7 @@ mod demo {
         SqliteStore::open(path).await
     }
     pub async fn run() -> Result<()> {
-        let temporary = tempfile::tempdir().map_err(|e| Error::Storage(e.to_string()))?;
+        let temporary = tempfile::tempdir().map_err(Error::storage)?;
         let path = std::env::args()
             .nth(1)
             .map(std::path::PathBuf::from)

@@ -361,7 +361,7 @@ impl Checkpoint for FailAfterOutcome {
             .iter()
             .any(|op| op.call.id == self.id && matches!(op.status, OperationStatus::Complete(_)))
         {
-            return Err(Error::Storage("injected outcome commit failure".into()));
+            return Err(Error::storage("injected outcome commit failure"));
         }
         self.journal.commit(state).await
     }
