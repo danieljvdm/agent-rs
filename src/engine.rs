@@ -5,7 +5,13 @@ use futures::{StreamExt, stream::FuturesUnordered};
 use schemars::{JsonSchema, schema_for};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use std::{any::TypeId, collections::HashSet, future::Future, sync::Arc, time::Duration};
+use std::{
+    any::TypeId,
+    collections::{HashMap, HashSet},
+    future::Future,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{sync::mpsc, time::Instant};
 use tokio_util::sync::CancellationToken;
 
@@ -22,14 +28,22 @@ fn validate<T: DeserializeOwned + 'static>(value: &Value) -> Result<()> {
 }
 
 /// Immutable agent definition. Product policy and clients are supplied by its caller.
+///
+/// The definition is shared: cloning an agent only increments a reference count.
 #[derive(Clone)]
 pub struct Agent {
+    definition: Arc<Definition>,
+}
+/// Everything an agent is, built and checked once and then shared by every run.
+#[derive(Clone)]
+struct Definition {
     id: String,
     // Shared with every `ModelRequest` instead of copied into each one.
     instructions: Arc<str>,
     model: Arc<dyn Model>,
     config: Arc<ModelConfig>,
-    tools: Vec<Arc<dyn Tool>>,
+    /// Tools by name. `tool_specs` keeps their declaration order for the model.
+    tools: HashMap<String, Arc<dyn Tool>>,
     tool_specs: Arc<[ToolSpec]>,
     limits: Limits,
     input_schema: Value,
@@ -38,6 +52,9 @@ pub struct Agent {
     validate_output: Validator,
     authorizer: Arc<dyn Authorizer>,
     context_policy: Option<(Arc<dyn ContextPolicy>, usize)>,
+    /// Computed once from the fields above by [`Definition::compose_binding`], shared by every
+    /// run this agent accepts, and compared with each run `drive` resumes.
+    binding: Arc<Value>,
 }
 impl Agent {
     pub fn new<I, O>(
@@ -67,12 +84,12 @@ impl Agent {
                 "parallelism, byte limits, and timeouts must be positive".into(),
             ));
         }
-        let mut names = HashSet::new();
+        let mut by_name = HashMap::with_capacity(tools.len());
         for tool in &tools {
             let spec = tool.spec();
             if spec.name.is_empty()
                 || spec.name.len() > 256
-                || !names.insert(spec.name.clone())
+                || by_name.insert(spec.name.clone(), tool.clone()).is_some()
                 || spec.version.is_empty()
             {
                 return Err(Error::Invalid(
@@ -85,13 +102,13 @@ impl Agent {
                 ));
             }
         }
-        Ok(Self {
+        let mut definition = Definition {
             id,
             instructions: instructions.into().into(),
             model,
             config: Arc::new(config),
             tool_specs: tools.iter().map(|tool| tool.spec().clone()).collect(),
-            tools,
+            tools: by_name,
             limits,
             input_schema: serde_json::to_value(schema_for!(I)).expect("schema serialization"),
             output_schema: Arc::new(
@@ -101,10 +118,15 @@ impl Agent {
             validate_output: validate::<O>,
             authorizer: Arc::new(AllowAll),
             context_policy: None,
+            binding: Arc::default(),
+        };
+        definition.binding = Arc::new(definition.compose_binding());
+        Ok(Self {
+            definition: Arc::new(definition),
         })
     }
     pub fn with_authorizer(mut self, authorizer: Arc<dyn Authorizer>) -> Self {
-        self.authorizer = authorizer;
+        Arc::make_mut(&mut self.definition).authorizer = authorizer;
         self
     }
     /// Opt into a [`ContextPolicy`]. `max_derived_bytes` caps the encoded array of its derived
@@ -114,27 +136,26 @@ impl Agent {
         policy: Arc<dyn ContextPolicy>,
         max_derived_bytes: usize,
     ) -> Result<Self> {
-        if max_derived_bytes > self.limits.max_context_bytes {
+        if max_derived_bytes > self.definition.limits.max_context_bytes {
             return Err(Error::Invalid(
                 "derived context cap must fit the context limit".into(),
             ));
         }
-        self.context_policy = Some((policy, max_derived_bytes));
+        let definition = Arc::make_mut(&mut self.definition);
+        definition.context_policy = Some((policy, max_derived_bytes));
+        definition.binding = Arc::new(definition.compose_binding());
         Ok(self)
     }
     pub fn id(&self) -> &str {
-        &self.id
+        &self.definition.id
     }
     pub fn limits(&self) -> &Limits {
-        &self.limits
+        &self.definition.limits
     }
-    pub fn binding(&self) -> Value {
-        let mut binding = json!({"id":self.id,"instructions":&*self.instructions,"model":&*self.config,"tools":&*self.tool_specs,
-            "input_schema":self.input_schema,"output_schema":&*self.output_schema,"limits":self.limits});
-        if let Some((policy, max_bytes)) = &self.context_policy {
-            binding["context_policy"] = json!({"binding":policy.binding(),"max_bytes":max_bytes});
-        }
-        binding
+    /// The durable identity of this definition. Every run it accepts records it, and a stored
+    /// run resumes only with an agent whose binding is equal.
+    pub fn binding(&self) -> &Value {
+        &self.definition.binding
     }
     /// Accepts `input`, retaining the bounded suffix of `conversation` that fits the context limit.
     pub fn new_run(
@@ -144,27 +165,28 @@ impl Agent {
         conversation: &[HistoryEntry],
         expires_at_ms: Option<u64>,
     ) -> Result<RunState> {
-        (self.validate_input)(&input)?;
+        let definition = &*self.definition;
+        (definition.validate_input)(&input)?;
         let conversation_id = conversation_id.into();
         if conversation_id.is_empty() || conversation_id.len() > 1024 {
             return Err(Error::Invalid(
                 "conversation ID must be 1..1024 bytes".into(),
             ));
         }
+        let max_context_bytes = definition.limits.max_context_bytes;
         let input_entry = HistoryEntry::Input(input.clone());
-        if encoded_len(&input_entry)? + 2 > self.limits.max_context_bytes {
+        if encoded_len(&input_entry)? + 2 > max_context_bytes {
             return Err(Error::Invalid("input exceeds context limit".into()));
         }
-        let prior_context =
-            conversation[suffix_start(conversation, self.limits.max_context_bytes)?..].to_vec();
+        let prior_context = conversation[suffix_start(conversation, max_context_bytes)?..].to_vec();
         Ok(RunState {
             version: STATE_VERSION,
             id: RunId::new_v4(),
             conversation_id,
-            agent_id: self.id.clone(),
-            binding: self.binding(),
+            agent_id: definition.id.clone(),
+            binding: definition.binding.clone(),
             input,
-            limits: self.limits.clone(),
+            limits: definition.limits.clone(),
             expires_at_ms,
             generation: 0,
             revision: 0,
@@ -177,11 +199,24 @@ impl Agent {
             operations: vec![],
         })
     }
-    fn tool(&self, name: &str) -> Result<Arc<dyn Tool>> {
+}
+impl Definition {
+    /// The one place the durable binding is composed, once per definition.
+    /// Everything a stored run must agree with to resume contributes here and only here: a new
+    /// part, such as a model adapter's identity or attached subagents, is one more optional key.
+    /// A part that is absent adds no key, so adding one leaves the binding of every existing
+    /// definition byte-identical.
+    fn compose_binding(&self) -> Value {
+        let mut binding = json!({"id":self.id,"instructions":&*self.instructions,"model":&*self.config,"tools":&*self.tool_specs,
+            "input_schema":self.input_schema,"output_schema":&*self.output_schema,"limits":self.limits});
+        if let Some((policy, max_bytes)) = &self.context_policy {
+            binding["context_policy"] = json!({"binding":policy.binding(),"max_bytes":max_bytes});
+        }
+        binding
+    }
+    fn tool(&self, name: &str) -> Result<&Arc<dyn Tool>> {
         self.tools
-            .iter()
-            .find(|t| t.spec().name == name)
-            .cloned()
+            .get(name)
             .ok_or_else(|| Error::Invalid(format!("unknown tool {name}")))
     }
 }
@@ -288,17 +323,33 @@ impl Engine {
         }
     }
     /// Drives the same state machine for memory and durable execution. No child work is detached.
-    #[tracing::instrument(skip_all, fields(run_id = %state.id))]
     pub async fn drive(
         &self,
         state: &mut RunState,
         checkpoint: &dyn Checkpoint,
         control: RunControl,
     ) -> Result<()> {
+        self.agent
+            .definition
+            .drive(state, checkpoint, control)
+            .await
+    }
+}
+/// The engine's state machine runs on the shared definition of the agent being driven.
+impl Definition {
+    /// Drives the same state machine for memory and durable execution. No child work is detached.
+    #[tracing::instrument(skip_all, fields(run_id = %state.id))]
+    async fn drive(
+        &self,
+        state: &mut RunState,
+        checkpoint: &dyn Checkpoint,
+        control: RunControl,
+    ) -> Result<()> {
+        // A run accepted by this definition shares its binding; a stored one compares by value.
         if state.version != STATE_VERSION
-            || state.agent_id != self.agent.id
-            || state.binding != self.agent.binding()
-            || state.limits != self.agent.limits
+            || state.agent_id != self.id
+            || !(Arc::ptr_eq(&state.binding, &self.binding) || state.binding == self.binding)
+            || state.limits != self.limits
         {
             return Err(Error::Incompatible(
                 "persisted state or immutable agent definition differs".into(),
@@ -314,7 +365,7 @@ impl Engine {
         }
         for op in &mut state.operations {
             if matches!(op.status, OperationStatus::Dispatched) {
-                let tool = self.agent.tool(&op.call.name)?;
+                let tool = self.tool(&op.call.name)?;
                 if tool.spec() != &op.spec {
                     return Err(Error::Incompatible(format!(
                         "tool contract differs: {}",
@@ -437,15 +488,15 @@ impl Engine {
                 // Assemble context after the dispatch checkpoint and inside the operation's
                 // deadline, so the checkpoint can contribute history and preparation is bounded.
                 let (history, derived_context) =
-                    assemble(state, self.agent.context_policy.as_ref(), &operation_cancel).await?;
+                    assemble(state, self.context_policy.as_ref(), &operation_cancel).await?;
                 let request = ModelRequest {
                     run_id: state.id,
-                    instructions: self.agent.instructions.clone(),
-                    config: self.agent.config.clone(),
+                    instructions: self.instructions.clone(),
+                    config: self.config.clone(),
                     history,
                     derived_context,
-                    tools: self.agent.tool_specs.clone(),
-                    output_schema: self.agent.output_schema.clone(),
+                    tools: self.tool_specs.clone(),
+                    output_schema: self.output_schema.clone(),
                     turn: state.usage.model_calls,
                     max_response_bytes: state.limits.max_response_bytes,
                     remaining_tokens: state.limits.max_tokens.saturating_sub(
@@ -456,7 +507,6 @@ impl Engine {
                     ),
                 };
                 let mut stream = self
-                    .agent
                     .model
                     .stream(request, operation_cancel.clone())
                     .await
@@ -502,8 +552,8 @@ impl Engine {
         let cleanup = tokio::time::timeout(
             Duration::from_millis(state.limits.cleanup_timeout_ms),
             async {
-                let model = self.agent.model.cleanup(state.id);
-                match &self.agent.context_policy {
+                let model = self.model.cleanup(state.id);
+                match &self.context_policy {
                     None => model.await,
                     Some((policy, _)) => {
                         let (model, context) = tokio::join!(model, policy.cleanup(state.id));
@@ -564,7 +614,7 @@ impl Engine {
             .await;
         }
         if let Some(output) = &response.output {
-            (self.agent.validate_output)(output)?;
+            (self.validate_output)(output)?;
             state.history.push(HistoryEntry::Exchange {
                 response: response.clone(),
                 results: vec![],
@@ -583,7 +633,6 @@ impl Engine {
             .iter()
             .map(|call| {
                 let spec = self
-                    .agent
                     .tool(&call.name)
                     .expect("validated tool")
                     .spec()
@@ -634,7 +683,7 @@ impl Engine {
                     "tool call IDs must be unique and 1..256 bytes".into(),
                 ));
             }
-            self.agent.tool(&call.name)?.validate(&call.arguments)?;
+            self.tool(&call.name)?.validate(&call.arguments)?;
         }
         Ok(())
     }
@@ -827,8 +876,8 @@ impl Engine {
             return Admission::Stop;
         }
         let op = &state.operations[index];
-        let tool = match self.agent.tool(&op.call.name) {
-            Ok(tool) if tool.spec() == &op.spec => tool,
+        let tool = match self.tool(&op.call.name) {
+            Ok(tool) if tool.spec() == &op.spec => tool.clone(),
             Ok(_) => {
                 let error = Error::Incompatible(format!("tool contract differs: {}", op.call.name));
                 window.failure = Some(error);
@@ -844,7 +893,7 @@ impl Engine {
         };
         let mut finished = Vec::new();
         let authorization = authorize_beside(
-            &*self.agent.authorizer,
+            &*self.authorizer,
             state,
             &state.operations[index].call,
             deadline,

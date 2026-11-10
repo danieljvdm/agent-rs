@@ -493,7 +493,7 @@ fn accept_in(
     if let Some((id, old_input, old_binding, old_expiry)) = existing {
         if old_input != encode(&input)?
             || old_expiry != sql_time(expires_at_ms)
-            || old_binding != encode(&agent.binding())?
+            || old_binding != encode(agent.binding())?
         {
             return Err(Error::IdempotencyConflict);
         }
