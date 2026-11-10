@@ -53,6 +53,8 @@ store.close().await?;
 
 Waits and uncertain operations are visible in `RunState::operations`. Resolve the exact call ID with `Resolution::Approve`, `Resolution::Input`, or `Resolution::Reconcile`. Waiting releases execution slots. The host rediscovers due work from its store on startup and periodically, so progress does not depend on transient notifications.
 
+Use `Host::steer(run_id, key, instruction)` to durably queue new instructions for an active run without an input wait, on a store that implements `SteeringStore` (`MemoryStore` and `SqliteStore` do). Receipts are idempotent per run. Instructions enter the run's history at its next model dispatch and stay pinned in its context; in-flight work and explicit waits continue normally. See [durable steering](docs/steering.md) for the completion race, bounds, and receipt status contract.
+
 See [the durability contract](docs/durability.md) for external-effect guarantees and application responsibilities. Run `cargo run --example durable_workflow` for the restart/wait/reconciliation example.
 
 The [personal-agent workflow eval](docs/personal-workflow-eval.md) exercises a model choosing tools, requesting missing information, surviving host restarts, and creating a reminder only after approval. Run `scripts/eval-personal.sh --trials 3 --out eval-results/my-live-run` to use the existing Infisical credentials. Its deterministic counterpart and negative grading cases run in ordinary tests.
@@ -87,4 +89,4 @@ The manual [performance workflow](.github/workflows/performance.yml) runs longer
 
 [Recovery profiling](docs/recovery-profiling.md) describes the allocation-stack capture and the focused recovery comparison suite.
 
-This is a Rust-only initial implementation. There are no distributed leases, Node bindings, Cloudflare adapter, arbitrary active-run input joining, agent graphs, or placeholder subagent/MCP services.
+This is a Rust-only initial implementation. There are no distributed leases, Node bindings, Cloudflare adapter, in-flight preemption, active-run input joining, agent graphs, or placeholder subagent/MCP services.
