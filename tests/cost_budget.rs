@@ -24,11 +24,14 @@ const SQLITE_TRANSACTIONS_FOUR_TOOL_ROUNDS: u64 = 27;
 const SQLITE_TRANSACTIONS_FOUR_PARALLEL_TOOLS: u64 = 12;
 
 // Bytes of SQLite records written (every inserted or updated row), from `accept` to settlement.
-/// Full copies of the retained prior context written by one four-round run (exact). Every
-/// checkpoint rewrites the whole state, so bytes written grow linearly with retained context.
-const SQLITE_CONTEXT_COPIES_FOUR_TOOL_ROUNDS: u64 = 28;
+/// Full copies of the retained prior context written by one four-round run (exact): the one
+/// immutable acceptance record. Checkpoints write progress and new history only.
+const SQLITE_CONTEXT_COPIES_FOUR_TOOL_ROUNDS: u64 = 1;
+/// Of those, copies written from claim through settlement (exact): bytes written by the run's
+/// 27 transactions do not depend on how much context the conversation retains.
+const SQLITE_CONTEXT_COPIES_CLAIM_TO_SETTLEMENT: u64 = 0;
 /// Record bytes written by the same four-round run with no retained context (with headroom).
-const SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS: u64 = 111_423;
+const SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS: u64 = 27_591;
 
 // Tool scheduling under paused Tokio time (exact virtual milliseconds).
 /// Five parallel calls sleeping 300/10/10/10/300 ms with `max_parallel_tools = 4`. The sliding
@@ -447,7 +450,9 @@ mod sqlite {
         transactions: u64,
         /// Record bytes written from accept through settlement.
         record_bytes: u64,
-        /// Bytes the retained prior context adds to one encoded checkpoint.
+        /// Record bytes written from claim through settlement.
+        drive_bytes: u64,
+        /// Bytes the retained prior context adds to one encoded copy of it.
         context_bytes: u64,
     }
     /// Seeds `seeds` earlier runs of about `SEED_BYTES` each into the conversation, then accepts,
@@ -488,6 +493,7 @@ mod sqlite {
             .await
             .unwrap();
         let transactions_before = store.metrics().transactions;
+        let accepted_bytes = meter.bytes();
         let mut state = store.claim(id).await.unwrap();
         Engine::new(agent)
             .drive(&mut state, &store, RunControl::default())
@@ -495,6 +501,7 @@ mod sqlite {
             .unwrap();
         let transactions = store.metrics().transactions - transactions_before;
         let record_bytes = meter.bytes() - bytes_before;
+        let drive_bytes = meter.bytes() - accepted_bytes;
         assert_completed(&state, rounds, batch);
         assert_eq!(state.prior_context.len(), seeds * 2);
         let context_bytes = if seeds == 0 {
@@ -508,8 +515,23 @@ mod sqlite {
         DurableCost {
             transactions,
             record_bytes,
+            drive_bytes,
             context_bytes,
         }
+    }
+    /// Whole copies of the retained context in `added` bytes, after rounding away a remainder
+    /// of a few digits of wall-clock active time.
+    fn context_copies(name: &str, added: u64, context_bytes: u64) -> u64 {
+        let copies = (added + context_bytes / 2) / context_bytes;
+        let remainder = added.abs_diff(copies * context_bytes);
+        eprintln!(
+            "{name}: {copies} copies of {context_bytes} context bytes, {added} added bytes, remainder {remainder}"
+        );
+        assert!(
+            remainder < 256,
+            "{name}: added bytes are not whole context copies: {remainder}"
+        );
+        copies
     }
 
     #[tokio::test]
@@ -537,7 +559,7 @@ mod sqlite {
     }
 
     #[tokio::test]
-    async fn sqlite_record_bytes_grow_with_retained_context() {
+    async fn sqlite_record_bytes_do_not_grow_with_retained_context_after_acceptance() {
         let empty = durable_run(4, 1, 0).await;
         eprintln!(
             "sqlite_record_bytes_four_tool_rounds: {} (budget {})",
@@ -550,19 +572,18 @@ mod sqlite {
         for seeds in [2, 4] {
             let retained = durable_run(4, 1, seeds).await;
             assert_eq!(retained.transactions, empty.transactions);
-            let added = retained.record_bytes - empty.record_bytes;
-            // Round to whole copies; the remainder is a few digits of wall-clock active time.
-            let copies = (added + retained.context_bytes / 2) / retained.context_bytes;
-            let remainder = added.abs_diff(copies * retained.context_bytes);
-            eprintln!(
-                "sqlite_context_copies (seeds {seeds}, {} context bytes): {copies} copies, {added} added bytes, remainder {remainder}",
-                retained.context_bytes
-            );
-            assert!(
-                remainder < 256,
-                "added bytes are not whole context copies: {remainder}"
+            let copies = context_copies(
+                &format!("sqlite_context_copies_four_tool_rounds (seeds {seeds})"),
+                retained.record_bytes - empty.record_bytes,
+                retained.context_bytes,
             );
             assert_eq!(copies, SQLITE_CONTEXT_COPIES_FOUR_TOOL_ROUNDS);
+            let copies = context_copies(
+                &format!("sqlite_context_copies_claim_to_settlement (seeds {seeds})"),
+                retained.drive_bytes.abs_diff(empty.drive_bytes),
+                retained.context_bytes,
+            );
+            assert_eq!(copies, SQLITE_CONTEXT_COPIES_CLAIM_TO_SETTLEMENT);
         }
     }
 }

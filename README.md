@@ -26,7 +26,7 @@ assert_eq!(output, "hello");
 
 `Conversation::last_run` retains the run state, including waits and uncertain outcomes. Resolve its pending operation and call `Engine::resume` to continue; `run` refuses a new input while that conversation has unfinished work. Advanced callers can use `Agent::new_run` and `Engine::drive` directly.
 
-Default features enable `sqlite` and `openai`. `default-features = false` builds the engine without either adapter. Tokio runs asynchronous work; a dedicated bounded worker keeps SQLite operations off its worker threads.
+Default features enable `sqlite` and `openai`. `default-features = false` builds the engine and the durable host without either adapter; the host then runs over the in-process `MemoryStore` or any other `DurableStore`. Tokio runs asynchronous work; a dedicated bounded worker keeps SQLite operations off its worker threads.
 
 ## Durable execution
 
@@ -52,7 +52,7 @@ store.close().await?;
 # Ok(()) }
 ```
 
-Waits and uncertain operations are visible in `RunState::operations`. Resolve the exact call ID with `Resolution::Approve`, `Resolution::Input`, or `Resolution::Reconcile`. Waiting releases execution slots. The host rediscovers due work from SQLite on startup and periodically, so progress does not depend on transient notifications.
+Waits and uncertain operations are visible in `RunState::operations`. Resolve the exact call ID with `Resolution::Approve`, `Resolution::Input`, or `Resolution::Reconcile`. Waiting releases execution slots. The host rediscovers due work from its store on startup and periodically, so progress does not depend on transient notifications.
 
 See [the durability contract](docs/durability.md) for external-effect guarantees and application responsibilities. Run `cargo run --example durable_workflow` for the restart/wait/reconciliation example.
 

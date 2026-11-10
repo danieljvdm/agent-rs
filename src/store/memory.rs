@@ -126,7 +126,7 @@ impl DurableStore for MemoryStore {
         input: Value,
         expires_at_ms: Option<u64>,
     ) -> Result<RunId> {
-        check_keys(conversation, key)?;
+        check_acceptance(conversation, key, expires_at_ms)?;
         let acceptance = (encode(&input)?, encode(&agent.binding())?, expires_at_ms);
         let mut inner = self.lock()?;
         let identity = (conversation.to_owned(), key.to_owned());
@@ -156,7 +156,7 @@ impl DurableStore for MemoryStore {
             context.push(entry.clone());
         }
         context.reverse();
-        let state = agent.new_run(conversation, input, context, expires_at_ms)?;
+        let state = agent.new_run(conversation, input, &context, expires_at_ms)?;
         let id = state.id;
         let history = sizes(&state.history)?;
         inner.keys.insert(identity, id);

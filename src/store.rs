@@ -199,15 +199,25 @@ pub trait DurableStore: Checkpoint {
     }
 }
 
-/// Validated bounds on acceptance keys, shared by every store.
-pub(crate) fn check_keys(conversation: &str, key: &str) -> Result<()> {
+/// Bounds every store applies before acceptance. Timestamps and counters fit SQL integers.
+pub(crate) fn check_acceptance(
+    conversation: &str,
+    key: &str,
+    expires_at_ms: Option<u64>,
+) -> Result<()> {
     if conversation.is_empty() || conversation.len() > 1024 || key.is_empty() || key.len() > 1024 {
         return Err(Error::Invalid(
             "conversation and idempotency keys must contain 1..=1024 bytes".into(),
         ));
     }
+    if expires_at_ms.is_some_and(|at| at > i64::MAX as u64) {
+        return Err(Error::Invalid(
+            "expiry must fit signed 64-bit milliseconds".into(),
+        ));
+    }
     Ok(())
 }
+/// Advance a generation or revision, keeping it within a signed 64-bit SQL integer.
 pub(crate) fn advance(value: u64, name: &str) -> Result<u64> {
     value
         .checked_add(1)
