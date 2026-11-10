@@ -930,15 +930,10 @@ mod tests {
         let db = SqliteStore::open(directory.path().join("atomic.sqlite"))
             .await
             .unwrap();
-        let agent = Agent::new::<Value, Value>(
-            "test",
-            "test",
-            Arc::new(ScriptedModel::new(vec![])),
-            ModelConfig::default(),
-            vec![],
-            Limits::default(),
-        )
-        .unwrap();
+        let agent = Agent::builder("test", Arc::new(ScriptedModel::new(vec![])))
+            .instructions("test")
+            .build()
+            .unwrap();
         let id = db.accept(&agent, "c", "k", json!(1), None).await.unwrap();
         let mut state = db.claim(id).await.unwrap();
         let old_revision = state.revision;
@@ -989,15 +984,10 @@ mod tests {
         let db = SqliteStore::open(directory.path().join("hint.sqlite"))
             .await
             .unwrap();
-        let agent = Agent::new::<Value, Value>(
-            "test",
-            "test",
-            Arc::new(ScriptedModel::new(vec![])),
-            ModelConfig::default(),
-            vec![],
-            Limits::default(),
-        )
-        .unwrap();
+        let agent = Agent::builder("test", Arc::new(ScriptedModel::new(vec![])))
+            .instructions("test")
+            .build()
+            .unwrap();
         let id = db.accept(&agent, "c", "k", json!(1), None).await.unwrap();
         let mut state = db.claim(id).await.unwrap();
         let exchange = |n: u64| HistoryEntry::Exchange {

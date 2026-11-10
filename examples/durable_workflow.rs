@@ -99,14 +99,12 @@ mod demo {
             call("record"),
             ModelResponse::final_output(json!("Recorded record-123")),
         ]));
-        let agent = Agent::new::<String, String>(
-            "personal-task-v1",
-            "Review and record a task.",
-            model,
-            ModelConfig::default(),
-            tools,
-            Limits::default(),
-        )?;
+        let agent = Agent::builder("personal-task-v1", model)
+            .instructions("Review and record a task.")
+            .tools(tools)
+            .input::<String>()
+            .output::<String>()
+            .build()?;
         let engine = Engine::new(agent.clone());
         let mut store = SqliteStore::open(&path).await?;
         let id = store

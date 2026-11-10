@@ -28,11 +28,118 @@ fn call(id: &str, name: &str, value: Value) -> ToolCall {
     }
 }
 fn agent(model: Arc<dyn Model>, tools: Vec<Arc<dyn Tool>>, limits: Limits) -> Agent {
-    Agent::new::<String, String>("test", "test", model, ModelConfig::default(), tools, limits)
-        .unwrap()
+    builder(model, tools, limits).build().unwrap()
+}
+fn builder(
+    model: Arc<dyn Model>,
+    tools: Vec<Arc<dyn Tool>>,
+    limits: Limits,
+) -> AgentBuilder<String, String> {
+    Agent::builder("test", model)
+        .instructions("test")
+        .tools(tools)
+        .limits(limits)
+        .input::<String>()
+        .output::<String>()
 }
 fn state(agent: &Agent) -> RunState {
     agent.new_run("test", json!("go"), &[], None).unwrap()
+}
+
+/// `build` checks the whole definition once, whatever order the options were set in.
+#[test]
+fn build_rejects_each_invalid_definition() {
+    struct Policy;
+    impl ContextPolicy for Policy {
+        fn binding(&self) -> Value {
+            json!("policy")
+        }
+    }
+    let model: Arc<dyn Model> = Arc::new(ScriptedModel::new(vec![]));
+    let tool = |name: &str, version: &str, retry: RetryPolicy| {
+        let mut contract = spec(name);
+        contract.version = version.into();
+        contract.retry = retry;
+        typed_tool::<Value, Value, _, _>(contract, |value, _| async move {
+            Ok(ToolOutput::Complete(value))
+        })
+    };
+    let reason = |builder: AgentBuilder| match builder.build() {
+        Err(Error::Invalid(reason)) => reason,
+        Err(error) => panic!("unexpected error {error}"),
+        Ok(_) => panic!("invalid definition was built"),
+    };
+    let ids = "agent ID must be 1..256 bytes";
+    assert_eq!(reason(Agent::builder("", model.clone())), ids);
+    assert_eq!(reason(Agent::builder("a".repeat(257), model.clone())), ids);
+    let limits = "parallelism, byte limits, and timeouts must be positive";
+    for invalid in [
+        Limits {
+            max_parallel_tools: 0,
+            ..Limits::default()
+        },
+        Limits {
+            max_context_bytes: 1,
+            ..Limits::default()
+        },
+        Limits {
+            cleanup_timeout_ms: 0,
+            ..Limits::default()
+        },
+    ] {
+        assert_eq!(
+            reason(Agent::builder("a", model.clone()).limits(invalid)),
+            limits
+        );
+    }
+    let names = "tool names must be unique, bounded, and versioned";
+    let read_only = || RetryPolicy::ReadOnly;
+    assert_eq!(
+        reason(
+            Agent::builder("a", model.clone())
+                .tool(tool("same", "1", read_only()))
+                .tool(tool("same", "2", read_only()))
+        ),
+        names
+    );
+    assert_eq!(
+        reason(Agent::builder("a", model.clone()).tool(tool("", "1", read_only()))),
+        names
+    );
+    assert_eq!(
+        reason(Agent::builder("a", model.clone()).tool(tool("unversioned", "", read_only()))),
+        names
+    );
+    assert_eq!(
+        reason(Agent::builder("a", model.clone()).tool(tool(
+            "effect",
+            "1",
+            RetryPolicy::Idempotent {
+                contract: String::new()
+            }
+        ))),
+        "idempotent tools require a retry contract"
+    );
+    // The cap is checked against the final limits, set before or after the policy.
+    let small = Limits {
+        max_context_bytes: 64,
+        ..Limits::default()
+    };
+    assert_eq!(
+        reason(
+            Agent::builder("a", model.clone())
+                .context_policy(Arc::new(Policy), 65)
+                .limits(small.clone())
+        ),
+        "derived context cap must fit the context limit"
+    );
+    assert!(
+        Agent::builder("a", model)
+            .limits(small)
+            .context_policy(Arc::new(Policy), 64)
+            .build()
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -809,9 +916,12 @@ async fn approval_grant_still_requires_current_authorization() {
         "effect",
         json!(1),
     )])]));
-    let agent = agent(model, vec![tool], Limits::default()).with_authorizer(Arc::new(Deny {
-        calls: authorizations.clone(),
-    }));
+    let agent = builder(model, vec![tool], Limits::default())
+        .authorizer(Arc::new(Deny {
+            calls: authorizations.clone(),
+        }))
+        .build()
+        .unwrap();
     let mut state = state(&agent);
     let engine = Engine::new(agent);
     engine

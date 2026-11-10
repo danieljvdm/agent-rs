@@ -9,6 +9,7 @@ use std::{
     any::TypeId,
     collections::{HashMap, HashSet},
     future::Future,
+    marker::PhantomData,
     sync::Arc,
     time::Duration,
 };
@@ -35,7 +36,6 @@ pub struct Agent {
     definition: Arc<Definition>,
 }
 /// Everything an agent is, built and checked once and then shared by every run.
-#[derive(Clone)]
 struct Definition {
     id: String,
     // Shared with every `ModelRequest` instead of copied into each one.
@@ -57,94 +57,34 @@ struct Definition {
     binding: Arc<Value>,
 }
 impl Agent {
-    pub fn new<I, O>(
-        id: impl Into<String>,
-        instructions: impl Into<String>,
-        model: Arc<dyn Model>,
-        config: ModelConfig,
-        tools: Vec<Arc<dyn Tool>>,
-        limits: Limits,
-    ) -> Result<Self>
-    where
-        I: DeserializeOwned + JsonSchema + 'static,
-        O: DeserializeOwned + JsonSchema + 'static,
-    {
-        let id = id.into();
-        if id.is_empty() || id.len() > 256 {
-            return Err(Error::Invalid("agent ID must be 1..256 bytes".into()));
-        }
-        if limits.max_parallel_tools == 0
-            || limits.max_response_bytes == 0
-            || limits.max_tool_output_bytes == 0
-            || limits.max_context_bytes < 2
-            || limits.operation_timeout_ms == 0
-            || limits.cleanup_timeout_ms == 0
-        {
-            return Err(Error::Invalid(
-                "parallelism, byte limits, and timeouts must be positive".into(),
-            ));
-        }
-        let mut by_name = HashMap::with_capacity(tools.len());
-        for tool in &tools {
-            let spec = tool.spec();
-            if spec.name.is_empty()
-                || spec.name.len() > 256
-                || by_name.insert(spec.name.clone(), tool.clone()).is_some()
-                || spec.version.is_empty()
-            {
-                return Err(Error::Invalid(
-                    "tool names must be unique, bounded, and versioned".into(),
-                ));
-            }
-            if matches!(&spec.retry, RetryPolicy::Idempotent { contract } if contract.is_empty()) {
-                return Err(Error::Invalid(
-                    "idempotent tools require a retry contract".into(),
-                ));
-            }
-        }
-        let mut definition = Definition {
-            id,
-            instructions: instructions.into().into(),
+    /// Starts defining an agent with the two parts every agent needs. Everything else has a
+    /// default and its own [`AgentBuilder`] method; [`AgentBuilder::build`] checks the whole
+    /// definition once.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use yielded_agent::*;
+    /// # fn main() -> Result<()> {
+    /// let agent = Agent::builder("support", Arc::new(ScriptedModel::new(vec![])))
+    ///     .instructions("Answer briefly.")
+    ///     .limits(Limits { max_model_calls: 8, ..Limits::default() })
+    ///     .build()?;
+    /// assert_eq!(agent.id(), "support");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn builder(id: impl Into<String>, model: Arc<dyn Model>) -> AgentBuilder {
+        AgentBuilder {
+            id: id.into(),
+            instructions: String::new(),
             model,
-            config: Arc::new(config),
-            tool_specs: tools.iter().map(|tool| tool.spec().clone()).collect(),
-            tools: by_name,
-            limits,
-            input_schema: serde_json::to_value(schema_for!(I)).expect("schema serialization"),
-            output_schema: Arc::new(
-                serde_json::to_value(schema_for!(O)).expect("schema serialization"),
-            ),
-            validate_input: validate::<I>,
-            validate_output: validate::<O>,
+            config: ModelConfig::default(),
+            tools: Vec::new(),
+            limits: Limits::default(),
             authorizer: Arc::new(AllowAll),
             context_policy: None,
-            binding: Arc::default(),
-        };
-        definition.binding = Arc::new(definition.compose_binding());
-        Ok(Self {
-            definition: Arc::new(definition),
-        })
-    }
-    pub fn with_authorizer(mut self, authorizer: Arc<dyn Authorizer>) -> Self {
-        Arc::make_mut(&mut self.definition).authorizer = authorizer;
-        self
-    }
-    /// Opt into a [`ContextPolicy`]. `max_derived_bytes` caps the encoded array of its derived
-    /// context within `max_context_bytes`; a policy that only pins entries may pass zero.
-    pub fn with_context_policy(
-        mut self,
-        policy: Arc<dyn ContextPolicy>,
-        max_derived_bytes: usize,
-    ) -> Result<Self> {
-        if max_derived_bytes > self.definition.limits.max_context_bytes {
-            return Err(Error::Invalid(
-                "derived context cap must fit the context limit".into(),
-            ));
+            types: PhantomData,
         }
-        let definition = Arc::make_mut(&mut self.definition);
-        definition.context_policy = Some((policy, max_derived_bytes));
-        definition.binding = Arc::new(definition.compose_binding());
-        Ok(self)
     }
     pub fn id(&self) -> &str {
         &self.definition.id
@@ -201,7 +141,7 @@ impl Agent {
     }
 }
 impl Definition {
-    /// The one place the durable binding is composed, once per definition.
+    /// The one place the durable binding is composed, once, by [`AgentBuilder::build`].
     /// Everything a stored run must agree with to resume contributes here and only here: a new
     /// part, such as a model adapter's identity or attached subagents, is one more optional key.
     /// A part that is absent adds no key, so adding one leaves the binding of every existing
@@ -218,6 +158,175 @@ impl Definition {
         self.tools
             .get(name)
             .ok_or_else(|| Error::Invalid(format!("unknown tool {name}")))
+    }
+}
+
+/// Defines an [`Agent`], from [`Agent::builder`]. Options may be set in any order and nothing
+/// is checked until [`build`](Self::build).
+///
+/// `I` and `O` are the agent's input and output types, `Value` until
+/// [`input`](Self::input) or [`output`](Self::output) names them. They fix the schemas the
+/// agent publishes and validates against.
+#[must_use = "an agent builder does nothing until `build` is called"]
+pub struct AgentBuilder<I = Value, O = Value> {
+    id: String,
+    instructions: String,
+    model: Arc<dyn Model>,
+    config: ModelConfig,
+    tools: Vec<Arc<dyn Tool>>,
+    limits: Limits,
+    authorizer: Arc<dyn Authorizer>,
+    context_policy: Option<(Arc<dyn ContextPolicy>, usize)>,
+    types: PhantomData<fn(I) -> O>,
+}
+impl<I, O> AgentBuilder<I, O> {
+    /// System instructions for every model turn. Defaults to none.
+    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = instructions.into();
+        self
+    }
+    /// Provider configuration for every model turn. Defaults to [`ModelConfig::default`].
+    pub fn config(mut self, config: ModelConfig) -> Self {
+        self.config = config;
+        self
+    }
+    /// Adds one tool. Tools are offered to the model in the order they are added.
+    pub fn tool(mut self, tool: Arc<dyn Tool>) -> Self {
+        self.tools.push(tool);
+        self
+    }
+    /// Adds several tools, after any already added.
+    pub fn tools(mut self, tools: impl IntoIterator<Item = Arc<dyn Tool>>) -> Self {
+        self.tools.extend(tools);
+        self
+    }
+    /// Bounds for every run. Defaults to [`Limits::default`].
+    pub fn limits(mut self, limits: Limits) -> Self {
+        self.limits = limits;
+        self
+    }
+    /// Decides whether each tool call may run. Defaults to [`AllowAll`].
+    pub fn authorizer(mut self, authorizer: Arc<dyn Authorizer>) -> Self {
+        self.authorizer = authorizer;
+        self
+    }
+    /// Opt into a [`ContextPolicy`]. `max_derived_bytes` caps the encoded array of its derived
+    /// context within `max_context_bytes`; a policy that only pins entries may pass zero.
+    pub fn context_policy(
+        mut self,
+        policy: Arc<dyn ContextPolicy>,
+        max_derived_bytes: usize,
+    ) -> Self {
+        self.context_policy = Some((policy, max_derived_bytes));
+        self
+    }
+    /// Names the input type. The agent publishes its JSON schema and rejects input that does not
+    /// deserialize as `T`.
+    pub fn input<T>(self) -> AgentBuilder<T, O> {
+        self.retype()
+    }
+    /// Names the output type. The model is given its JSON schema, and a final output that does
+    /// not deserialize as `T` fails the run.
+    pub fn output<T>(self) -> AgentBuilder<I, T> {
+        self.retype()
+    }
+    fn retype<I2, O2>(self) -> AgentBuilder<I2, O2> {
+        AgentBuilder {
+            id: self.id,
+            instructions: self.instructions,
+            model: self.model,
+            config: self.config,
+            tools: self.tools,
+            limits: self.limits,
+            authorizer: self.authorizer,
+            context_policy: self.context_policy,
+            types: PhantomData,
+        }
+    }
+}
+impl<I, O> AgentBuilder<I, O>
+where
+    I: DeserializeOwned + JsonSchema + 'static,
+    O: DeserializeOwned + JsonSchema + 'static,
+{
+    /// Checks the definition and composes its binding. Fails with [`Error::Invalid`] for an ID
+    /// outside 1..=256 bytes, a zero parallelism, byte limit or timeout, a duplicate, unbounded
+    /// or unversioned tool name, an idempotent tool without a retry contract, or a derived
+    /// context cap above `max_context_bytes`.
+    pub fn build(self) -> Result<Agent> {
+        let Self {
+            id,
+            instructions,
+            model,
+            config,
+            tools,
+            limits,
+            authorizer,
+            context_policy,
+            types: _,
+        } = self;
+        if id.is_empty() || id.len() > 256 {
+            return Err(Error::Invalid("agent ID must be 1..256 bytes".into()));
+        }
+        if limits.max_parallel_tools == 0
+            || limits.max_response_bytes == 0
+            || limits.max_tool_output_bytes == 0
+            || limits.max_context_bytes < 2
+            || limits.operation_timeout_ms == 0
+            || limits.cleanup_timeout_ms == 0
+        {
+            return Err(Error::Invalid(
+                "parallelism, byte limits, and timeouts must be positive".into(),
+            ));
+        }
+        let mut by_name = HashMap::with_capacity(tools.len());
+        for tool in &tools {
+            let spec = tool.spec();
+            if spec.name.is_empty()
+                || spec.name.len() > 256
+                || by_name.insert(spec.name.clone(), tool.clone()).is_some()
+                || spec.version.is_empty()
+            {
+                return Err(Error::Invalid(
+                    "tool names must be unique, bounded, and versioned".into(),
+                ));
+            }
+            if matches!(&spec.retry, RetryPolicy::Idempotent { contract } if contract.is_empty()) {
+                return Err(Error::Invalid(
+                    "idempotent tools require a retry contract".into(),
+                ));
+            }
+        }
+        if context_policy
+            .as_ref()
+            .is_some_and(|(_, max_derived_bytes)| *max_derived_bytes > limits.max_context_bytes)
+        {
+            return Err(Error::Invalid(
+                "derived context cap must fit the context limit".into(),
+            ));
+        }
+        let mut definition = Definition {
+            id,
+            instructions: instructions.into(),
+            model,
+            config: Arc::new(config),
+            tool_specs: tools.iter().map(|tool| tool.spec().clone()).collect(),
+            tools: by_name,
+            limits,
+            input_schema: serde_json::to_value(schema_for!(I)).expect("schema serialization"),
+            output_schema: Arc::new(
+                serde_json::to_value(schema_for!(O)).expect("schema serialization"),
+            ),
+            validate_input: validate::<I>,
+            validate_output: validate::<O>,
+            authorizer,
+            context_policy,
+            binding: Arc::default(),
+        };
+        definition.binding = Arc::new(definition.compose_binding());
+        Ok(Agent {
+            definition: Arc::new(definition),
+        })
     }
 }
 

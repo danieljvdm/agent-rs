@@ -38,17 +38,21 @@ fn sleeps(ms: &[u64]) -> Vec<ToolCall> {
 }
 /// An agent whose model asks for each batch of calls in turn, then answers "done".
 fn agent(batches: Vec<Vec<ToolCall>>, tools: Vec<Arc<dyn Tool>>, limits: Limits) -> Agent {
+    builder(batches, tools, limits).build().unwrap()
+}
+fn builder(
+    batches: Vec<Vec<ToolCall>>,
+    tools: Vec<Arc<dyn Tool>>,
+    limits: Limits,
+) -> AgentBuilder<String, String> {
     let mut responses: Vec<_> = batches.into_iter().map(ModelResponse::tools).collect();
     responses.push(ModelResponse::final_output(json!("done")));
-    Agent::new::<String, String>(
-        "test",
-        "test",
-        Arc::new(ScriptedModel::new(responses)),
-        ModelConfig::default(),
-        tools,
-        limits,
-    )
-    .unwrap()
+    Agent::builder("test", Arc::new(ScriptedModel::new(responses)))
+        .instructions("test")
+        .tools(tools)
+        .limits(limits)
+        .input::<String>()
+        .output::<String>()
 }
 fn state(agent: &Agent) -> RunState {
     agent.new_run("test", json!("go"), &[], None).unwrap()
@@ -476,7 +480,7 @@ async fn denial_stops_dispatch_and_keeps_outcomes_already_recorded() {
     for (slots, started) in [(1, ids(&["c0"])), (2, vec![])] {
         let journal = Journal::default();
         let sleeper = Sleeper::new(&journal);
-        let agent = agent(
+        let agent = builder(
             vec![sleeps(&[10, 10])],
             vec![sleeper.tool(spec("sleep"))],
             Limits {
@@ -484,7 +488,9 @@ async fn denial_stops_dispatch_and_keeps_outcomes_already_recorded() {
                 ..Limits::default()
             },
         )
-        .with_authorizer(Arc::new(DenyCall("c1")));
+        .authorizer(Arc::new(DenyCall("c1")))
+        .build()
+        .unwrap();
         let mut state = state(&agent);
         Engine::new(agent)
             .drive(&mut state, &journal, RunControl::default())

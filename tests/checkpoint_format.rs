@@ -3,7 +3,7 @@
 #![cfg(feature = "sqlite")]
 
 use rusqlite::{Connection, params};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
 use yielded_agent::{sqlite::SqliteStore, *};
@@ -19,15 +19,10 @@ impl Fixture {
         let directory = TempDir::new().unwrap();
         let path = directory.path().join("checkpoint.sqlite");
         let store = SqliteStore::open(&path).await.unwrap();
-        let agent = Agent::new::<Value, Value>(
-            "format-test",
-            "Do not call the model",
-            Arc::new(ScriptedModel::new(vec![])),
-            ModelConfig::default(),
-            vec![],
-            Limits::default(),
-        )
-        .unwrap();
+        let agent = Agent::builder("format-test", Arc::new(ScriptedModel::new(vec![])))
+            .instructions("Do not call the model")
+            .build()
+            .unwrap();
         let input = json!({
             "nested": [null, true, "quotes: \" and Unicode: λ", -0.0, 1.25, 9007199254740993u64],
             "object": {"answer": 42}

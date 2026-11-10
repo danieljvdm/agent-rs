@@ -259,18 +259,17 @@ impl Fixture {
             inner,
             counts: counts.clone(),
         });
-        let agent = Agent::new::<Input, Output>(
-            "benchmark",
-            "Return the scripted result.",
-            model,
-            ModelConfig::default(),
-            vec![tool],
-            Limits {
+        let agent = Agent::builder("benchmark", model)
+            .instructions("Return the scripted result.")
+            .tool(tool)
+            .limits(Limits {
                 max_parallel_tools: bound,
                 ..Limits::default()
-            },
-        )
-        .unwrap();
+            })
+            .input::<Input>()
+            .output::<Output>()
+            .build()
+            .unwrap();
         let engine = Arc::new(Engine::new(agent.clone()));
         let history = (0..history_entries)
             .map(|n| {

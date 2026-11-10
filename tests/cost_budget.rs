@@ -246,14 +246,13 @@ fn responses(rounds: usize, batch: usize) -> Vec<ModelResponse> {
     responses
 }
 fn agent(rounds: usize, batch: usize) -> Agent {
-    Agent::new::<Value, Value>(
+    Agent::builder(
         "cost",
-        "Answer with the scripted result.",
         Arc::new(ScriptedModel::new(responses(rounds, batch))),
-        ModelConfig::default(),
-        tools(),
-        Limits::default(),
     )
+    .instructions("Answer with the scripted result.")
+    .tools(tools())
+    .build()
     .unwrap()
 }
 fn assert_completed(state: &RunState, rounds: usize, batch: usize) {
@@ -356,9 +355,8 @@ impl Model for PacedModel {
 }
 #[tokio::test]
 async fn observed_stream_allocation_budget() {
-    let agent = Agent::new::<Value, Value>(
+    let agent = Agent::builder(
         "cost",
-        "Stream the scripted answer.",
         Arc::new(PacedModel(
             std::iter::repeat_n(ModelEvent::TextDelta("x".repeat(16)), STREAM_DELTAS)
                 .chain([ModelEvent::Response(ModelResponse::final_output(json!(
@@ -366,10 +364,9 @@ async fn observed_stream_allocation_budget() {
                 )))])
                 .collect(),
         )),
-        ModelConfig::default(),
-        vec![],
-        Limits::default(),
     )
+    .instructions("Stream the scripted answer.")
+    .build()
     .unwrap();
     let engine = Engine::new(agent);
     stable(
@@ -459,16 +456,17 @@ async fn typed_allocation_budgets() {
         text: String,
         confidence: u32,
     }
-    let agent = Agent::new::<Question, Answer>(
+    let agent = Agent::builder(
         "cost",
-        "Answer with the scripted result.",
         Arc::new(ScriptedModel::new(vec![ModelResponse::final_output(
             json!({"text": "done", "confidence": 9}),
         )])),
-        ModelConfig::default(),
-        tools(),
-        Limits::default(),
     )
+    .instructions("Answer with the scripted result.")
+    .tools(tools())
+    .input::<Question>()
+    .output::<Answer>()
+    .build()
     .unwrap();
     let engine = Engine::new(agent);
     stable(
@@ -520,20 +518,20 @@ async fn sliding_window_starts_the_next_call_when_a_slot_frees() {
             arguments: json!(ms),
         })
         .collect();
-    let agent = Agent::new::<Value, Value>(
+    let agent = Agent::builder(
         "cost",
-        "Sleep.",
         Arc::new(ScriptedModel::new(vec![
             ModelResponse::tools(calls),
             ModelResponse::final_output(json!("done")),
         ])),
-        ModelConfig::default(),
-        vec![tool],
-        Limits {
-            max_parallel_tools: 4,
-            ..Limits::default()
-        },
     )
+    .instructions("Sleep.")
+    .tool(tool)
+    .limits(Limits {
+        max_parallel_tools: 4,
+        ..Limits::default()
+    })
+    .build()
     .unwrap();
     let mut conversation = Conversation::default();
     let started = tokio::time::Instant::now();
@@ -629,16 +627,14 @@ mod sqlite {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("cost.sqlite");
         let store = SqliteStore::open(&path).await.unwrap();
-        let seed = Agent::new::<Value, Value>(
+        let seed = Agent::builder(
             "seed",
-            "Seed retained context.",
             Arc::new(ScriptedModel::new(vec![ModelResponse::final_output(
                 json!("ok"),
             )])),
-            ModelConfig::default(),
-            vec![],
-            Limits::default(),
         )
+        .instructions("Seed retained context.")
+        .build()
         .unwrap();
         for index in 0..seeds {
             let input = json!({"retained": format!("{index:04}{}", "x".repeat(SEED_BYTES))});
