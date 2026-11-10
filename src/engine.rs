@@ -975,6 +975,11 @@ fn stops_dispatch(status: &OperationStatus) -> bool {
     )
 }
 
+/// Whole milliseconds, rounded up, as active time is charged.
+fn ceil_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos().div_ceil(1_000_000)).unwrap_or(u64::MAX)
+}
+
 /// One sliding window of tool operations. Its reservation covers the wall-clock time from
 /// `started` while any operation may be in flight, so overlapping work is charged once.
 struct Window {
@@ -1305,11 +1310,10 @@ fn reserve(state: &mut RunState) -> Result<(u64, u64)> {
     Ok((reservation, work))
 }
 fn refund(state: &mut RunState, reservation: u64, elapsed: Duration) {
-    let charged = ceil_ms(elapsed).min(reservation);
+    let charged = u64::try_from(elapsed.as_nanos().div_ceil(1_000_000))
+        .unwrap_or(u64::MAX)
+        .min(reservation);
     state.usage.active_ms = state.usage.active_ms.saturating_sub(reservation - charged);
-}
-fn ceil_ms(duration: Duration) -> u64 {
-    u64::try_from(duration.as_nanos().div_ceil(1_000_000)).unwrap_or(u64::MAX)
 }
 fn emit(state: &mut RunState, control: &RunControl, event: ProgressEvent) {
     state.usage.events = state.usage.events.saturating_add(1);
