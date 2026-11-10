@@ -131,6 +131,84 @@ async fn acceptance_is_durable_idempotent_and_exclusive() {
 }
 
 #[tokio::test]
+async fn settled_run_state_history_and_operations_survive_reopening() {
+    let dir = TempDir::new().unwrap();
+    let db = store(&dir).await;
+    let tool = typed_tool::<Value, Value, _, _>(
+        spec("echo", RetryPolicy::ReadOnly, false),
+        |arguments, _| async move { Ok(ToolOutput::Complete(arguments)) },
+    );
+    let calls = |round: u32| {
+        ModelResponse::tools(
+            (0..2)
+                .map(|index| ToolCall {
+                    id: format!("{round}-{index}"),
+                    name: "echo".into(),
+                    arguments: json!({"round": round, "index": index}),
+                })
+                .collect(),
+        )
+    };
+    let agent = agent(
+        vec![
+            calls(0),
+            calls(1),
+            ModelResponse::final_output(json!("done")),
+        ],
+        vec![tool],
+    );
+    let earlier = db
+        .accept(&agent, "c", "earlier", json!(0), None)
+        .await
+        .unwrap();
+    let mut state = db.claim(earlier).await.unwrap();
+    Engine::new(agent.clone())
+        .drive(&mut state, db.as_ref(), RunControl::default())
+        .await
+        .unwrap();
+    let id = db
+        .accept(&agent, "c", "measured", json!(1), None)
+        .await
+        .unwrap();
+    let mut state = db.claim(id).await.unwrap();
+    Engine::new(agent)
+        .drive(&mut state, db.as_ref(), RunControl::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        state.phase,
+        Phase::Settled(Settlement::Completed(json!("done")))
+    );
+    assert_eq!(state.prior_context.len(), 4);
+    let encoded = |state: &RunState| serde_json::to_value(state).unwrap();
+    let status = db.status(id).await.unwrap();
+    assert_eq!(encoded(&status), encoded(&state));
+    let history = db.history("c").await.unwrap();
+    assert_eq!(history.len(), 8);
+    assert_eq!(&history[4..], state.history.as_slice());
+    let operations = db.operations(id).await.unwrap();
+    assert_eq!(
+        operations
+            .iter()
+            .map(|op| op.call.id.as_str())
+            .collect::<Vec<_>>(),
+        ["0-0", "0-1", "1-0", "1-1"]
+    );
+    assert!(
+        operations
+            .iter()
+            .all(|op| matches!(op.status, OperationStatus::Complete(_)))
+    );
+    db.close().await.unwrap();
+    let db = store(&dir).await;
+    assert_eq!(encoded(&db.status(id).await.unwrap()), encoded(&status));
+    assert_eq!(db.history("c").await.unwrap(), history);
+    assert_eq!(db.operations(id).await.unwrap(), operations);
+    assert!(db.due(now_ms(), 10).await.unwrap().is_empty());
+    db.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn stale_generations_and_cancellation_cannot_overwrite_progress() {
     let dir = TempDir::new().unwrap();
     let db = store(&dir).await;
