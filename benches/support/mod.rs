@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 use yielded_agent::*;
 
-pub const FIXTURE_VERSION: &str = "agent-loop-v2";
+pub const FIXTURE_VERSION: &str = "agent-loop-v3";
 pub const WORKERS: usize = 4;
 pub const CONCURRENT_TOTAL: usize = 64;
 
@@ -432,7 +432,19 @@ pub mod durable {
     }
     impl Resident {
         pub async fn new(fixture: &Fixture, active: usize) -> Self {
+            Self::start(fixture, active, tempfile::tempdir().unwrap()).await
+        }
+        /// A resident host over a copy of the template's database and retained conversation.
+        pub async fn with_context(
+            fixture: &Fixture,
+            active: usize,
+            template: &ContextTemplate,
+        ) -> Self {
             let directory = tempfile::tempdir().unwrap();
+            template.copy_to(&directory.path().join("runtime.sqlite"));
+            Self::start(fixture, active, directory).await
+        }
+        async fn start(fixture: &Fixture, active: usize, directory: tempfile::TempDir) -> Self {
             let store = Arc::new(
                 SqliteStore::open(directory.path().join("runtime.sqlite"))
                     .await
@@ -461,9 +473,12 @@ pub mod durable {
         }
         pub async fn run(&mut self, fixture: &Fixture) -> RunState {
             let conversation = uuid::Uuid::new_v4().to_string();
+            self.run_in(fixture, &conversation).await
+        }
+        pub async fn run_in(&mut self, fixture: &Fixture, conversation: &str) -> RunState {
             let id = self
                 .host
-                .submit(&conversation, "input", fixture.input(), None)
+                .submit(conversation, "input", fixture.input(), None)
                 .await
                 .unwrap();
             self.wait(id).await
@@ -574,6 +589,60 @@ pub mod durable {
         assert!(starts.is_empty(), "admission was not observed completing");
         completed
     }
+    pub const CONTEXT_CONVERSATION: &str = "retained-context";
+    /// A closed database whose conversation retains `seeds` completed runs, each with an input
+    /// of `SEED_BYTES` text. Copied per sample so seeding stays outside the timed interval.
+    pub struct ContextTemplate {
+        directory: tempfile::TempDir,
+        pub seeds: usize,
+    }
+    impl ContextTemplate {
+        pub const SEED_BYTES: usize = 64 * 1024;
+        pub async fn new(seeds: usize) -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let store = SqliteStore::open(directory.path().join("template.sqlite"))
+                .await
+                .unwrap();
+            // Final-only seed runs: their inputs and answers do not match the measured
+            // fixture's checks for seeded history or tool rounds.
+            let seed = Fixture::new(0, 0, 4, 0, 0);
+            for index in 0..seeds {
+                let input = serde_json::json!({
+                    "request": format!("retained context {index:02} {}", "x".repeat(Self::SEED_BYTES)),
+                });
+                let id = store
+                    .accept(
+                        &seed.agent,
+                        CONTEXT_CONVERSATION,
+                        &format!("seed-{index}"),
+                        input,
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                let mut state = store.claim(id).await.unwrap();
+                seed.engine
+                    .drive(&mut state, &store, RunControl::default())
+                    .await
+                    .unwrap();
+                seed.verify_state(&state);
+            }
+            store.close().await.unwrap();
+            Self { directory, seeds }
+        }
+        pub fn copy_to(&self, path: &Path) {
+            std::fs::copy(self.directory.path().join("template.sqlite"), path).unwrap();
+        }
+        pub fn verify_state(&self, fixture: &Fixture, state: &RunState) {
+            fixture.verify_state(state);
+            assert_eq!(
+                state.prior_context.len(),
+                self.seeds * 2,
+                "the run must retain every seeded input and answer"
+            );
+        }
+    }
+
     struct StopAfterRound {
         store: Arc<SqliteStore>,
     }

@@ -15,13 +15,14 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE_VERSION = "agent-loop-v2"
+FIXTURE_VERSION = "agent-loop-v3"
 EXPECTED_BENCHMARK_CASES = {
     "engine/minimal", "engine/four_tool_rounds", "engine/context_entries_0", "engine/context_entries_1024",
     *(f"engine/tools_8_bound_{n}" for n in (1, 4, 8)),
     *(f"engine/stream_chunks_{n}" for n in (1, 64, 1024)),
     *(f"conversations/engine_workers_4/{n}" for n in (1, 16, 64)),
     "sqlite/durable_four_tool_rounds",
+    *(f"sqlite/durable_retained_context/{n}" for n in (0, 1024)),
     *(f"sqlite_conversations/host_workers_4/{n}" for n in (1, 16, 64)),
     *(f"recovery/restart_to_completion/{n}" for n in (0, 512)),
 }

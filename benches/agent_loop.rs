@@ -109,6 +109,34 @@ fn durable(c: &mut Criterion) {
             })
         })
     });
+    // The same run in a conversation retaining 0 or 1,024 KiB of earlier input text.
+    for kib in [0, 1024] {
+        let template = runtime.block_on(ContextTemplate::new(
+            kib * 1024 / ContextTemplate::SEED_BYTES,
+        ));
+        group.bench_with_input(
+            BenchmarkId::new("durable_retained_context", kib),
+            &kib,
+            |b, _| {
+                b.iter_custom(|iterations| {
+                    runtime.block_on(async {
+                        let mut elapsed = Duration::ZERO;
+                        for _ in 0..iterations {
+                            let mut resident = Resident::with_context(&fixture, 4, &template).await;
+                            let before = fixture.counts.snapshot();
+                            let started = Instant::now();
+                            let state = resident.run_in(&fixture, CONTEXT_CONVERSATION).await;
+                            elapsed += started.elapsed();
+                            template.verify_state(&fixture, &state);
+                            fixture.verify_counts(&before, 1, 1);
+                            resident.close().await;
+                        }
+                        elapsed
+                    })
+                })
+            },
+        );
+    }
     group.finish();
     let mut group = c.benchmark_group("sqlite_conversations");
     group.throughput(Throughput::Elements(CONCURRENT_TOTAL as u64));
