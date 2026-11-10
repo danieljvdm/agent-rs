@@ -200,6 +200,196 @@ impl Tool for SleepTool {
         Ok(())
     }
 }
+/// The most calls in flight at any instant.
+fn peak(runs: &[Started]) -> usize {
+    runs.iter()
+        .map(|at| {
+            runs.iter()
+                .filter(|run| run.start <= at.start && run.end.is_none_or(|end| end > at.start))
+                .count()
+        })
+        .max()
+        .unwrap_or(0)
+}
+/// `(start, end)` of each call, by call ID.
+fn spans(runs: &[Started]) -> Vec<(String, u64, Option<u64>)> {
+    let mut spans: Vec<_> = runs
+        .iter()
+        .map(|run| (run.id.clone(), run.start, run.end))
+        .collect();
+    spans.sort();
+    spans
+}
+
+#[tokio::test(start_paused = true)]
+async fn next_call_starts_when_a_slot_frees_and_results_keep_declaration_order() {
+    let journal = Journal::default();
+    let sleeper = Sleeper::new(&journal);
+    let delays = [300, 10, 10, 10, 300];
+    let agent = agent(
+        vec![sleeps(&delays)],
+        vec![sleeper.tool(spec("sleep"))],
+        Limits {
+            max_parallel_tools: 4,
+            ..Limits::default()
+        },
+    );
+    let mut state = state(&agent);
+    Engine::new(agent)
+        .drive(&mut state, &journal, RunControl::default())
+        .await
+        .unwrap();
+    let runs = sleeper.runs();
+    assert_eq!(
+        spans(&runs),
+        [
+            ("c0".into(), 0, Some(300)),
+            ("c1".into(), 0, Some(10)),
+            ("c2".into(), 0, Some(10)),
+            ("c3".into(), 0, Some(10)),
+            ("c4".into(), 10, Some(310)),
+        ]
+    );
+    assert_eq!(peak(&runs), 4);
+    assert_eq!(
+        results(&state)
+            .iter()
+            .map(|result| (result.call_id.as_str(), result.value.clone()))
+            .collect::<Vec<_>>(),
+        delays
+            .iter()
+            .enumerate()
+            .map(|(index, ms)| (["c0", "c1", "c2", "c3", "c4"][index], json!(ms)))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(state.usage.tool_calls, 5);
+    // The window was busy for 310 ms; overlapping calls are not charged again.
+    assert_eq!(state.usage.active_ms, 310);
+}
+
+#[tokio::test(start_paused = true)]
+async fn each_call_times_out_from_its_own_start() {
+    let journal = Journal::default();
+    let sleeper = Sleeper::new(&journal);
+    let agent = agent(
+        vec![sleeps(&[10, 30, 45, 60])],
+        vec![sleeper.tool(spec("sleep"))],
+        Limits {
+            max_parallel_tools: 2,
+            operation_timeout_ms: 50,
+            ..Limits::default()
+        },
+    );
+    let mut state = state(&agent);
+    Engine::new(agent)
+        .drive(&mut state, &journal, RunControl::default())
+        .await
+        .unwrap();
+    // `c2` starts at 10 ms and ends past 50 ms after the window opened, within its own timeout.
+    // `c3` starts at 30 ms and is stopped 50 ms later.
+    assert_eq!(
+        spans(&sleeper.runs()),
+        [
+            ("c0".into(), 0, Some(10)),
+            ("c1".into(), 0, Some(30)),
+            ("c2".into(), 10, Some(55)),
+            ("c3".into(), 30, None),
+        ]
+    );
+    let results = results(&state);
+    assert_eq!(
+        (&results[2].value, results[2].is_error),
+        (&json!(45), false)
+    );
+    assert_eq!(
+        (&results[3].value, results[3].is_error),
+        (&json!("tool: tool operation timed out"), true)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn sequential_call_waits_for_running_calls_and_runs_alone() {
+    let journal = Journal::default();
+    let sleeper = Sleeper::new(&journal);
+    let mut alone = spec("alone");
+    alone.execution = Execution::Sequential;
+    let mut calls = sleeps(&[30, 10, 10, 10, 10]);
+    calls[2].name = "alone".into();
+    let agent = agent(
+        vec![calls],
+        vec![sleeper.tool(spec("sleep")), sleeper.tool(alone)],
+        Limits {
+            max_parallel_tools: 2,
+            ..Limits::default()
+        },
+    );
+    let mut state = state(&agent);
+    Engine::new(agent)
+        .drive(&mut state, &journal, RunControl::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        spans(&sleeper.runs()),
+        [
+            ("c0".into(), 0, Some(30)),
+            ("c1".into(), 0, Some(10)),
+            ("c2".into(), 30, Some(40)),
+            ("c3".into(), 40, Some(50)),
+            ("c4".into(), 40, Some(50)),
+        ]
+    );
+}
+
+/// Fails every commit once the given call has an outcome, like a database that went away.
+struct FailAfterOutcome {
+    journal: Journal,
+    id: &'static str,
+}
+#[async_trait]
+impl Checkpoint for FailAfterOutcome {
+    async fn commit(&self, state: &mut RunState) -> Result<()> {
+        if state
+            .operations
+            .iter()
+            .any(|op| op.call.id == self.id && matches!(op.status, OperationStatus::Complete(_)))
+        {
+            return Err(Error::Storage("injected outcome commit failure".into()));
+        }
+        self.journal.commit(state).await
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn failed_commit_never_starts_the_next_call_and_still_drains_running_calls() {
+    let journal = Journal::default();
+    let sleeper = Sleeper::new(&journal);
+    let agent = agent(
+        vec![sleeps(&[10, 50, 10])],
+        vec![sleeper.tool(spec("sleep"))],
+        Limits {
+            max_parallel_tools: 2,
+            ..Limits::default()
+        },
+    );
+    let mut state = state(&agent);
+    let result = Engine::new(agent)
+        .drive(
+            &mut state,
+            &FailAfterOutcome {
+                journal: journal.clone(),
+                id: "c0",
+            },
+            RunControl::default(),
+        )
+        .await;
+    assert!(matches!(result, Err(Error::Storage(_))), "{result:?}");
+    // `c2` would take `c0`'s slot, but the commit carrying its intent failed.
+    assert_eq!(
+        spans(&sleeper.runs()),
+        [("c0".into(), 0, Some(10)), ("c1".into(), 0, Some(50))]
+    );
+    assert_eq!(sleeper.cleanups(), 2);
+    assert_eq!(journal.ever_dispatched(), ids(&["c0", "c1"]));
+}
 
 #[tokio::test(start_paused = true)]
 async fn intent_and_active_time_are_committed_before_each_call_starts() {

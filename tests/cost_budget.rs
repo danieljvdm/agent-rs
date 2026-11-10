@@ -30,9 +30,9 @@ const SQLITE_CONTEXT_COPIES_FOUR_TOOL_ROUNDS: u64 = 32;
 const SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS: u64 = 126_623;
 
 // Tool scheduling under paused Tokio time (exact virtual milliseconds).
-/// Five parallel calls sleeping 300/10/10/10/300 ms with `max_parallel_tools = 4`. Fixed batches
-/// wait for their slowest member; a sliding window would finish in 310 ms.
-const TOOL_SCHEDULE_VIRTUAL_MS: u64 = 600;
+/// Five parallel calls sleeping 300/10/10/10/300 ms with `max_parallel_tools = 4`. The sliding
+/// window starts the fifth call when the first 10 ms call frees its slot.
+const TOOL_SCHEDULE_VIRTUAL_MS: u64 = 310;
 
 // Heap allocations on the driving thread: (count, requested bytes), with headroom.
 /// `Engine::run` of a final-only response in an empty conversation.
@@ -333,7 +333,7 @@ async fn agent_allocation_budgets() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn fixed_batches_wait_for_their_slowest_member() {
+async fn sliding_window_starts_the_next_call_when_a_slot_frees() {
     let tool = typed_tool::<u64, u64, _, _>(spec("sleep"), |ms, _| async move {
         tokio::time::sleep(Duration::from_millis(ms)).await;
         Ok(ToolOutput::Complete(ms))
