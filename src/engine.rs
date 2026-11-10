@@ -829,35 +829,10 @@ impl Engine {
                     value = Err(error);
                 }
                 op.status = match value {
-                    Ok(ToolOutput::Complete(value))
-                        if encoded_len(&value)? <= state.limits.max_tool_output_bytes =>
-                    {
-                        OperationStatus::Complete(ToolResult {
-                            call_id: op.call.id.clone(),
-                            value,
-                            is_error: false,
-                        })
-                    }
-                    Ok(ToolOutput::Failed(value))
-                        if encoded_len(&value)? <= state.limits.max_tool_output_bytes =>
-                    {
-                        OperationStatus::Complete(ToolResult {
-                            call_id: op.call.id.clone(),
-                            value,
-                            is_error: true,
-                        })
-                    }
-                    Ok(ToolOutput::Wait(wait))
-                        if encoded_len(&wait)? <= state.limits.max_tool_output_bytes =>
-                    {
-                        OperationStatus::Waiting(wait)
-                    }
-                    Ok(_) => failure_status(
-                        op,
-                        "tool output exceeds byte limit",
-                        state.limits.max_tool_output_bytes,
-                        false,
-                    ),
+                    Ok(output) => output_status(op, output, state.limits.max_tool_output_bytes)
+                        .unwrap_or_else(|message| {
+                            failure_status(op, &message, state.limits.max_tool_output_bytes, false)
+                        }),
                     Err(error) => failure_status(
                         op,
                         &error.to_string(),
@@ -926,6 +901,40 @@ impl Engine {
     }
 }
 
+/// Records a returned output, or explains why it cannot be recorded. Never returns early, so an
+/// unencodable output cannot drop the outcomes of sibling operations still in flight.
+fn output_status(
+    op: &Operation,
+    output: ToolOutput<Value>,
+    max_bytes: usize,
+) -> std::result::Result<OperationStatus, String> {
+    let fits = |len: Result<usize>| match len {
+        Ok(len) if len <= max_bytes => Ok(()),
+        Ok(_) => Err("tool output exceeds byte limit".to_owned()),
+        Err(error) => Err(format!("tool output cannot be encoded: {error}")),
+    };
+    let result = |value, is_error| {
+        OperationStatus::Complete(ToolResult {
+            call_id: op.call.id.clone(),
+            value,
+            is_error,
+        })
+    };
+    Ok(match output {
+        ToolOutput::Complete(value) => {
+            fits(encoded_len(&value))?;
+            result(value, false)
+        }
+        ToolOutput::Failed(value) => {
+            fits(encoded_len(&value))?;
+            result(value, true)
+        }
+        ToolOutput::Wait(wait) => {
+            fits(encoded_len(&wait))?;
+            OperationStatus::Waiting(wait)
+        }
+    })
+}
 fn failure_status(
     op: &Operation,
     message: &str,
