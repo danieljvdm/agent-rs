@@ -21,6 +21,32 @@ pub enum ToolOutput<T> {
     Failed(T),
     Wait(WaitRequest),
 }
+/// One dispatch boundary the model can call.
+///
+/// # Outcomes
+///
+/// `execute` reports what the engine knows about the call's effect:
+/// - `Ok(ToolOutput::Complete(value))`: it finished and succeeded.
+/// - `Ok(ToolOutput::Failed(value))`: it finished and failed, and the tool knows what did or did
+///   not happen. The value is recorded as an error result for the model. It is never retried.
+/// - `Ok(ToolOutput::Wait(request))`: it needs application input or a timer before it completes.
+///
+/// Every `Ok` payload must fit `Limits::max_tool_output_bytes` once encoded; a larger one is
+/// handled like an `Err`.
+/// - `Err(error)`: the outcome is not known. A `RetryPolicy::ReadOnly` tool has no effect to lose,
+///   so the error is recorded for the model. Any other tool becomes `OperationStatus::Unknown`,
+///   because its effect may or may not have happened; that stops further dispatch until the
+///   application reconciles it. Timeouts and failed cleanups are treated the same way.
+///
+/// Return `Failed` rather than `Err` whenever the failure is known, for example a rejected
+/// request that changed nothing, so the run can continue without reconciliation.
+///
+/// # Concurrency
+///
+/// All tool calls of one run execute concurrently on the task that drives the run, up to
+/// `Limits::max_parallel_tools`. A tool that blocks the thread or runs CPU-bound work inside
+/// `execute` stalls every sibling call, and no timeout can interrupt it until it yields. Move
+/// such work to `tokio::task::spawn_blocking` and await the handle.
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn spec(&self) -> &ToolSpec;
