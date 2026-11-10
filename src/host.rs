@@ -43,7 +43,7 @@ impl<S: DurableStore + ?Sized> Checkpoint for StoreCheckpoint<'_, S> {
 /// reaches the store's own API. `Host<dyn DurableStore>` selects storage at run time.
 pub struct Host<S: DurableStore + ?Sized> {
     store: Arc<S>,
-    agent: Agent,
+    agents: Arc<HashMap<String, Agent>>,
     shutdown: CancellationToken,
     notify: Arc<Notify>,
     running: Arc<Mutex<HashMap<RunId, CancellationToken>>>,
@@ -52,6 +52,16 @@ pub struct Host<S: DurableStore + ?Sized> {
 }
 impl<S: DurableStore + ?Sized + 'static> Host<S> {
     pub fn start(store: Arc<S>, agent: Agent, options: HostOptions) -> Result<Self> {
+        Self::start_agents(store, [agent], options)
+    }
+    /// Host several agents over one store. Each claimed run executes with the agent whose ID
+    /// it recorded at acceptance; a run whose agent is not registered here keeps a visible
+    /// `Incompatible` error until a host with that agent retries it.
+    pub fn start_agents(
+        store: Arc<S>,
+        agents: impl IntoIterator<Item = Agent>,
+        options: HostOptions,
+    ) -> Result<Self> {
         if options.max_concurrent_runs == 0
             || options.max_concurrent_runs > 1024
             || options.poll_interval.is_zero()
@@ -60,6 +70,16 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
                 "host requires 1..=1024 run workers and a nonzero discovery interval".into(),
             ));
         }
+        let mut registered = HashMap::new();
+        for agent in agents {
+            if registered.insert(agent.id().to_owned(), agent).is_some() {
+                return Err(Error::Invalid("host agent IDs must be unique".into()));
+            }
+        }
+        if registered.is_empty() {
+            return Err(Error::Invalid("host requires at least one agent".into()));
+        }
+        let agents = Arc::new(registered);
         let lease = store.lease()?;
         let shutdown = CancellationToken::new();
         let notify = Arc::new(Notify::new());
@@ -67,14 +87,14 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
         let fatal_error = Arc::new(Mutex::new(None));
         let task = {
             let store = store.clone();
-            let agent = agent.clone();
+            let agents = agents.clone();
             let shutdown = shutdown.clone();
             let notify = notify.clone();
             let running = running.clone();
             let fatal_error = fatal_error.clone();
             tokio::spawn(async move {
                 let _lease = lease;
-                let result = schedule(store, agent, options, shutdown, notify, running).await;
+                let result = schedule(store, agents, options, shutdown, notify, running).await;
                 if let Err(error) = &result {
                     *fatal_error.lock().expect("host status lock") = Some(error.to_string());
                 }
@@ -83,7 +103,7 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
         };
         Ok(Self {
             store,
-            agent,
+            agents,
             shutdown,
             notify,
             running,
@@ -103,8 +123,42 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
         }
         Ok(())
     }
+    /// Submit to the host's only agent. A host with several agents requires `submit_to`.
     pub async fn submit(
         &self,
+        conversation: &str,
+        key: &str,
+        input: serde_json::Value,
+        expires_at_ms: Option<u64>,
+    ) -> Result<RunId> {
+        let mut agents = self.agents.values();
+        let (Some(agent), None) = (agents.next(), agents.next()) else {
+            return Err(Error::Invalid(
+                "host has several agents; submit with submit_to".into(),
+            ));
+        };
+        self.accept(agent, conversation, key, input, expires_at_ms)
+            .await
+    }
+    /// Submit to the registered agent with ID `agent_id`.
+    pub async fn submit_to(
+        &self,
+        agent_id: &str,
+        conversation: &str,
+        key: &str,
+        input: serde_json::Value,
+        expires_at_ms: Option<u64>,
+    ) -> Result<RunId> {
+        let agent = self
+            .agents
+            .get(agent_id)
+            .ok_or_else(|| Error::Invalid(format!("agent {agent_id} is not registered")))?;
+        self.accept(agent, conversation, key, input, expires_at_ms)
+            .await
+    }
+    async fn accept(
+        &self,
+        agent: &Agent,
         conversation: &str,
         key: &str,
         input: serde_json::Value,
@@ -113,7 +167,7 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
         self.health()?;
         let id = self
             .store
-            .accept(&self.agent, conversation, key, input, expires_at_ms)
+            .accept(agent, conversation, key, input, expires_at_ms)
             .await?;
         self.notify.notify_one();
         Ok(id)
@@ -160,7 +214,7 @@ impl<S: DurableStore + ?Sized> Drop for Host<S> {
 }
 async fn schedule<S: DurableStore + ?Sized + 'static>(
     store: Arc<S>,
-    agent: Agent,
+    agents: Arc<HashMap<String, Agent>>,
     options: HostOptions,
     shutdown: CancellationToken,
     notify: Arc<Notify>,
@@ -215,7 +269,7 @@ async fn schedule<S: DurableStore + ?Sized + 'static>(
                 map.insert(id, cancel.clone());
             }
             let store = store.clone();
-            let agent = agent.clone();
+            let agents = agents.clone();
             let control = RunControl {
                 cancel,
                 shutdown: shutdown.clone(),
@@ -226,7 +280,14 @@ async fn schedule<S: DurableStore + ?Sized + 'static>(
                 let result = async {
                     position = Some(store.position(id).await?);
                     let mut state = store.claim(id).await?;
-                    let result = Engine::new(agent)
+                    position = Some(CheckpointPosition::from(&state));
+                    let Some(agent) = agents.get(&state.agent_id) else {
+                        return Err(Error::Incompatible(format!(
+                            "agent {} is not registered with this host",
+                            state.agent_id
+                        )));
+                    };
+                    let result = Engine::new(agent.clone())
                         .drive(&mut state, &StoreCheckpoint(store.as_ref()), control)
                         .await;
                     position = Some(CheckpointPosition::from(&state));

@@ -537,6 +537,81 @@ async fn due_order_waits_and_expiry(fixture: &impl Fixture) {
     fixture.close(store).await;
 }
 
+async fn several_agents_share_one_store(fixture: &impl Fixture) {
+    let store = fixture.open().await;
+    let named = |id: &str| {
+        Agent::new::<Value, Value>(
+            id,
+            "Answer with your name",
+            Arc::new(ScriptedModel::new(vec![ModelResponse::final_output(
+                json!(id),
+            )])),
+            ModelConfig::default(),
+            vec![],
+            Limits::default(),
+        )
+        .unwrap()
+    };
+    assert!(matches!(
+        Host::start_agents(store.clone(), [named("alpha"), named("alpha")], options()),
+        Err(Error::Invalid(_))
+    ));
+    assert!(matches!(
+        Host::start_agents(store.clone(), [], options()),
+        Err(Error::Invalid(_))
+    ));
+    let absent = store
+        .accept(&named("gamma"), "gamma", "k", json!(0), None)
+        .await
+        .unwrap();
+    let mut host =
+        Host::start_agents(store.clone(), [named("alpha"), named("beta")], options()).unwrap();
+    assert!(matches!(
+        host.submit("c", "k", json!(1), None).await,
+        Err(Error::Invalid(_))
+    ));
+    assert!(matches!(
+        host.submit_to("gamma", "c", "k", json!(1), None).await,
+        Err(Error::Invalid(_))
+    ));
+    let alpha = host
+        .submit_to("alpha", "alpha", "k", json!(1), None)
+        .await
+        .unwrap();
+    let beta = host
+        .submit_to("beta", "beta", "k", json!(2), None)
+        .await
+        .unwrap();
+    for (id, name) in [(alpha, "alpha"), (beta, "beta")] {
+        let done = wait_for(&host, id, RunState::is_terminal).await;
+        assert_eq!(done.agent_id, name);
+        assert_eq!(
+            done.phase,
+            Phase::Settled(Settlement::Completed(json!(name)))
+        );
+    }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while store.last_error(absent).await.unwrap().is_none() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let error = store.last_error(absent).await.unwrap().unwrap();
+    assert!(error.contains("gamma is not registered"), "{error}");
+    assert!(!store.status(absent).await.unwrap().is_terminal());
+    assert!(store.due(now_ms(), 10).await.unwrap().is_empty());
+    host.shutdown().await.unwrap();
+    let mut host = Host::start_agents(store.clone(), [named("gamma")], options()).unwrap();
+    host.retry(absent).await.unwrap();
+    assert_eq!(
+        wait_for(&host, absent, RunState::is_terminal).await.phase,
+        Phase::Settled(Settlement::Completed(json!("gamma")))
+    );
+    host.shutdown().await.unwrap();
+    fixture.close(store).await;
+}
+
 struct BlockingTool {
     spec: ToolSpec,
     started: Notify,
@@ -642,6 +717,10 @@ macro_rules! conformance_tests {
         #[tokio::test]
         async fn due_order_follows_waits_and_expiry() {
             due_order_waits_and_expiry(&$make).await;
+        }
+        #[tokio::test]
+        async fn one_host_routes_runs_to_several_agents() {
+            several_agents_share_one_store(&$make).await;
         }
     };
 }

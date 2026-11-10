@@ -45,6 +45,8 @@ Model/tool attempts and token use accumulate across recovery. Attempts can be ch
 
 ## Ownership and shutdown
 
+One host may serve several agents over one store (`Host::start_agents`, `Host::submit_to`). Runs record their agent ID at acceptance, and each claimed run executes with the registered agent of that ID; a run whose agent is not registered keeps a visible `Incompatible` error, like an incompatible binding, until a host with that agent retries it.
+
 Use `Host::shutdown().await` and then, for SQLite, `SqliteStore::close().await`. Shutdown stops admission, signals operations, and joins owned tasks; accepted work remains available to a later host. `Host::cancel` first persists explicit cancellation and then signals active work. Dropping the host signals shutdown but is not an asynchronous cleanup barrier.
 
 Model/tool implementations must not detach child tasks. If they own asynchronous resources, implement `cleanup`, which the engine invokes after each attempt, including interruptions. Cleanup has an explicit timeout; Rust cannot force an uncooperative external operation to undo itself. Handlers must yield to Tokio, honor cancellation, and bound CPU work; substantial blocking work belongs on an application-owned bounded blocking executor. SQLite uses its own bounded worker.
