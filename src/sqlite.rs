@@ -37,6 +37,8 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 
+#[cfg(feature = "memory")]
+mod memory;
 mod steering_queue;
 
 const STORAGE_VERSION: i64 = 2;

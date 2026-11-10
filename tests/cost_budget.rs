@@ -1164,3 +1164,182 @@ mod steering {
         );
     }
 }
+
+/// Budgets for the optional `memory` feature, which the core budgets above never exercise.
+#[cfg(feature = "memory")]
+mod memory {
+    use super::*;
+    use tokio_util::sync::CancellationToken;
+    use yielded_agent::memory::*;
+
+    // ------------------------------------------------------------------------------------------
+    // Budget table: today's measured values.
+    // ------------------------------------------------------------------------------------------
+
+    // Heap allocations on the driving thread: (count, requested bytes), with headroom.
+    /// `MemoryPolicy::prepare` with summaries and retrieval over an empty `InMemorySourceStore`:
+    /// what an enabled policy costs a turn when there is nothing to send, including the request's
+    /// cancellation token.
+    const ALLOC_PREPARE_EMPTY_STORE: Budget = Budget::new(4, 456);
+    /// The same over a fixed store: one summary of four sources and 16 retrievable sources with
+    /// 8-dimensional embeddings, of which the query matches four and the retriever keeps two.
+    /// Mostly the store's copy of its 17-record snapshot and the encoding of the three items sent.
+    const ALLOC_PREPARE_FIXED_STORE: Budget = Budget::new(264, 21_585);
+
+    // SQLite transactions per `SourceStore` call on `SqliteStore` once its tables exist (exact).
+    /// `upsert_source` of changed text, including its invalidation of dependent records.
+    const SQLITE_TRANSACTIONS_UPSERT_SOURCE: u64 = 1;
+    /// `upsert_source` of identical text and trust: a read only.
+    const SQLITE_TRANSACTIONS_UPSERT_UNCHANGED: u64 = 0;
+    /// `index_summary` over four sources: the record and its dependencies in one transaction.
+    const SQLITE_TRANSACTIONS_SUMMARY_WRITE: u64 = 1;
+    /// Rows that summary write inserts (exact): the record and one dependency per source.
+    const SQLITE_WRITES_SUMMARY_OVER_FOUR_SOURCES: u64 = 5;
+    /// `remove_source`, deleting the source and the records citing it.
+    const SQLITE_TRANSACTIONS_REMOVE_SOURCE: u64 = 1;
+    /// `load`, which `MemoryPolicy::prepare` performs once per model turn.
+    const SQLITE_TRANSACTIONS_LOAD: u64 = 0;
+
+    // ------------------------------------------------------------------------------------------
+
+    /// One axis per concept: sources mentioning "train" share a direction, the rest another.
+    struct Axes;
+    impl Embedder for Axes {
+        fn identity(&self) -> &str {
+            "cost-axes-v1/8"
+        }
+        fn embed(&self, text: &str) -> Result<Vec<f32>> {
+            let mut values = vec![0.0; 8];
+            values[usize::from(!text.contains("train"))] = 1.0;
+            Ok(values)
+        }
+    }
+
+    fn summarizer() -> ExtractiveSummarizer {
+        ExtractiveSummarizer::new(4, 512).unwrap()
+    }
+    fn policy(store: Arc<dyn SourceStore>) -> MemoryPolicy {
+        MemoryPolicy::new(store, 64)
+            .unwrap()
+            .with_summaries(summarizer().producer())
+            .unwrap()
+            .with_retriever(Arc::new(
+                SemanticRetriever::new(Arc::new(Axes), 2, 0.5).unwrap(),
+            ))
+    }
+
+    /// Four preferences summarized together, and 16 indexed notes, four about trains.
+    async fn fill(store: &dyn SourceStore) -> Vec<MemorySource> {
+        let mut preferences = Vec::new();
+        for n in 0..4 {
+            let text = format!("Preference {n} is recorded. It was confirmed.");
+            let id = format!("preference-{n}");
+            preferences.push(
+                store
+                    .upsert_source("c", &id, &text, SourceTrust::Approved)
+                    .await
+                    .unwrap(),
+            );
+        }
+        index_summary(store, "summary", &preferences, &summarizer())
+            .await
+            .unwrap();
+        for n in 0..16 {
+            let topic = if n % 4 == 0 { "train" } else { "weather" };
+            let id = format!("note-{n:02}");
+            let text = format!("Note {n} is about the {topic}.");
+            let source = store
+                .upsert_source("c", &id, &text, SourceTrust::Approved)
+                .await
+                .unwrap();
+            index_source(store, &id, &source, &Axes).await.unwrap();
+        }
+        preferences
+    }
+
+    async fn prepared(policy: &MemoryPolicy, input: &Value) -> Vec<Value> {
+        policy
+            .prepare(
+                ContextRequest::new(RunId::nil(), "c", input, 4096),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn prepare_allocation_budgets() {
+        let input = json!("When does the train leave?");
+        let empty = policy(Arc::new(InMemorySourceStore::default()));
+        stable("prepare_empty_store", ALLOC_PREPARE_EMPTY_STORE, || async {
+            assert!(prepared(&empty, &input).await.is_empty());
+        })
+        .await;
+
+        let store = Arc::new(InMemorySourceStore::default());
+        fill(store.as_ref()).await;
+        let fixed = policy(store);
+        stable("prepare_fixed_store", ALLOC_PREPARE_FIXED_STORE, || async {
+            let items = prepared(&fixed, &input).await;
+            let kinds: Vec<_> = items.iter().map(|item| item["kind"].clone()).collect();
+            assert_eq!(
+                kinds,
+                [json!("Retrieved"), json!("Retrieved"), json!("Summary")]
+            );
+        })
+        .await;
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn sqlite_transactions_per_memory_call() {
+        use yielded_agent::sqlite::SqliteStore;
+        let directory = tempfile::tempdir().unwrap();
+        let store = SqliteStore::open(directory.path().join("memory.sqlite"))
+            .await
+            .unwrap();
+        let mut preferences = fill(&store).await;
+        let mut last = store.metrics();
+        // Transactions and rows written since the previous call.
+        let mut delta = |name: &str| {
+            let now = store.metrics();
+            let (transactions, writes) = (
+                now.transactions - last.transactions,
+                now.writes - last.writes,
+            );
+            last = now;
+            eprintln!("sqlite_transactions_{name}: {transactions} ({writes} rows)");
+            (transactions, writes)
+        };
+        let text = "Preference 0 is recorded. It changed.";
+        preferences[0] = store
+            .upsert_source("c", "preference-0", text, SourceTrust::Approved)
+            .await
+            .unwrap();
+        assert_eq!(delta("upsert_source").0, SQLITE_TRANSACTIONS_UPSERT_SOURCE);
+        store
+            .upsert_source("c", "preference-0", text, SourceTrust::Approved)
+            .await
+            .unwrap();
+        assert_eq!(
+            delta("upsert_unchanged").0,
+            SQLITE_TRANSACTIONS_UPSERT_UNCHANGED
+        );
+        index_summary(&store, "summary", &preferences, &summarizer())
+            .await
+            .unwrap();
+        assert_eq!(
+            delta("summary_write"),
+            (
+                SQLITE_TRANSACTIONS_SUMMARY_WRITE,
+                SQLITE_WRITES_SUMMARY_OVER_FOUR_SOURCES
+            )
+        );
+        assert_eq!(store.load("c", 64).await.unwrap().len(), 17);
+        assert_eq!(delta("load").0, SQLITE_TRANSACTIONS_LOAD);
+        store.remove_source("c", "preference-1").await.unwrap();
+        assert_eq!(delta("remove_source").0, SQLITE_TRANSACTIONS_REMOVE_SOURCE);
+        assert_eq!(store.load("c", 64).await.unwrap().len(), 16);
+        store.close().await.unwrap();
+    }
+}

@@ -6,6 +6,8 @@ mod context;
 mod engine;
 mod error;
 mod host;
+#[cfg(feature = "memory")]
+pub mod memory;
 mod model;
 #[cfg(feature = "openai")]
 pub mod openai;
@@ -52,7 +54,8 @@ pub use types::{
 /// ```
 ///
 /// ```compile_fail,E0603
-/// // Modules other than the adapters are private; their items are exported at the root.
+/// // Modules other than the optional features' are private; their items are exported at the
+/// // root.
 /// use yielded_agent::types::RunState;
 /// ```
 #[cfg(doctest)]
