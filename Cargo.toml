@@ -47,6 +47,9 @@ required-features = ["sqlite"]
 [[example]]
 name = "recurring_personal_agent"
 required-features = ["sqlite"]
+[[example]]
+name = "mcp_filesystem"
+required-features = ["mcp"]
 [[bench]]
 name = "agent_loop"
 harness = false
@@ -62,3 +65,7 @@ required-features = ["sqlite"]
 name = "attached_subagents"
 harness = false
 required-features = ["sqlite"]
+[[bench]]
+name = "mcp"
+harness = false
+required-features = ["mcp"]
