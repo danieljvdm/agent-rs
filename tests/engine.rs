@@ -1120,18 +1120,18 @@ async fn progress_events_for_one_tool_round_are_exact() {
             "commit:3",
             "tools:1",
             "commit:4",
+            // The tool outcome carries the active-time refund.
             "commit:5",
             "commit:6",
-            "commit:7",
             "model",
-            "commit:8",
+            "commit:7",
             "delta:do",
             "delta:ne",
-            "commit:9",
+            "commit:8",
             "settled",
         ]
     );
-    assert_eq!(state.revision, 9);
+    assert_eq!(state.revision, 8);
 }
 
 struct RecordingModel {

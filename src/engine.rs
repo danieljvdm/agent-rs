@@ -715,7 +715,6 @@ impl Engine {
         commit(checkpoint, state, control).await?;
         let mut window = Window::new(reservation);
         let mut in_flight = FuturesUnordered::new();
-        let mut ran = false;
         loop {
             let mut admitted = if window.open {
                 self.admit(state, control, &mut window, &mut in_flight)
@@ -724,7 +723,14 @@ impl Engine {
                 Vec::new()
             };
             let closing = in_flight.is_empty() && admitted.is_empty();
-            if window.storage.is_none() && (window.unsaved || !admitted.is_empty()) {
+            if closing {
+                // Nothing runs any more and nothing has an effect before the next commit, so the
+                // refund rides on the commit of the last outcome instead of a commit of its own.
+                window.refund(state);
+            }
+            if window.storage.is_none()
+                && (window.unsaved || !admitted.is_empty() || closing && window.interrupted)
+            {
                 if !admitted.is_empty() {
                     let count = admitted.len();
                     emit(state, control, ProgressEvent::ToolsStarted { count });
@@ -740,16 +746,8 @@ impl Engine {
                 }
             }
             if closing {
-                window.refund(state);
-                if window.storage.is_none()
-                    && (ran || window.interrupted)
-                    && let Err(error) = commit(checkpoint, state, control).await
-                {
-                    window.storage = Some(error);
-                }
                 break;
             }
-            ran |= !admitted.is_empty();
             for admission in admitted {
                 let op = &state.operations[admission.index];
                 let context = ToolContext {
