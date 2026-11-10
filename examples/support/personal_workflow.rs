@@ -1054,6 +1054,10 @@ pub async fn run_suite(options: SuiteOptions) -> Result<SuiteReport> {
     if options.trials == 0 || options.trials > 20 {
         return Err(invalid("trials must be 1..=20"));
     }
+    // The default `eval-results/` parent is Git-ignored and absent in a fresh checkout.
+    if let Some(parent) = options.output.parent() {
+        fs::create_dir_all(parent).map_err(io_error)?;
+    }
     fs::create_dir(&options.output).map_err(io_error)?;
     let mut report = SuiteReport {
         fixture: FIXTURE_VERSION.into(),

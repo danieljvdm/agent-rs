@@ -1,6 +1,0 @@
-{
-  "reminder_id": "reminder-5df7e01d-c916-4bb9-b4ed-e9dc49c40c14",
-  "title": "Renew passport",
-  "at": "2026-11-02T09:15:00-08:00",
-  "idempotency_key": "5df7e01d-c916-4bb9-b4ed-e9dc49c40c14:3:call_BbqpttwVZovxQDW7Uu1NAuOV"
-}

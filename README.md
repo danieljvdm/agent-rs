@@ -80,9 +80,9 @@ cargo check --no-default-features --locked
 cargo bench --bench agent_loop --locked
 ```
 
-[Benchmark instructions and retained results](benchmark-results/README.md) describe fixed workloads, correctness assertions, process CPU and allocation runs, and revision comparisons. Timings are informational until observed variance supports a timing gate.
+[Benchmark instructions](docs/benchmarks.md) and [recorded results](docs/benchmark-results.md) describe fixed workloads, correctness assertions, process CPU and allocation runs, and revision comparisons. Timings are informational until observed variance supports a timing gate.
 
-[Verification evidence](docs/verification.md) records the automated checks, restart workflow, [live personal-agent evaluation](eval-results/live-2026-10-29/SUMMARY.md), and [full hosted benchmark comparison and calibration](benchmark-results/hosted-2026-10-29/README.md).
+[Verification evidence](docs/verification.md) records the automated checks, restart workflow, [live personal-agent evaluation](docs/personal-workflow-eval.md#recorded-results), and [full hosted benchmark comparison and calibration](docs/benchmark-results.md#full-hosted-comparison-and-calibration).
 
 The manual [performance workflow](.github/workflows/performance.yml) runs longer comparisons or same-source calibration on one hosted Linux runner. [Calibration notes](docs/benchmark-calibration.md) explain the paired measurements and why timing gates remain informational until enough independent runs establish useful thresholds.
 
