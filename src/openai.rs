@@ -113,7 +113,7 @@ impl Model for OpenAiModel {
             _ = cancel.cancelled() => return Err(Error::Interrupted),
             response = self.client.post(self.endpoint.clone()).header(AUTHORIZATION, self.authorization.clone())
                 .header("Accept", "text/event-stream").json(&body).send() =>
-                response.map_err(|error| protocol_caused_by("HTTP request failed", error))?,
+                response.map_err(|error| protocol_caused_by("HTTP request failed", error.without_url()))?,
         };
         if !response.status().is_success() {
             return Err(protocol(&format!(
@@ -155,7 +155,7 @@ impl Model for OpenAiModel {
                     let chunk = tokio::select! {
                         biased;
                         _ = state.cancel.cancelled() => return Err(Error::Interrupted),
-                        chunk = state.response.chunk() => chunk.map_err(|error| protocol_caused_by("HTTP response read failed", error))?,
+                        chunk = state.response.chunk() => chunk.map_err(|error| protocol_caused_by("HTTP response read failed", error.without_url()))?,
                     };
                     match chunk {
                         Some(bytes) => state.pending.extend(state.parser.feed(&bytes)?),
@@ -465,8 +465,8 @@ impl Parser {
             }));
             return Ok(());
         }
-        let chunk: Chunk = serde_json::from_str(data)
-            .map_err(|error| protocol_caused_by("malformed SSE chunk", error))?;
+        let chunk: Chunk =
+            serde_json::from_str(data).map_err(|_| protocol("malformed SSE chunk"))?;
         if chunk.error.is_some() {
             return Err(protocol("provider stream error"));
         }
@@ -564,7 +564,8 @@ fn set_identity(target: &mut Option<String>, value: String) -> Result<()> {
 fn protocol(message: &str) -> Error {
     Error::provider(format!("OpenAI: {message}"))
 }
-/// A protocol failure caused by `error`, which is kept as the source.
+/// A protocol failure caused by `error`, which is kept as the source and shown in the message.
+/// Pass only causes whose text cannot quote server content or the request URL.
 fn protocol_caused_by(
     message: &'static str,
     error: impl std::error::Error + Send + Sync + 'static,
@@ -650,6 +651,12 @@ mod tests {
         );
         let cause = std::error::Error::source(&error).unwrap();
         assert!(cause.is::<serde_json::Error>());
+    }
+    #[test]
+    fn malformed_chunk_error_does_not_quote_server_content() {
+        let source = event(json!({"choices":[{"index":"leaked-server-text","delta":{}}]}));
+        let error = Parser::new(1024).feed(source.as_bytes()).unwrap_err();
+        assert_eq!(error.to_string(), "provider: OpenAI: malformed SSE chunk");
     }
     #[test]
     fn protocol_failures_never_publish_completed_response() {
