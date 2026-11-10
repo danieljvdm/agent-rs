@@ -36,15 +36,16 @@ const TOOL_SCHEDULE_VIRTUAL_MS: u64 = 600;
 
 // Heap allocations on the driving thread: (count, requested bytes), with headroom.
 /// `Engine::run` of a final-only response in an empty conversation.
-const ALLOC_RUN_EMPTY_CONVERSATION: Budget = Budget::new(519, 48_743);
-/// The same run in a conversation holding 1,024 prior entries: history and context copies.
-const ALLOC_RUN_1024_PRIOR_ENTRIES: Budget = Budget::new(14_857, 3_584_911);
+const ALLOC_RUN_EMPTY_CONVERSATION: Budget = Budget::new(398, 36_326);
+/// The same run in a conversation holding 1,024 prior entries: one copy into the run's prior
+/// context and one into the model request.
+const ALLOC_RUN_1024_PRIOR_ENTRIES: Budget = Budget::new(6_543, 1_771_450);
 /// `Engine::run` of four rounds of one tool each in an empty conversation.
-const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(1_699, 179_183);
+const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(1_012, 104_564);
 /// `Agent::clone` with four typed tools (once per spawned durable run and per `accept`).
-const ALLOC_AGENT_CLONE: Budget = Budget::new(14, 1_500);
+const ALLOC_AGENT_CLONE: Budget = Budget::new(7, 764);
 /// `Agent::binding` with four typed tools (rebuilt on every `drive` and `accept`).
-const ALLOC_AGENT_BINDING: Budget = Budget::new(183, 17_133);
+const ALLOC_AGENT_BINDING: Budget = Budget::new(182, 17_101);
 
 /// Allowance above a measured allocation or record-byte budget.
 const HEADROOM_PERCENT: u64 = 2;

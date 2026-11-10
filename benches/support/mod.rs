@@ -181,7 +181,7 @@ pub struct PreparedRun {
 impl PreparedRun {
     pub fn admit(self, agent: &Agent) -> RunState {
         agent
-            .new_run(self.conversation, self.input, self.history, None)
+            .new_run(self.conversation, self.input, &self.history, None)
             .unwrap()
     }
 }

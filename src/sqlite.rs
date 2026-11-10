@@ -421,7 +421,7 @@ impl SqliteStore {
             let busy: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM active WHERE conversation=?1)", [&conversation], |r| r.get(0)).map_err(storage)?;
             if busy { return Err(Error::ConversationBusy); }
             let context = bounded_history(&tx, &conversation, agent.limits().max_context_bytes)?;
-            let state = agent.new_run(conversation.clone(), input, context, expires_at_ms)?;
+            let state = agent.new_run(conversation.clone(), input, &context, expires_at_ms)?;
             tx.execute("INSERT INTO runs(id,conversation,idempotency_key,payload) VALUES(?1,?2,?3,?4)",
                 params![state.id.to_string(), conversation, key, payload]).map_err(storage)?;
             tx.execute("INSERT INTO active(run_id,conversation,generation,revision,state,wake_at) VALUES(?1,?2,?3,?4,?5,?6)",

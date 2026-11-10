@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
     net::TcpListener,
+    sync::Arc,
     thread,
 };
 use tokio_util::sync::CancellationToken;
@@ -13,13 +14,14 @@ fn request() -> ModelRequest {
     ModelRequest {
         run_id: uuid::Uuid::nil(),
         instructions: "Return the number 42".into(),
-        config: ModelConfig {
+        config: Arc::new(ModelConfig {
             model: "test-model".into(),
             temperature: None,
-        },
+        }),
         history: vec![],
-        tools: vec![],
-        output_schema: json!({"type":"integer"}),
+        derived_context: vec![],
+        tools: Arc::new([]),
+        output_schema: Arc::new(json!({"type":"integer"})),
         turn: 1,
         max_response_bytes: 1024,
         remaining_tokens: 256,

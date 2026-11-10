@@ -1,3 +1,4 @@
+use crate::context::{assemble, encoded_len, suffix_start};
 use crate::*;
 use async_trait::async_trait;
 use futures::{StreamExt, stream::FuturesUnordered};
@@ -14,16 +15,19 @@ type Validator = Arc<dyn Fn(&Value) -> Result<()> + Send + Sync>;
 #[derive(Clone)]
 pub struct Agent {
     id: String,
-    instructions: String,
+    // Shared with every `ModelRequest` instead of copied into each one.
+    instructions: Arc<str>,
     model: Arc<dyn Model>,
-    config: ModelConfig,
+    config: Arc<ModelConfig>,
     tools: Vec<Arc<dyn Tool>>,
+    tool_specs: Arc<[ToolSpec]>,
     limits: Limits,
     input_schema: Value,
-    output_schema: Value,
+    output_schema: Arc<Value>,
     validate_input: Validator,
     validate_output: Validator,
     authorizer: Arc<dyn Authorizer>,
+    context_policy: Option<(Arc<dyn ContextPolicy>, usize)>,
 }
 impl Agent {
     pub fn new<I, O>(
@@ -73,13 +77,16 @@ impl Agent {
         }
         Ok(Self {
             id,
-            instructions: instructions.into(),
+            instructions: instructions.into().into(),
             model,
-            config,
+            config: Arc::new(config),
+            tool_specs: tools.iter().map(|tool| tool.spec().clone()).collect(),
             tools,
             limits,
             input_schema: serde_json::to_value(schema_for!(I)).expect("schema serialization"),
-            output_schema: serde_json::to_value(schema_for!(O)).expect("schema serialization"),
+            output_schema: Arc::new(
+                serde_json::to_value(schema_for!(O)).expect("schema serialization"),
+            ),
             validate_input: Arc::new(|value| {
                 serde_json::from_value::<I>(value.clone())
                     .map(|_| ())
@@ -91,11 +98,27 @@ impl Agent {
                     .map_err(|e| Error::Invalid(e.to_string()))
             }),
             authorizer: Arc::new(AllowAll),
+            context_policy: None,
         })
     }
     pub fn with_authorizer(mut self, authorizer: Arc<dyn Authorizer>) -> Self {
         self.authorizer = authorizer;
         self
+    }
+    /// Opt into a [`ContextPolicy`]. `max_derived_bytes` caps the encoded array of its derived
+    /// context within `max_context_bytes`; a policy that only pins entries may pass zero.
+    pub fn with_context_policy(
+        mut self,
+        policy: Arc<dyn ContextPolicy>,
+        max_derived_bytes: usize,
+    ) -> Result<Self> {
+        if max_derived_bytes > self.limits.max_context_bytes {
+            return Err(Error::Invalid(
+                "derived context cap must fit the context limit".into(),
+            ));
+        }
+        self.context_policy = Some((policy, max_derived_bytes));
+        Ok(self)
     }
     pub fn id(&self) -> &str {
         &self.id
@@ -104,14 +127,19 @@ impl Agent {
         &self.limits
     }
     pub fn binding(&self) -> Value {
-        json!({"id":self.id,"instructions":self.instructions,"model":self.config,"tools":self.tools.iter().map(|t|t.spec()).collect::<Vec<_>>(),
-            "input_schema":self.input_schema,"output_schema":self.output_schema,"limits":self.limits})
+        let mut binding = json!({"id":self.id,"instructions":&*self.instructions,"model":&*self.config,"tools":&*self.tool_specs,
+            "input_schema":self.input_schema,"output_schema":&*self.output_schema,"limits":self.limits});
+        if let Some((policy, max_bytes)) = &self.context_policy {
+            binding["context_policy"] = json!({"binding":policy.binding(),"max_bytes":max_bytes});
+        }
+        binding
     }
+    /// Accepts `input`, retaining the bounded suffix of `conversation` that fits the context limit.
     pub fn new_run(
         &self,
         conversation_id: impl Into<String>,
         input: Value,
-        prior_context: Vec<HistoryEntry>,
+        conversation: &[HistoryEntry],
         expires_at_ms: Option<u64>,
     ) -> Result<RunState> {
         (self.validate_input)(&input)?;
@@ -125,7 +153,8 @@ impl Agent {
         if encoded_len(&input_entry)? + 2 > self.limits.max_context_bytes {
             return Err(Error::Invalid("input exceeds context limit".into()));
         }
-        let prior_context = select_context(&prior_context, self.limits.max_context_bytes)?;
+        let prior_context =
+            conversation[suffix_start(conversation, self.limits.max_context_bytes)?..].to_vec();
         Ok(RunState {
             version: STATE_VERSION,
             id: RunId::new_v4(),
@@ -214,7 +243,7 @@ impl Engine {
         let input = serde_json::to_value(input).map_err(|e| Error::Invalid(e.to_string()))?;
         let state = self
             .agent
-            .new_run("memory", input, conversation.history.clone(), None)?;
+            .new_run("memory", input, &conversation.history, None)?;
         conversation.last_run = Some(state);
         self.resume_from(conversation, RunControl::default(), 0)
             .await
@@ -393,22 +422,6 @@ impl Engine {
         checkpoint: &dyn Checkpoint,
         control: &RunControl,
     ) -> Result<()> {
-        let request = ModelRequest {
-            run_id: state.id,
-            instructions: self.agent.instructions.clone(),
-            config: self.agent.config.clone(),
-            history: model_context(state)?,
-            tools: self.agent.tools.iter().map(|t| t.spec().clone()).collect(),
-            output_schema: self.agent.output_schema.clone(),
-            turn: state.usage.model_calls + 1,
-            max_response_bytes: state.limits.max_response_bytes,
-            remaining_tokens: state.limits.max_tokens.saturating_sub(
-                state
-                    .usage
-                    .input_tokens
-                    .saturating_add(state.usage.output_tokens),
-            ),
-        };
         let (reservation, work_ms) = reserve(state)?;
         state.usage.model_calls += 1;
         state.phase = Phase::ModelInFlight;
@@ -423,6 +436,27 @@ impl Engine {
         let mut delta_events = 0_u64;
         let outcome = {
             let future = async {
+                // Assemble context after the dispatch checkpoint and inside the operation's
+                // deadline, so the checkpoint can contribute history and preparation is bounded.
+                let (history, derived_context) =
+                    assemble(state, self.agent.context_policy.as_ref(), &operation_cancel).await?;
+                let request = ModelRequest {
+                    run_id: state.id,
+                    instructions: self.agent.instructions.clone(),
+                    config: self.agent.config.clone(),
+                    history,
+                    derived_context,
+                    tools: self.agent.tool_specs.clone(),
+                    output_schema: self.agent.output_schema.clone(),
+                    turn: state.usage.model_calls,
+                    max_response_bytes: state.limits.max_response_bytes,
+                    remaining_tokens: state.limits.max_tokens.saturating_sub(
+                        state
+                            .usage
+                            .input_tokens
+                            .saturating_add(state.usage.output_tokens),
+                    ),
+                };
                 let mut stream = self
                     .agent
                     .model
@@ -472,7 +506,16 @@ impl Engine {
         operation_cancel.cancel();
         let cleanup = tokio::time::timeout(
             Duration::from_millis(state.limits.cleanup_timeout_ms),
-            self.agent.model.cleanup(state.id),
+            async {
+                let model = self.agent.model.cleanup(state.id);
+                match &self.agent.context_policy {
+                    None => model.await,
+                    Some((policy, _)) => {
+                        let (model, context) = tokio::join!(model, policy.cleanup(state.id));
+                        model.and(context)
+                    }
+                }
+            },
         )
         .await;
         refund(state, reservation, started.elapsed());
@@ -903,11 +946,6 @@ fn uncertain_dispatched(state: &mut RunState, reason: &str) {
         }
     }
 }
-fn encoded_len<T: Serialize>(value: &T) -> Result<usize> {
-    serde_json::to_vec(value)
-        .map(|v| v.len())
-        .map_err(|e| Error::Invalid(e.to_string()))
-}
 fn truncate(value: &str, max: usize) -> String {
     let mut end = value.len().min(max);
     while !value.is_char_boundary(end) {
@@ -1038,49 +1076,6 @@ async fn run_work<T>(
         _ = tokio::time::sleep_until(deadline) => WorkOutcome::TimedOut,
         result = future => WorkOutcome::Done(result),
     }
-}
-/// Select a bounded suffix while retaining each complete model/tool exchange intact.
-pub fn select_context(history: &[HistoryEntry], max_bytes: usize) -> Result<Vec<HistoryEntry>> {
-    let mut bytes = 2_usize;
-    let mut start = history.len();
-    for (index, entry) in history.iter().enumerate().rev() {
-        let size = encoded_len(entry)?.saturating_add(usize::from(start < history.len()));
-        if bytes.saturating_add(size) > max_bytes {
-            if start == history.len() {
-                return Err(Error::Invalid(
-                    "newest history group exceeds context limit".into(),
-                ));
-            }
-            break;
-        }
-        bytes += size;
-        start = index;
-    }
-    if bytes > max_bytes {
-        return Err(Error::Invalid("context limit too small".into()));
-    }
-    Ok(history[start..].to_vec())
-}
-fn model_context(state: &RunState) -> Result<Vec<HistoryEntry>> {
-    let all: Vec<_> = state
-        .prior_context
-        .iter()
-        .chain(&state.history)
-        .cloned()
-        .collect();
-    let mut selected = select_context(&all, state.limits.max_context_bytes)?;
-    let current_input_index = state.prior_context.len();
-    let selected_start = all.len() - selected.len();
-    if selected_start > current_input_index {
-        let input = HistoryEntry::Input(state.input.clone());
-        let input_bytes = encoded_len(&input)?.saturating_add(1);
-        selected = select_context(
-            &all,
-            state.limits.max_context_bytes.saturating_sub(input_bytes),
-        )?;
-        selected.insert(0, input);
-    }
-    Ok(selected)
 }
 /// Resolve only the exact outstanding operation. Resolution itself must be committed by the caller.
 /// Reconciliation is allowed after cancellation so uncertainty stays visible and resolvable.

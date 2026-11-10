@@ -64,7 +64,7 @@ The [personal-agent workflow eval](docs/personal-workflow-eval.md) exercises a m
 
 `ScriptedModel` is a deterministic in-process provider for tests and benchmarks. `openai::OpenAiModel` implements Chat Completions SSE, buffers and validates a complete response before tools start, and accepts explicit credentials. It does not load credentials from the environment or retry HTTP requests implicitly. Supply the model name through `ModelConfig`.
 
-`Limits` bounds model attempts, tool attempts, tokens, output bytes, context bytes, parallelism, operation time, and cumulative active time. `RunState` carries the original limits and counters through recovery. Context selection keeps complete tool-call/result groups and the current input. Retained history is separate from model context.
+`Limits` bounds model attempts, tool attempts, tokens, output bytes, context bytes, parallelism, operation time, and cumulative active time. `RunState` carries the original limits and counters through recovery. Context selection keeps complete tool-call/result groups, the current input and the latest exchange. An optional `ContextPolicy`, set with `Agent::with_context_policy`, can pin further entries of the run's history and add bounded derived context prepared inside the model operation; its rustdoc states the contract. Retained history is separate from model context.
 
 Progress events are transient and best effort through a caller-supplied bounded Tokio channel; a full channel drops events. Reconnect using durable status/history, not token deltas. Standard `tracing` emits run spans without prompts or credentials.
 
