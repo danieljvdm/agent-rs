@@ -1309,6 +1309,7 @@ fn refund(state: &mut RunState, reservation: u64, elapsed: Duration) {
 }
 /// Best-effort and non-blocking: a closed or full channel drops the event. Events are not
 /// counted or retained in run state.
+#[inline]
 fn emit(state: &RunState, control: &RunControl, kind: ProgressKind) {
     if let Some(sender) = &control.events {
         let _ = sender.try_send(ProgressEvent {
