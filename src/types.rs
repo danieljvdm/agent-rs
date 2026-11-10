@@ -211,23 +211,52 @@ impl RunState {
         matches!(self.phase, Phase::Settled(_))
     }
     pub fn is_runnable(&self, now_ms: u64) -> bool {
+        self.wake_at().is_some_and(|time| time <= now_ms)
+    }
+    /// The earliest UTC Unix millisecond at which a host should drive this run, or `None`
+    /// while it is settled or blocked on approval, input, or reconciliation (and has no
+    /// expiry). Every store persists this at each write; it is the only eligibility rule.
+    pub fn wake_at(&self) -> Option<u64> {
         if self.is_terminal() {
-            return false;
+            return None;
         }
-        if self.cancel_requested || self.expires_at_ms.is_some_and(|t| t <= now_ms) {
-            return true;
+        let ready = if self.cancel_requested {
+            Some(0)
+        } else {
+            match self.phase {
+                Phase::Ready | Phase::ModelInFlight => Some(0),
+                Phase::Tools => {
+                    let mut latest = 0;
+                    let mut blocked = false;
+                    for op in &self.operations {
+                        match &op.status {
+                            OperationStatus::Approval
+                            | OperationStatus::Unknown { .. }
+                            | OperationStatus::Waiting(WaitRequest::Input { .. }) => blocked = true,
+                            OperationStatus::Waiting(WaitRequest::Until { unix_ms }) => {
+                                latest = latest.max(*unix_ms)
+                            }
+                            _ => (),
+                        }
+                    }
+                    if blocked { None } else { Some(latest) }
+                }
+                Phase::Settled(_) => None,
+            }
+        };
+        match (ready, self.expires_at_ms) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
         }
-        match self.phase {
-            Phase::Ready | Phase::ModelInFlight => true,
-            Phase::Tools => self.operations.iter().all(|o| match &o.status {
-                OperationStatus::Approval
-                | OperationStatus::Unknown { .. }
-                | OperationStatus::Waiting(WaitRequest::Input { .. }) => false,
-                OperationStatus::Waiting(WaitRequest::Until { unix_ms }) => *unix_ms <= now_ms,
-                _ => true,
-            }),
-            Phase::Settled(_) => false,
-        }
+    }
+    /// Whether an unsettled run holds dispatched work without a recorded outcome. Startup
+    /// discovery drives such runs once even when a sibling wait keeps `wake_at` empty.
+    pub fn needs_recovery(&self) -> bool {
+        !self.is_terminal()
+            && self
+                .operations
+                .iter()
+                .any(|op| matches!(op.status, OperationStatus::Dispatched))
     }
 }
 #[derive(Clone, Debug)]

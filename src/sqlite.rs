@@ -82,39 +82,6 @@ fn decode_state(text: &str) -> Result<RunState> {
     }
     serde_json::from_value(value).map_err(storage)
 }
-fn wake_at(state: &RunState) -> Option<u64> {
-    if state.is_terminal() {
-        return None;
-    }
-    let ready = if state.cancel_requested {
-        Some(0)
-    } else {
-        match state.phase {
-            Phase::Ready | Phase::ModelInFlight => Some(0),
-            Phase::Tools => {
-                let mut latest = 0;
-                let mut blocked = false;
-                for op in &state.operations {
-                    match &op.status {
-                        OperationStatus::Approval
-                        | OperationStatus::Unknown { .. }
-                        | OperationStatus::Waiting(WaitRequest::Input { .. }) => blocked = true,
-                        OperationStatus::Waiting(WaitRequest::Until { unix_ms }) => {
-                            latest = latest.max(*unix_ms)
-                        }
-                        _ => (),
-                    }
-                }
-                if blocked { None } else { Some(latest) }
-            }
-            Phase::Settled(_) => None,
-        }
-    };
-    match (ready, state.expires_at_ms) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    }
-}
 fn sql_time(value: Option<u64>) -> Option<i64> {
     value.map(|v| v.min(i64::MAX as u64) as i64)
 }
@@ -257,7 +224,7 @@ fn write_state(tx: &Transaction<'_>, state: &RunState) -> Result<u64> {
                 state.generation,
                 state.revision,
                 encoded,
-                sql_time(wake_at(state))
+                sql_time(state.wake_at())
             ],
         )
         .map_err(storage)?;
@@ -425,7 +392,7 @@ impl SqliteStore {
             tx.execute("INSERT INTO runs(id,conversation,idempotency_key,payload) VALUES(?1,?2,?3,?4)",
                 params![state.id.to_string(), conversation, key, payload]).map_err(storage)?;
             tx.execute("INSERT INTO active(run_id,conversation,generation,revision,state,wake_at) VALUES(?1,?2,?3,?4,?5,?6)",
-                params![state.id.to_string(), state.conversation_id, state.generation, state.revision, encode(&state)?, sql_time(wake_at(&state))]).map_err(storage)?;
+                params![state.id.to_string(), state.conversation_id, state.generation, state.revision, encode(&state)?, sql_time(state.wake_at())]).map_err(storage)?;
             let writes = 2 + append_evidence(&tx, &state, 0)?;
             tx.commit().map_err(storage)?;
             db.count(writes);
@@ -620,11 +587,7 @@ impl SqliteStore {
             )
             .map_err(storage)?;
             let mut writes = 1 + write_state(&tx, &state)?;
-            if state
-                .operations
-                .iter()
-                .any(|op| matches!(op.status, OperationStatus::Dispatched))
-            {
+            if state.needs_recovery() {
                 // Explicit repair must get one recovery pass even when a sibling waits.
                 // Claim recomputes normal eligibility before invoking the engine.
                 writes += tx
