@@ -12,6 +12,8 @@ use serde_json::Value;
 
 use std::{collections::HashMap, sync::Mutex};
 
+mod automation;
+
 /// Runs held in memory behind one lock. Each method is one atomic step.
 #[derive(Default)]
 pub struct MemoryStore {
@@ -27,6 +29,8 @@ struct Inner {
     conversations: HashMap<String, Vec<(HistoryEntry, usize)>>,
     /// Every operation each child recorded, as `Run::operations` holds a run's own.
     child_operations: HashMap<RunId, Vec<Operation>>,
+    /// Automations, kept under the same lock so a firing is one atomic step.
+    automations: automation::Automations,
 }
 struct Run {
     state: RunState,
@@ -105,6 +109,64 @@ impl MemoryStore {
 impl Inner {
     fn run(&mut self, id: RunId) -> Result<&mut Run> {
         self.runs.get_mut(&id).ok_or(Error::NotFound)
+    }
+    /// [`DurableStore::accept`] under the store's lock, so an automation firing can accept
+    /// under the same lock as its own writes. True when the run is new.
+    fn accept(
+        &mut self,
+        agent: &Agent,
+        conversation: &str,
+        key: &str,
+        input: Value,
+        expires_at_ms: Option<u64>,
+    ) -> Result<(RunId, bool)> {
+        check_acceptance(conversation, key, expires_at_ms)?;
+        let acceptance = (encode(&input)?, encode(agent.binding())?, expires_at_ms);
+        let identity = (conversation.to_owned(), key.to_owned());
+        if let Some(id) = self.keys.get(&identity) {
+            return if self.runs[id].acceptance == acceptance {
+                Ok((*id, false))
+            } else {
+                Err(Error::IdempotencyConflict)
+            };
+        }
+        if self.unsettled.contains_key(conversation) {
+            return Err(Error::ConversationBusy);
+        }
+        let mut context = Vec::new();
+        let mut bytes = 2usize;
+        for (entry, size) in self
+            .conversations
+            .get(conversation)
+            .into_iter()
+            .flatten()
+            .rev()
+        {
+            bytes = bytes.saturating_add(*size).saturating_add(1);
+            if bytes > agent.limits().max_context_bytes {
+                break;
+            }
+            context.push(entry.clone());
+        }
+        context.reverse();
+        let state = agent.new_run(conversation, input, &context, expires_at_ms)?;
+        let id = state.id;
+        let history = sizes(&state.history)?;
+        self.keys.insert(identity, id);
+        self.unsettled.insert(conversation.to_owned(), id);
+        self.runs.insert(
+            id,
+            Run {
+                state,
+                acceptance,
+                wake_at: None,
+                last_error: None,
+                operations: Vec::new(),
+                steering: Vec::new(),
+            },
+        );
+        self.persist(id, history, false, Vec::new());
+        Ok((id, true))
     }
     /// After `run.state` changed: index its operations, discovery fields and new history, and
     /// those of the children that changed.
@@ -223,53 +285,8 @@ impl DurableStore for MemoryStore {
         input: Value,
         expires_at_ms: Option<u64>,
     ) -> Result<RunId> {
-        check_acceptance(conversation, key, expires_at_ms)?;
-        let acceptance = (encode(&input)?, encode(agent.binding())?, expires_at_ms);
         let mut inner = self.lock()?;
-        let identity = (conversation.to_owned(), key.to_owned());
-        if let Some(id) = inner.keys.get(&identity) {
-            return if inner.runs[id].acceptance == acceptance {
-                Ok(*id)
-            } else {
-                Err(Error::IdempotencyConflict)
-            };
-        }
-        if inner.unsettled.contains_key(conversation) {
-            return Err(Error::ConversationBusy);
-        }
-        let mut context = Vec::new();
-        let mut bytes = 2usize;
-        for (entry, size) in inner
-            .conversations
-            .get(conversation)
-            .into_iter()
-            .flatten()
-            .rev()
-        {
-            bytes = bytes.saturating_add(*size).saturating_add(1);
-            if bytes > agent.limits().max_context_bytes {
-                break;
-            }
-            context.push(entry.clone());
-        }
-        context.reverse();
-        let state = agent.new_run(conversation, input, &context, expires_at_ms)?;
-        let id = state.id;
-        let history = sizes(&state.history)?;
-        inner.keys.insert(identity, id);
-        inner.unsettled.insert(conversation.to_owned(), id);
-        inner.runs.insert(
-            id,
-            Run {
-                state,
-                acceptance,
-                wake_at: None,
-                last_error: None,
-                operations: Vec::new(),
-                steering: Vec::new(),
-            },
-        );
-        inner.persist(id, history, false, Vec::new());
+        let (id, _) = inner.accept(agent, conversation, key, input, expires_at_ms)?;
         Ok(id)
     }
     async fn status(&self, id: RunId) -> Result<RunState> {
