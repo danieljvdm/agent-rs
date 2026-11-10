@@ -1,0 +1,566 @@
+//! Cost guards for fixed workloads. Every hard gate is a deterministic count, never wall-clock
+//! time. A change that makes the runtime cheaper proves it by lowering one constant below; a
+//! change that makes it more expensive fails here instead of regressing silently.
+//!
+//! Exact counts are asserted with equality, so an improvement must also update this table.
+//! Allocation and record-byte budgets hold the measured value and allow `HEADROOM_PERCENT` above
+//! it for standard-library and platform differences. Run with `--nocapture` to print every value.
+// The SQLite budgets stay in the one table even when the feature is disabled.
+#![cfg_attr(not(feature = "sqlite"), allow(dead_code))]
+
+// ---------------------------------------------------------------------------------------------
+// Budget table: today's measured values.
+// ---------------------------------------------------------------------------------------------
+
+// SQLite transactions for `SqliteStore::claim` plus `Engine::drive` to settlement (exact).
+/// A run whose first model response is final: claim, model intent, settlement.
+const SQLITE_TRANSACTIONS_NO_TOOLS: u64 = 3;
+/// One round of one tool: seven commits per single-tool round.
+const SQLITE_TRANSACTIONS_ONE_TOOL_ROUND: u64 = 10;
+/// Four rounds of one tool each.
+const SQLITE_TRANSACTIONS_FOUR_TOOL_ROUNDS: u64 = 31;
+/// One round of four parallel tools: one commit per tool outcome.
+const SQLITE_TRANSACTIONS_FOUR_PARALLEL_TOOLS: u64 = 13;
+
+// Bytes of SQLite records written (every inserted or updated row), from `accept` to settlement.
+/// Full copies of the retained prior context written by one four-round run (exact). Every
+/// checkpoint rewrites the whole state, so bytes written grow linearly with retained context.
+const SQLITE_CONTEXT_COPIES_FOUR_TOOL_ROUNDS: u64 = 32;
+/// Record bytes written by the same four-round run with no retained context (with headroom).
+const SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS: u64 = 126_623;
+
+// Tool scheduling under paused Tokio time (exact virtual milliseconds).
+/// Five parallel calls sleeping 300/10/10/10/300 ms with `max_parallel_tools = 4`. Fixed batches
+/// wait for their slowest member; a sliding window would finish in 310 ms.
+const TOOL_SCHEDULE_VIRTUAL_MS: u64 = 600;
+
+// Heap allocations on the driving thread: (count, requested bytes), with headroom.
+/// `Engine::run` of a final-only response in an empty conversation.
+const ALLOC_RUN_EMPTY_CONVERSATION: Budget = Budget::new(519, 48_743);
+/// The same run in a conversation holding 1,024 prior entries: history and context copies.
+const ALLOC_RUN_1024_PRIOR_ENTRIES: Budget = Budget::new(14_857, 3_584_911);
+/// `Engine::run` of four rounds of one tool each in an empty conversation.
+const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(1_699, 179_183);
+/// `Agent::clone` with four typed tools (once per spawned durable run and per `accept`).
+const ALLOC_AGENT_CLONE: Budget = Budget::new(14, 1_500);
+/// `Agent::binding` with four typed tools (rebuilt on every `drive` and `accept`).
+const ALLOC_AGENT_BINDING: Budget = Budget::new(183, 17_133);
+
+/// Allowance above a measured allocation or record-byte budget.
+const HEADROOM_PERCENT: u64 = 2;
+
+// ---------------------------------------------------------------------------------------------
+
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::sync::Arc;
+use std::time::Duration;
+use yielded_agent::*;
+
+#[derive(Clone, Copy, Debug)]
+struct Budget {
+    count: u64,
+    bytes: u64,
+}
+impl Budget {
+    const fn new(count: u64, bytes: u64) -> Self {
+        Self { count, bytes }
+    }
+}
+fn with_headroom(measured: u64) -> u64 {
+    measured + (measured * HEADROOM_PERCENT).div_ceil(100)
+}
+
+/// Counts allocations made by the current thread only while armed. Tests run on a current-thread
+/// runtime, so all engine work for one test happens on its own thread; other tests running in
+/// parallel and SQLite's worker thread are excluded.
+mod counting {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    thread_local! {
+        static ARMED: Cell<bool> = const { Cell::new(false) };
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+        static BYTES: Cell<u64> = const { Cell::new(0) };
+    }
+    fn record(size: usize) {
+        let _ = ARMED.try_with(|armed| {
+            if armed.get() {
+                COUNT.with(|count| count.set(count.get() + 1));
+                BYTES.with(|bytes| bytes.set(bytes.get() + size as u64));
+            }
+        });
+    }
+    pub struct Counting;
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let pointer = unsafe { System.alloc(layout) };
+            if !pointer.is_null() {
+                record(layout.size());
+            }
+            pointer
+        }
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            let pointer = unsafe { System.alloc_zeroed(layout) };
+            if !pointer.is_null() {
+                record(layout.size());
+            }
+            pointer
+        }
+        unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(pointer, layout) }
+        }
+        unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            let pointer = unsafe { System.realloc(pointer, layout, new_size) };
+            if !pointer.is_null() {
+                record(new_size);
+            }
+            pointer
+        }
+    }
+    pub fn arm() {
+        COUNT.with(|count| count.set(0));
+        BYTES.with(|bytes| bytes.set(0));
+        ARMED.with(|armed| armed.set(true));
+    }
+    pub fn disarm() -> (u64, u64) {
+        ARMED.with(|armed| armed.set(false));
+        (COUNT.with(Cell::get), BYTES.with(Cell::get))
+    }
+}
+#[global_allocator]
+static ALLOCATOR: counting::Counting = counting::Counting;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Allocations {
+    count: u64,
+    bytes: u64,
+}
+async fn measure<T>(work: impl std::future::Future<Output = T>) -> (T, Allocations) {
+    counting::arm();
+    let output = work.await;
+    let (count, bytes) = counting::disarm();
+    (output, Allocations { count, bytes })
+}
+/// Warm once, then measure three times; one-time initialisation is excluded and every repeat
+/// must be identical, so a nondeterministic workload fails loudly instead of flaking.
+async fn stable<F, Fut>(name: &str, budget: Budget, mut work: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    work().await;
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        let future = work();
+        seen.push(measure(future).await.1);
+    }
+    assert!(
+        seen.windows(2).all(|pair| pair[0] == pair[1]),
+        "{name}: allocation counts are not deterministic: {seen:?}"
+    );
+    let measured = seen[0];
+    eprintln!(
+        "{name}: {} allocations, {} bytes (budget {} / {})",
+        measured.count, measured.bytes, budget.count, budget.bytes
+    );
+    assert!(
+        measured.count <= with_headroom(budget.count)
+            && measured.bytes <= with_headroom(budget.bytes),
+        "{name}: {measured:?} exceeds budget {budget:?} plus {HEADROOM_PERCENT}%"
+    );
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct Echo {
+    n: u64,
+}
+#[derive(Deserialize, JsonSchema)]
+struct Lookup {
+    key: String,
+    limit: Option<u32>,
+}
+fn spec(name: &str) -> ToolSpec {
+    ToolSpec {
+        name: name.into(),
+        description: format!("Deterministic {name} tool for cost guards."),
+        input_schema: json!({}),
+        version: "1".into(),
+        retry: RetryPolicy::ReadOnly,
+        execution: Execution::Parallel,
+        requires_approval: false,
+    }
+}
+/// Four typed tools; the scripted model only calls `echo`.
+fn tools() -> Vec<Arc<dyn Tool>> {
+    let mut tools = vec![typed_tool::<Echo, u64, _, _>(
+        spec("echo"),
+        |args, _| async move { Ok(ToolOutput::Complete(args.n)) },
+    )];
+    for name in ["search", "fetch", "summarize"] {
+        tools.push(typed_tool::<Lookup, String, _, _>(
+            spec(name),
+            |args, _| async move {
+                Ok(ToolOutput::Complete(format!(
+                    "{}:{}",
+                    args.key,
+                    args.limit.unwrap_or(0)
+                )))
+            },
+        ));
+    }
+    tools
+}
+fn responses(rounds: usize, batch: usize) -> Vec<ModelResponse> {
+    let mut responses: Vec<_> = (0..rounds)
+        .map(|round| {
+            ModelResponse::tools(
+                (0..batch)
+                    .map(|index| ToolCall {
+                        id: format!("round-{round}-{index}"),
+                        name: "echo".into(),
+                        arguments: json!({"n": round * batch + index}),
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    responses.push(ModelResponse::final_output(json!("done")));
+    responses
+}
+fn agent(rounds: usize, batch: usize) -> Agent {
+    Agent::new::<Value, Value>(
+        "cost",
+        "Answer with the scripted result.",
+        Arc::new(ScriptedModel::new(responses(rounds, batch))),
+        ModelConfig::default(),
+        tools(),
+        Limits::default(),
+    )
+    .unwrap()
+}
+fn assert_completed(state: &RunState, rounds: usize, batch: usize) {
+    assert_eq!(
+        state.phase,
+        Phase::Settled(Settlement::Completed(json!("done")))
+    );
+    assert_eq!(state.usage.model_calls as usize, rounds + 1);
+    assert_eq!(state.usage.tool_calls as usize, rounds * batch);
+    assert_eq!(state.history.len(), rounds + 2);
+}
+fn prior_entries(count: usize) -> Vec<HistoryEntry> {
+    (0..count)
+        .map(|n| {
+            if n % 2 == 0 {
+                HistoryEntry::Input(json!({"request": format!("prior question {n}")}))
+            } else {
+                HistoryEntry::Exchange {
+                    response: ModelResponse::final_output(
+                        json!({"answer": format!("prior answer {n}")}),
+                    ),
+                    results: vec![],
+                }
+            }
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn engine_allocation_budgets() {
+    let engine = Engine::new(agent(0, 0));
+    stable(
+        "run_empty_conversation",
+        ALLOC_RUN_EMPTY_CONVERSATION,
+        || async {
+            let mut conversation = Conversation::default();
+            let output: Value = engine.run(&mut conversation, "go").await.unwrap();
+            assert_eq!(output, json!("done"));
+        },
+    )
+    .await;
+
+    let prior = prior_entries(1024);
+    let mut prepared = Vec::new();
+    for _ in 0..4 {
+        prepared.push(Conversation {
+            history: prior.clone(),
+            last_run: None,
+        });
+    }
+    stable(
+        "run_1024_prior_entries",
+        ALLOC_RUN_1024_PRIOR_ENTRIES,
+        || {
+            let mut conversation = prepared.pop().unwrap();
+            let engine = &engine;
+            async move {
+                let output: Value = engine.run(&mut conversation, "go").await.unwrap();
+                assert_eq!(output, json!("done"));
+                assert_eq!(conversation.history.len(), 1026);
+                let state = conversation.last_run.as_ref().unwrap();
+                assert_eq!(state.prior_context.len(), 1024);
+            }
+        },
+    )
+    .await;
+
+    let engine = Engine::new(agent(4, 1));
+    stable(
+        "run_four_tool_rounds",
+        ALLOC_RUN_FOUR_TOOL_ROUNDS,
+        || async {
+            let mut conversation = Conversation::default();
+            let _: Value = engine.run(&mut conversation, "go").await.unwrap();
+            assert_completed(conversation.last_run.as_ref().unwrap(), 4, 1);
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn agent_allocation_budgets() {
+    let agent = agent(0, 0);
+    stable("agent_clone", ALLOC_AGENT_CLONE, || async {
+        drop(std::hint::black_box(agent.clone()));
+    })
+    .await;
+    stable("agent_binding", ALLOC_AGENT_BINDING, || async {
+        drop(std::hint::black_box(agent.binding()));
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn fixed_batches_wait_for_their_slowest_member() {
+    let tool = typed_tool::<u64, u64, _, _>(spec("sleep"), |ms, _| async move {
+        tokio::time::sleep(Duration::from_millis(ms)).await;
+        Ok(ToolOutput::Complete(ms))
+    });
+    let delays = [300, 10, 10, 10, 300];
+    let calls = delays
+        .iter()
+        .enumerate()
+        .map(|(index, ms)| ToolCall {
+            id: format!("call-{index}"),
+            name: "sleep".into(),
+            arguments: json!(ms),
+        })
+        .collect();
+    let agent = Agent::new::<Value, Value>(
+        "cost",
+        "Sleep.",
+        Arc::new(ScriptedModel::new(vec![
+            ModelResponse::tools(calls),
+            ModelResponse::final_output(json!("done")),
+        ])),
+        ModelConfig::default(),
+        vec![tool],
+        Limits {
+            max_parallel_tools: 4,
+            ..Limits::default()
+        },
+    )
+    .unwrap();
+    let mut conversation = Conversation::default();
+    let started = tokio::time::Instant::now();
+    let _: Value = Engine::new(agent)
+        .run(&mut conversation, "go")
+        .await
+        .unwrap();
+    let elapsed = started.elapsed();
+    eprintln!("tool_schedule_virtual: {elapsed:?}");
+    let HistoryEntry::Exchange { results, .. } = &conversation.history[1] else {
+        panic!("missing tool exchange");
+    };
+    assert_eq!(
+        results.iter().map(|r| r.value.clone()).collect::<Vec<_>>(),
+        delays.map(|ms| json!(ms)).to_vec(),
+        "results must stay in declaration order"
+    );
+    assert_eq!(elapsed, Duration::from_millis(TOOL_SCHEDULE_VIRTUAL_MS));
+}
+
+#[cfg(feature = "sqlite")]
+mod sqlite {
+    use super::*;
+    use std::path::Path;
+    use yielded_agent::sqlite::SqliteStore;
+
+    const CONVERSATION: &str = "conversation";
+    const SEED_BYTES: usize = 32 * 1024;
+
+    /// Sums the bytes of every record SQLite inserts or rewrites, through triggers created on a
+    /// separate connection. SQLite stores whole records, so an update writes the full new row.
+    /// Triggers cover every table that exists when installed, including tables added later.
+    struct RecordMeter(rusqlite::Connection);
+    impl RecordMeter {
+        fn install(path: &Path) -> Self {
+            let connection = rusqlite::Connection::open(path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE cost_meter(bytes INTEGER NOT NULL); INSERT INTO cost_meter VALUES(0);",
+                )
+                .unwrap();
+            let tables: Vec<String> = connection
+                .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'cost_meter'")
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            for table in tables {
+                let columns: Vec<String> = connection
+                    .prepare("SELECT name FROM pragma_table_info(?1)")
+                    .unwrap()
+                    .query_map([&table], |row| row.get(0))
+                    .unwrap()
+                    .collect::<rusqlite::Result<_>>()
+                    .unwrap();
+                let sum = columns
+                    .iter()
+                    .map(|column| format!("coalesce(length(CAST(NEW.\"{column}\" AS BLOB)),0)"))
+                    .collect::<Vec<_>>()
+                    .join("+");
+                for event in ["INSERT", "UPDATE"] {
+                    connection
+                        .execute_batch(&format!(
+                            "CREATE TRIGGER \"cost_meter_{table}_{event}\" AFTER {event} ON \"{table}\"
+                             BEGIN UPDATE cost_meter SET bytes=bytes+{sum}; END;"
+                        ))
+                        .unwrap();
+                }
+            }
+            Self(connection)
+        }
+        fn bytes(&self) -> u64 {
+            self.0
+                .query_row("SELECT bytes FROM cost_meter", [], |row| row.get(0))
+                .unwrap()
+        }
+    }
+
+    struct DurableCost {
+        /// Transactions for claim plus drive.
+        transactions: u64,
+        /// Record bytes written from accept through settlement.
+        record_bytes: u64,
+        /// Bytes the retained prior context adds to one encoded checkpoint.
+        context_bytes: u64,
+    }
+    /// Seeds `seeds` earlier runs of about `SEED_BYTES` each into the conversation, then accepts,
+    /// claims and drives a fresh run of `rounds` x `batch` tool calls without a `Host`.
+    async fn durable_run(rounds: usize, batch: usize, seeds: usize) -> DurableCost {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cost.sqlite");
+        let store = SqliteStore::open(&path).await.unwrap();
+        let seed = Agent::new::<Value, Value>(
+            "seed",
+            "Seed retained context.",
+            Arc::new(ScriptedModel::new(vec![ModelResponse::final_output(
+                json!("ok"),
+            )])),
+            ModelConfig::default(),
+            vec![],
+            Limits::default(),
+        )
+        .unwrap();
+        for index in 0..seeds {
+            let input = json!({"retained": format!("{index:04}{}", "x".repeat(SEED_BYTES))});
+            let id = store
+                .accept(&seed, CONVERSATION, &format!("seed-{index}"), input, None)
+                .await
+                .unwrap();
+            let mut state = store.claim(id).await.unwrap();
+            Engine::new(seed.clone())
+                .drive(&mut state, &store, RunControl::default())
+                .await
+                .unwrap();
+            assert!(state.is_terminal());
+        }
+        let meter = RecordMeter::install(&path);
+        let agent = agent(rounds, batch);
+        let bytes_before = meter.bytes();
+        let id = store
+            .accept(&agent, CONVERSATION, "measured", json!("go"), None)
+            .await
+            .unwrap();
+        let transactions_before = store.metrics().transactions;
+        let mut state = store.claim(id).await.unwrap();
+        Engine::new(agent)
+            .drive(&mut state, &store, RunControl::default())
+            .await
+            .unwrap();
+        let transactions = store.metrics().transactions - transactions_before;
+        let record_bytes = meter.bytes() - bytes_before;
+        assert_completed(&state, rounds, batch);
+        assert_eq!(state.prior_context.len(), seeds * 2);
+        let context_bytes = if seeds == 0 {
+            0
+        } else {
+            // `"prior_context":[...]` minus the two brackets an empty list also has.
+            serde_json::to_vec(&state.prior_context).unwrap().len() as u64 - 2
+        };
+        drop(meter);
+        store.close().await.unwrap();
+        DurableCost {
+            transactions,
+            record_bytes,
+            context_bytes,
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_transactions_per_run() {
+        for (name, rounds, batch, budget) in [
+            ("no_tools", 0, 0, SQLITE_TRANSACTIONS_NO_TOOLS),
+            ("one_tool_round", 1, 1, SQLITE_TRANSACTIONS_ONE_TOOL_ROUND),
+            (
+                "four_tool_rounds",
+                4,
+                1,
+                SQLITE_TRANSACTIONS_FOUR_TOOL_ROUNDS,
+            ),
+            (
+                "four_parallel_tools",
+                1,
+                4,
+                SQLITE_TRANSACTIONS_FOUR_PARALLEL_TOOLS,
+            ),
+        ] {
+            let cost = durable_run(rounds, batch, 0).await;
+            eprintln!("sqlite_transactions_{name}: {}", cost.transactions);
+            assert_eq!(cost.transactions, budget, "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_record_bytes_grow_with_retained_context() {
+        let empty = durable_run(4, 1, 0).await;
+        eprintln!(
+            "sqlite_record_bytes_four_tool_rounds: {} (budget {})",
+            empty.record_bytes, SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS
+        );
+        assert!(
+            empty.record_bytes <= with_headroom(SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS),
+            "record bytes exceed budget plus {HEADROOM_PERCENT}%"
+        );
+        for seeds in [2, 4] {
+            let retained = durable_run(4, 1, seeds).await;
+            assert_eq!(retained.transactions, empty.transactions);
+            let added = retained.record_bytes - empty.record_bytes;
+            // Round to whole copies; the remainder is a few digits of wall-clock active time.
+            let copies = (added + retained.context_bytes / 2) / retained.context_bytes;
+            let remainder = added.abs_diff(copies * retained.context_bytes);
+            eprintln!(
+                "sqlite_context_copies (seeds {seeds}, {} context bytes): {copies} copies, {added} added bytes, remainder {remainder}",
+                retained.context_bytes
+            );
+            assert!(
+                remainder < 256,
+                "added bytes are not whole context copies: {remainder}"
+            );
+            assert_eq!(copies, SQLITE_CONTEXT_COPIES_FOUR_TOOL_ROUNDS);
+        }
+    }
+}

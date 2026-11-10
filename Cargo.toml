@@ -29,6 +29,8 @@ criterion = { version = "0.6", features = ["async_tokio"] }
 dhat = "0.3.3"
 tempfile = "3"
 libc = "0.2"
+# Paused virtual time makes scheduling costs deterministic in tests.
+tokio = { version = "1.52", features = ["test-util"] }
 [[example]]
 name = "profile_recovery"
 required-features = ["sqlite"]
