@@ -946,3 +946,236 @@ async fn idempotent_timeout_keeps_mutation_uncertainty() {
         OperationStatus::Unknown { .. }
     ));
 }
+
+#[tokio::test(start_paused = true)]
+async fn wait_or_unknown_outcome_stops_further_dispatch_until_resolved() {
+    for blocking in ["wait", "unknown"] {
+        let slow_runs = Arc::new(AtomicUsize::new(0));
+        let counter = slow_runs.clone();
+        // Siblings outlast the blocking outcome, so the barrier holds for any batch scheduler.
+        let slow = typed_tool::<u32, u32, _, _>(spec("slow"), move |arg, _| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            async move {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                Ok(ToolOutput::Complete(arg))
+            }
+        });
+        let wait = typed_tool::<u32, Value, _, _>(spec("wait"), |_, _| async {
+            Ok(ToolOutput::Wait(WaitRequest::Input { prompt: "?".into() }))
+        });
+        let mut mutation = spec("fail");
+        mutation.retry = RetryPolicy::Never;
+        let fail = typed_tool::<u32, u32, _, _>(mutation, |_, _| async {
+            Err(Error::Tool("outcome unknown".into()))
+        });
+        let first = if blocking == "wait" { "wait" } else { "fail" };
+        let model = Arc::new(ScriptedModel::new(vec![
+            ModelResponse::tools(vec![
+                call("block", first, json!(0)),
+                call("s1", "slow", json!(1)),
+                call("s2", "slow", json!(2)),
+                call("s3", "slow", json!(3)),
+            ]),
+            ModelResponse::final_output(json!("done")),
+        ]));
+        let agent = agent(
+            model,
+            vec![slow, wait, fail],
+            Limits {
+                max_parallel_tools: 2,
+                ..Limits::default()
+            },
+        );
+        let mut state = state(&agent);
+        let engine = Engine::new(agent);
+        for _ in 0..2 {
+            engine
+                .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+                .await
+                .unwrap();
+            assert_eq!(state.phase, Phase::Tools, "{blocking}");
+            assert_eq!(slow_runs.load(Ordering::SeqCst), 1, "{blocking}");
+            assert!(matches!(
+                (blocking, &state.operations[0].status),
+                ("wait", OperationStatus::Waiting(_))
+                    | ("unknown", OperationStatus::Unknown { .. })
+            ));
+            assert_eq!(state.operations[2].status, OperationStatus::Pending);
+            assert_eq!(state.operations[3].status, OperationStatus::Pending);
+        }
+        let resolution = if blocking == "wait" {
+            Resolution::Input(json!(0))
+        } else {
+            Resolution::Reconcile(ToolResult {
+                call_id: "block".into(),
+                value: json!(0),
+                is_error: false,
+            })
+        };
+        resolve(&mut state, "block", resolution).unwrap();
+        engine
+            .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            state.phase,
+            Phase::Settled(Settlement::Completed(json!("done")))
+        );
+        assert_eq!(slow_runs.load(Ordering::SeqCst), 3);
+        let HistoryEntry::Exchange { results, .. } = &state.history[1] else {
+            panic!("missing exchange")
+        };
+        assert_eq!(
+            results
+                .iter()
+                .map(|r| r.call_id.as_str())
+                .collect::<Vec<_>>(),
+            ["block", "s1", "s2", "s3"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn progress_events_for_one_tool_round_are_exact() {
+    let tool = typed_tool::<u32, u32, _, _>(spec("echo"), |arg, _| async move {
+        Ok(ToolOutput::Complete(arg))
+    });
+    let model = Arc::new(ScriptedModel::with_events(vec![
+        vec![
+            ModelEvent::TextDelta("plan".into()),
+            ModelEvent::Response(ModelResponse::tools(vec![call("a", "echo", json!(1))])),
+        ],
+        vec![
+            ModelEvent::TextDelta("do".into()),
+            ModelEvent::TextDelta("ne".into()),
+            ModelEvent::Response(ModelResponse::final_output(json!("done"))),
+        ],
+    ]));
+    let agent = agent(model, vec![tool], Limits::default());
+    let mut state = state(&agent);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    Engine::new(agent)
+        .drive(
+            &mut state,
+            &MemoryCheckpoint,
+            RunControl {
+                events: Some(tx),
+                ..RunControl::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mut events = Vec::new();
+    while let Some(event) = rx.recv().await {
+        events.push(match event {
+            ProgressEvent::ModelStarted { run_id } if run_id == state.id => "model".to_owned(),
+            ProgressEvent::TextDelta(text) => format!("delta:{text}"),
+            ProgressEvent::ToolsStarted { count } => format!("tools:{count}"),
+            ProgressEvent::Committed { run_id, revision } if run_id == state.id => {
+                format!("commit:{revision}")
+            }
+            ProgressEvent::Settled { run_id } if run_id == state.id => "settled".to_owned(),
+            other => panic!("event for another run: {other:?}"),
+        });
+    }
+    assert_eq!(
+        events,
+        [
+            "model",
+            "commit:1",
+            "delta:plan",
+            "commit:2",
+            "commit:3",
+            "tools:1",
+            "commit:4",
+            "commit:5",
+            "commit:6",
+            "commit:7",
+            "model",
+            "commit:8",
+            "delta:do",
+            "delta:ne",
+            "commit:9",
+            "settled",
+        ]
+    );
+    assert_eq!(state.revision, 9);
+}
+
+struct RecordingModel {
+    inner: ScriptedModel,
+    seen: Mutex<Vec<Vec<HistoryEntry>>>,
+}
+#[async_trait]
+impl Model for RecordingModel {
+    async fn stream(
+        &self,
+        request: ModelRequest,
+        cancel: CancellationToken,
+    ) -> Result<ModelStream> {
+        self.seen.lock().unwrap().push(request.history.clone());
+        self.inner.stream(request, cancel).await
+    }
+}
+#[tokio::test]
+async fn model_context_fits_truncates_suffix_and_repins_current_input() {
+    let blob = |id: &str, n: usize| HistoryEntry::Exchange {
+        response: ModelResponse::tools(vec![call(id, "blob", json!(n))]),
+        results: vec![ToolResult {
+            call_id: id.into(),
+            value: json!("x".repeat(n)),
+            is_error: false,
+        }],
+    };
+    let len = |entry: &HistoryEntry| serde_json::to_vec(entry).unwrap().len();
+    let prior = HistoryEntry::Input(json!(format!("earlier {}", "p".repeat(200))));
+    let input = HistoryEntry::Input(json!("go"));
+    let (big, small) = (blob("big", 1_000), blob("small", 1));
+    // The newest two exchanges fill the window exactly; the sizes below make each turn's
+    // selection differ.
+    let max = 2 + len(&small) + 1 + len(&big);
+    assert!(len(&input) + len(&prior) <= len(&big) + len(&small));
+    assert!(len(&input) <= len(&small) && len(&small) <= len(&input) + len(&prior));
+    let tool = typed_tool::<usize, String, _, _>(spec("blob"), |n, _| async move {
+        Ok(ToolOutput::Complete("x".repeat(n)))
+    });
+    let model = Arc::new(RecordingModel {
+        inner: ScriptedModel::new(vec![
+            ModelResponse::tools(vec![call("big", "blob", json!(1_000))]),
+            ModelResponse::tools(vec![call("small", "blob", json!(1))]),
+            ModelResponse::final_output(json!("done")),
+        ]),
+        seen: Mutex::new(vec![]),
+    });
+    let agent = agent(
+        model.clone(),
+        vec![tool],
+        Limits {
+            max_context_bytes: max,
+            ..Limits::default()
+        },
+    );
+    let mut state = agent
+        .new_run("test", json!("go"), vec![prior.clone()], None)
+        .unwrap();
+    Engine::new(agent)
+        .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        state.phase,
+        Phase::Settled(Settlement::Completed(json!("done")))
+    );
+    assert_eq!(
+        *model.seen.lock().unwrap(),
+        [
+            // Everything fits.
+            vec![prior, input.clone()],
+            // The oldest prior entry falls out of the bounded suffix.
+            vec![input.clone(), big],
+            // The current input would fall out: it is re-pinned ahead of the newest exchange
+            // that still fits beside it, so the older exchange is skipped.
+            vec![input, small],
+        ]
+    );
+}
