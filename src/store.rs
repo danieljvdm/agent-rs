@@ -15,8 +15,12 @@ pub use memory::MemoryStore;
 
 /// Generation and revision identifying one authoritative unsettled checkpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Plain data, left open: it is exactly the pair a commit is fenced on.
 pub struct CheckpointPosition {
+    /// [`RunState::generation`].
     pub generation: u64,
+    /// [`RunState::revision`].
     pub revision: u64,
 }
 impl From<&RunState> for CheckpointPosition {
@@ -68,7 +72,9 @@ pub enum RunUpdate {
     Cancel,
     /// Resolve one outstanding approval, input wait, or unknown outcome.
     Resolve {
+        /// The [`ToolCall::id`](crate::ToolCall::id) of the waiting call.
         call_id: String,
+        /// The answer, as for [`RunState::resolve`].
         resolution: Resolution,
     },
     /// Clear a recorded host error so the run is discovered again.
@@ -182,15 +188,18 @@ pub trait DurableStore: Checkpoint {
         expected: CheckpointPosition,
         message: String,
     ) -> Result<bool>;
+    /// The error recorded by `record_error`, until `retry` or settlement clears it.
     async fn last_error(&self, id: RunId) -> Result<Option<String>>;
     /// The conversation's retained history in commit order, across all its runs.
     async fn history(&self, conversation: &str) -> Result<Vec<HistoryEntry>>;
     /// Every operation the run has recorded, across batches, in first-recorded order.
     async fn operations(&self, id: RunId) -> Result<Vec<Operation>>;
 
+    /// Persist a cancellation request with [`RunUpdate::Cancel`].
     async fn request_cancel(&self, id: RunId) -> Result<()> {
         self.update(id, RunUpdate::Cancel).await
     }
+    /// Answer a waiting call with [`RunUpdate::Resolve`].
     async fn resolve(&self, id: RunId, call_id: &str, resolution: Resolution) -> Result<()> {
         self.update(
             id,

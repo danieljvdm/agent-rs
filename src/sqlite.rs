@@ -36,10 +36,13 @@ use tokio::sync::{mpsc, oneshot};
 const STORAGE_VERSION: i64 = 2;
 type Job = Box<dyn FnOnce(&mut Database) + Send>;
 
+/// Work a [`SqliteStore`] has committed since it was opened, from [`SqliteStore::metrics`].
 #[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub struct StoreMetrics {
+    /// Committed write transactions.
     pub transactions: u64,
+    /// Rows inserted or updated by those transactions.
     pub writes: u64,
 }
 #[derive(Default)]
@@ -558,6 +561,10 @@ fn accept_in(
 }
 
 impl SqliteStore {
+    /// Opens or creates the database file at `path` and takes its process lock, a `.lock` file
+    /// beside it. Fails with [`Error::StoreBusy`] while another store holds the lock, with
+    /// [`Error::Config`] for an in-memory or hard-linked path, with [`Error::Incompatible`] for
+    /// another schema version, and with [`Error::Storage`] otherwise.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path: PathBuf = path.as_ref().to_owned();
         let counters = Arc::new(Counters::default());
@@ -616,6 +623,7 @@ impl SqliteStore {
             .map_err(|_| Error::storage("store is closed"))?;
         rx.await.map_err(Error::storage)?
     }
+    /// Write transactions and rows committed since the store was opened.
     pub fn metrics(&self) -> StoreMetrics {
         StoreMetrics {
             transactions: self.counters.transactions.load(Ordering::Relaxed),

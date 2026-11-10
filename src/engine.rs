@@ -148,9 +148,11 @@ impl Agent {
     }
 }
 impl<I, O> Agent<I, O> {
+    /// The ID given to [`Agent::builder`], recorded with every run the agent accepts.
     pub fn id(&self) -> &str {
         &self.definition.id
     }
+    /// The limits every run of this agent is accepted with.
     pub fn limits(&self) -> &Limits {
         &self.definition.limits
     }
@@ -160,6 +162,11 @@ impl<I, O> Agent<I, O> {
         &self.definition.binding
     }
     /// Accepts `input`, retaining the bounded suffix of `conversation` that fits the context limit.
+    ///
+    /// The run is in memory only; drive it with [`drive`](Self::drive). Fails with
+    /// [`Error::Input`] for input that does not deserialize as the agent's input type or does not
+    /// fit `max_context_bytes`, or a conversation ID outside 1..=1024 bytes, and with
+    /// [`Error::Context`] when the conversation's newest entry cannot fit the limit.
     pub fn new_run(
         &self,
         conversation_id: impl Into<String>,
@@ -511,8 +518,11 @@ where
 /// commit never fails the run: see [`Error::fails_run`].
 #[async_trait]
 pub trait Checkpoint: Send + Sync {
+    /// Persists `state` as the run's new checkpoint and advances `state.revision`.
     async fn commit(&self, state: &mut RunState) -> Result<()>;
 }
+/// A checkpoint that persists nothing and only advances the revision, for runs that live in
+/// memory, as [`Agent::run`] does.
 #[derive(Default)]
 pub struct MemoryCheckpoint;
 #[async_trait]

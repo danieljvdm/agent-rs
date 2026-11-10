@@ -157,6 +157,7 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
             task: Some(task),
         })
     }
+    /// The store the host runs over, for its own API and for reading runs and history.
     pub fn store(&self) -> &Arc<S> {
         &self.store
     }
@@ -220,14 +221,20 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
         self.notify.notify_one();
         Ok(id)
     }
+    /// The run's authoritative state, settled or not; [`Error::NotFound`] for an unknown ID.
     pub async fn status(&self, id: RunId) -> Result<RunState> {
         self.store.status(id).await
     }
+    /// Answers the wait of call `call_id` durably, as [`RunState::resolve`] does in memory, and
+    /// wakes the host to drive the run again. Fails with [`Error::NotWaiting`] if that call does
+    /// not wait for this kind of answer.
     pub async fn resolve(&self, id: RunId, call_id: &str, resolution: Resolution) -> Result<()> {
         self.store.resolve(id, call_id, resolution).await?;
         self.notify.notify_one();
         Ok(())
     }
+    /// Requests cancellation durably and interrupts the run if it is executing; it settles as
+    /// [`Settlement::Cancelled`](crate::Settlement::Cancelled). A settled run is unchanged.
     pub async fn cancel(&self, id: RunId) -> Result<()> {
         // Persist first. A running worker's next commit will be fenced even if its token
         // notification is delayed, or it completes before this method observes the map.
@@ -238,6 +245,8 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
         self.notify.notify_one();
         Ok(())
     }
+    /// Clears the error recorded for the run (see [`Error::needs_retry`]), once its cause is
+    /// repaired, so the host drives it again. A settled run is [`Error::Stale`].
     pub async fn retry(&self, id: RunId) -> Result<()> {
         self.store.retry(id).await?;
         self.notify.notify_one();

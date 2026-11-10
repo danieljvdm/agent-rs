@@ -44,6 +44,7 @@ fn sizes(entries: &[HistoryEntry]) -> Result<Vec<(HistoryEntry, usize)>> {
 }
 
 impl MemoryStore {
+    /// An empty store.
     pub fn new() -> Self {
         Self::default()
     }

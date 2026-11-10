@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 pub struct ContextRequest<'a> {
     /// Identifies the run to [`ContextPolicy::cleanup`].
     pub run_id: RunId,
+    /// The run's conversation, for policies that keep per-conversation state.
     pub conversation_id: &'a str,
     /// The run's current input.
     pub input: &'a Value,

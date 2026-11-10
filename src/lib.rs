@@ -4,6 +4,7 @@
 //! `use yielded_agent::*;` brings in the whole engine, the durable host and the storage contract.
 //! The adapters live in their own modules: [`sqlite`] behind the `sqlite` feature and [`openai`]
 //! behind the `openai` feature.
+#![warn(missing_docs)]
 mod context;
 mod engine;
 mod error;
