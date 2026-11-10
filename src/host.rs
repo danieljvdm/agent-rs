@@ -1,7 +1,7 @@
-//! A bounded resident scheduler. Durable database discovery is authoritative; notifications
-//! only reduce latency. Call `shutdown().await` before releasing application resources.
-use crate::sqlite::{CheckpointPosition, SqliteStore};
+//! A bounded resident scheduler over any [`DurableStore`]. Durable discovery is authoritative;
+//! notifications only reduce latency. Call `shutdown().await` before releasing resources.
 use crate::*;
+use async_trait::async_trait;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -28,24 +28,40 @@ impl Default for HostOptions {
         }
     }
 }
-struct HostLease(Arc<SqliteStore>);
-impl Drop for HostLease {
-    fn drop(&mut self) {
-        self.0.release_host();
+/// Commits through the host's store. The wrapper lets an unsized store reach the engine's
+/// `&dyn Checkpoint`, which a generic parameter cannot upcast to directly.
+struct StoreCheckpoint<'a, S: ?Sized>(&'a S);
+#[async_trait]
+impl<S: DurableStore + ?Sized> Checkpoint for StoreCheckpoint<'_, S> {
+    async fn commit(&self, state: &mut RunState) -> Result<()> {
+        self.0.commit(state).await
     }
 }
 
-pub struct Host {
-    store: Arc<SqliteStore>,
-    agent: Agent,
+/// The resident host for one store. With a concrete `S`, store-specific extensions can add
+/// host methods through `impl<S: DurableStore + Extension> Host<S>`, and `host.store()`
+/// reaches the store's own API. `Host<dyn DurableStore>` selects storage at run time.
+pub struct Host<S: DurableStore + ?Sized> {
+    store: Arc<S>,
+    agents: Arc<HashMap<String, Agent>>,
     shutdown: CancellationToken,
     notify: Arc<Notify>,
     running: Arc<Mutex<HashMap<RunId, CancellationToken>>>,
     fatal_error: Arc<Mutex<Option<String>>>,
     task: Option<JoinHandle<Result<()>>>,
 }
-impl Host {
-    pub fn start(store: Arc<SqliteStore>, agent: Agent, options: HostOptions) -> Result<Self> {
+impl<S: DurableStore + ?Sized + 'static> Host<S> {
+    pub fn start(store: Arc<S>, agent: Agent, options: HostOptions) -> Result<Self> {
+        Self::start_agents(store, [agent], options)
+    }
+    /// Host several agents over one store. Each claimed run executes with the agent whose ID
+    /// it recorded at acceptance; a run whose agent is not registered here keeps a visible
+    /// `Incompatible` error until a host with that agent retries it.
+    pub fn start_agents(
+        store: Arc<S>,
+        agents: impl IntoIterator<Item = Agent>,
+        options: HostOptions,
+    ) -> Result<Self> {
         if options.max_concurrent_runs == 0
             || options.max_concurrent_runs > 1024
             || options.poll_interval.is_zero()
@@ -54,22 +70,31 @@ impl Host {
                 "host requires 1..=1024 run workers and a nonzero discovery interval".into(),
             ));
         }
-        store.take_host()?;
-        let lease = HostLease(store.clone());
+        let mut registered = HashMap::new();
+        for agent in agents {
+            if registered.insert(agent.id().to_owned(), agent).is_some() {
+                return Err(Error::Invalid("host agent IDs must be unique".into()));
+            }
+        }
+        if registered.is_empty() {
+            return Err(Error::Invalid("host requires at least one agent".into()));
+        }
+        let agents = Arc::new(registered);
+        let lease = store.lease()?;
         let shutdown = CancellationToken::new();
         let notify = Arc::new(Notify::new());
         let running = Arc::new(Mutex::new(HashMap::new()));
         let fatal_error = Arc::new(Mutex::new(None));
         let task = {
             let store = store.clone();
-            let agent = agent.clone();
+            let agents = agents.clone();
             let shutdown = shutdown.clone();
             let notify = notify.clone();
             let running = running.clone();
             let fatal_error = fatal_error.clone();
             tokio::spawn(async move {
                 let _lease = lease;
-                let result = schedule(store, agent, options, shutdown, notify, running).await;
+                let result = schedule(store, agents, options, shutdown, notify, running).await;
                 if let Err(error) = &result {
                     *fatal_error.lock().expect("host status lock") = Some(error.to_string());
                 }
@@ -78,13 +103,16 @@ impl Host {
         };
         Ok(Self {
             store,
-            agent,
+            agents,
             shutdown,
             notify,
             running,
             fatal_error,
             task: Some(task),
         })
+    }
+    pub fn store(&self) -> &Arc<S> {
+        &self.store
     }
     pub fn health(&self) -> Result<()> {
         if let Some(error) = self.fatal_error.lock().expect("host status lock").as_ref() {
@@ -95,8 +123,42 @@ impl Host {
         }
         Ok(())
     }
+    /// Submit to the host's only agent. A host with several agents requires `submit_to`.
     pub async fn submit(
         &self,
+        conversation: &str,
+        key: &str,
+        input: serde_json::Value,
+        expires_at_ms: Option<u64>,
+    ) -> Result<RunId> {
+        let mut agents = self.agents.values();
+        let (Some(agent), None) = (agents.next(), agents.next()) else {
+            return Err(Error::Invalid(
+                "host has several agents; submit with submit_to".into(),
+            ));
+        };
+        self.accept(agent, conversation, key, input, expires_at_ms)
+            .await
+    }
+    /// Submit to the registered agent with ID `agent_id`.
+    pub async fn submit_to(
+        &self,
+        agent_id: &str,
+        conversation: &str,
+        key: &str,
+        input: serde_json::Value,
+        expires_at_ms: Option<u64>,
+    ) -> Result<RunId> {
+        let agent = self
+            .agents
+            .get(agent_id)
+            .ok_or_else(|| Error::Invalid(format!("agent {agent_id} is not registered")))?;
+        self.accept(agent, conversation, key, input, expires_at_ms)
+            .await
+    }
+    async fn accept(
+        &self,
+        agent: &Agent,
         conversation: &str,
         key: &str,
         input: serde_json::Value,
@@ -105,7 +167,7 @@ impl Host {
         self.health()?;
         let id = self
             .store
-            .accept(&self.agent, conversation, key, input, expires_at_ms)
+            .accept(agent, conversation, key, input, expires_at_ms)
             .await?;
         self.notify.notify_one();
         Ok(id)
@@ -144,15 +206,15 @@ impl Host {
         Ok(())
     }
 }
-impl Drop for Host {
+impl<S: DurableStore + ?Sized> Drop for Host<S> {
     fn drop(&mut self) {
         // Rust has no asynchronous Drop. Explicit shutdown is the cleanup completion barrier.
         self.shutdown.cancel();
     }
 }
-async fn schedule(
-    store: Arc<SqliteStore>,
-    agent: Agent,
+async fn schedule<S: DurableStore + ?Sized + 'static>(
+    store: Arc<S>,
+    agents: Arc<HashMap<String, Agent>>,
     options: HostOptions,
     shutdown: CancellationToken,
     notify: Arc<Notify>,
@@ -207,7 +269,7 @@ async fn schedule(
                 map.insert(id, cancel.clone());
             }
             let store = store.clone();
-            let agent = agent.clone();
+            let agents = agents.clone();
             let control = RunControl {
                 cancel,
                 shutdown: shutdown.clone(),
@@ -218,8 +280,15 @@ async fn schedule(
                 let result = async {
                     position = Some(store.position(id).await?);
                     let mut state = store.claim(id).await?;
-                    let result = Engine::new(agent)
-                        .drive(&mut state, store.as_ref(), control)
+                    position = Some(CheckpointPosition::from(&state));
+                    let Some(agent) = agents.get(&state.agent_id) else {
+                        return Err(Error::Incompatible(format!(
+                            "agent {} is not registered with this host",
+                            state.agent_id
+                        )));
+                    };
+                    let result = Engine::new(agent.clone())
+                        .drive(&mut state, &StoreCheckpoint(store.as_ref()), control)
                         .await;
                     position = Some(CheckpointPosition::from(&state));
                     result

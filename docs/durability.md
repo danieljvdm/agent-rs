@@ -1,19 +1,23 @@
 # Execution and durability contract
 
-The engine owns a serializable `RunState`, with phases `Ready`, `ModelInFlight`, `Tools`, and `Settled`. The durable host drives that same engine. SQLite is an optional adapter implementing the engine's atomic `Checkpoint` boundary. Futures are never serialized.
+The engine owns a serializable `RunState`, with phases `Ready`, `ModelInFlight`, `Tools`, and `Settled`. The durable host drives that same engine over any `DurableStore` (`src/store.rs`), which extends the engine's atomic `Checkpoint` boundary with acceptance, claiming, application updates, and discovery. `MemoryStore` is the in-process reference implementation; SQLite is an optional file-backed adapter. `tests/storage_conformance.rs` runs the same contract against both. Futures are never serialized.
 
 ## Commit protocol
 
-1. Acceptance atomically stores the immutable input/binding/limits, initial history, idempotency mapping, and active checkpoint. The caller receives a RunId only after commit. Idempotency keys are scoped to conversations; conflicting payloads are rejected, including changed binding or expiry. Only one run may be active per conversation.
+1. Acceptance atomically stores the immutable acceptance (input, binding, limits, expiry, and bounded prior context), initial history, idempotency mapping, and the run's first checkpoint. The caller receives a RunId only after commit. Idempotency keys are scoped to conversations; conflicting payloads are rejected, including changed binding or expiry. Only one run may be unsettled per conversation.
 2. Before model work, the engine commits its phase, charged attempt count, and active-time reservation. A complete response is retained before tools can start. All calls in the response must pass argument, identity, and tool validation.
 3. Before tool work, the engine commits the declared contract, stable external idempotency key, and dispatched intent. Parallel tools execute in bounded segments separated by sequential barriers. Each outcome commits as it arrives; the next model turn sees a complete batch in declaration order.
-4. Every checkpoint transaction appends new history and updates operation evidence together with checkpoint advancement. Terminal state and removal of the active checkpoint commit together. Operations survive settlement for inspection and reconciliation.
+4. Every checkpoint transaction appends new history and updates operation evidence together with checkpoint advancement. Settlement and the run's discovery fields commit together. Operations survive settlement for inspection and reconciliation.
+
+A commit persists only progress: phase, usage, cancellation, the pending response, the current operations, and history appended since the last commit. Acceptance data in the caller's state is never compared or rewritten; it is fixed when the run is accepted. History is append-only, so a commit that drops entries is rejected. In SQLite, acceptance is one immutable `runs` row, each commit rewrites one small `checkpoints` row and inserts only new `history` rows, and loading reassembles the full `RunState` from the three. Bytes written per commit therefore do not depend on retained context (`tests/cost_budget.rs` pins this).
 
 A failed checkpoint stops that execution. Callers must reload authoritative state before resuming. A committed state can outlive loss of its acknowledgement; acceptance retries are safe through the caller's key.
 
 ## Recovery and external effects
 
-The host claims a new internal generation before driving a checkpoint. Commits require the expected generation and revision. Cancellation and resolutions also advance revisions, so late results cannot overwrite them. A single process owns the database; this is not a distributed lease protocol.
+The host claims a new internal generation before driving a checkpoint. A commit succeeds only while the stored run is unsettled at exactly the caller's generation and revision; in SQLite this is a conditional `UPDATE … WHERE run_id=? AND generation=? AND revision=?` whose affected-row count decides between success and `Stale`. Cancellation, resolution, and retry are one `RunUpdate`, applied by the same core function in every store, and advance the revision, so late results cannot overwrite them. A late host error is recorded only at the failed worker's exact position.
+
+Eligibility has one definition, `RunState::wake_at` (and `RunState::needs_recovery` for dispatched work hidden behind a sibling wait). Stores persist both at every write, and discovery queries those stored fields rather than the checkpoint's contents. A single process owns the database, and `DurableStore::lease` admits one resident host at a time; this is not a distributed lease protocol.
 
 The SQLite adapter uses WAL with full synchronization and a process lock beside the canonical database path. Symlink aliases share that lock. Hard-linked database files are rejected because their distinct WAL paths are unsafe after a crash. Keep the database and sidecars together on a local filesystem, and do not remove the lock file while an owner is running.
 
@@ -41,15 +45,17 @@ Model/tool attempts and token use accumulate across recovery. Attempts can be ch
 
 ## Ownership and shutdown
 
-Use `Host::shutdown().await` and then `SqliteStore::close().await`. Shutdown stops admission, signals operations, and joins owned tasks; accepted work remains available to a later host. `Host::cancel` first persists explicit cancellation and then signals active work. Dropping the host signals shutdown but is not an asynchronous cleanup barrier.
+One host may serve several agents over one store (`Host::start_agents`, `Host::submit_to`). Runs record their agent ID at acceptance, and each claimed run executes with the registered agent of that ID; a run whose agent is not registered keeps a visible `Incompatible` error, like an incompatible binding, until a host with that agent retries it.
+
+Use `Host::shutdown().await` and then, for SQLite, `SqliteStore::close().await`. Shutdown stops admission, signals operations, and joins owned tasks; accepted work remains available to a later host. `Host::cancel` first persists explicit cancellation and then signals active work. Dropping the host signals shutdown but is not an asynchronous cleanup barrier.
 
 Model/tool implementations must not detach child tasks. If they own asynchronous resources, implement `cleanup`, which the engine invokes after each attempt, including interruptions. Cleanup has an explicit timeout; Rust cannot force an uncooperative external operation to undo itself. Handlers must yield to Tokio, honor cancellation, and bound CPU work; substantial blocking work belongs on an application-owned bounded blocking executor. SQLite uses its own bounded worker.
 
 ## Compatibility and observation
 
-Schema/state versions and immutable agent bindings are checked explicitly. Instructions, model configuration, schemas, tool versions, retry contracts, and limits are retained. Change the agent/tool version when implementation semantics change; function bodies and credentials are not serialized. An incompatible binding leaves the accepted obligation retained with a visible host/store error until the application repairs the binding and retries it.
+Schema/state versions and immutable agent bindings are checked explicitly. A database or run written with another schema or state version is rejected with `Error::Incompatible`, and corrupt or foreign data with `Error::Storage`; there is no compatibility decoding. Instructions, model configuration, schemas, tool versions, retry contracts, and limits are retained. Change the agent/tool version when implementation semantics change; function bodies and credentials are not serialized. An incompatible binding leaves the accepted obligation retained with a visible host/store error until the application repairs the binding and retries it.
 
-Status and history are authoritative after reconnect. Progress events and text deltas are bounded, transient, and may be dropped. The active checkpoint carries bounded prior context and current-run evidence; recovery does not replay the conversation's entire lifetime. Context retains whole model/tool exchanges and the current input; an oversized newest group fails explicitly.
+Status and history are authoritative after reconnect. Progress events and text deltas are bounded, transient, and may be dropped. A run carries bounded prior context, stored once at acceptance, and current-run evidence; recovery does not replay the conversation's entire lifetime. Context retains whole model/tool exchanges and the current input; an oversized newest group fails explicitly.
 
 ## Deliberate differences from Yielded Agent
 

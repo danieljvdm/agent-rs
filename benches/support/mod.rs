@@ -426,7 +426,7 @@ pub mod durable {
 
     pub struct Resident {
         pub store: Arc<SqliteStore>,
-        pub host: Host,
+        pub host: Host<SqliteStore>,
         pub events: tokio::sync::mpsc::Receiver<ProgressEvent>,
         _directory: tempfile::TempDir,
     }
