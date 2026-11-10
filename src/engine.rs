@@ -1,4 +1,4 @@
-use crate::context::{encoded_len, model_context, suffix_start};
+use crate::context::{assemble, encoded_len, suffix_start};
 use crate::*;
 use async_trait::async_trait;
 use futures::{StreamExt, stream::FuturesUnordered};
@@ -27,6 +27,7 @@ pub struct Agent {
     validate_input: Validator,
     validate_output: Validator,
     authorizer: Arc<dyn Authorizer>,
+    context_policy: Option<(Arc<dyn ContextPolicy>, usize)>,
 }
 impl Agent {
     pub fn new<I, O>(
@@ -97,11 +98,27 @@ impl Agent {
                     .map_err(|e| Error::Invalid(e.to_string()))
             }),
             authorizer: Arc::new(AllowAll),
+            context_policy: None,
         })
     }
     pub fn with_authorizer(mut self, authorizer: Arc<dyn Authorizer>) -> Self {
         self.authorizer = authorizer;
         self
+    }
+    /// Opt into a [`ContextPolicy`]. `max_derived_bytes` caps the encoded array of its derived
+    /// context within `max_context_bytes`; a policy that only pins entries may pass zero.
+    pub fn with_context_policy(
+        mut self,
+        policy: Arc<dyn ContextPolicy>,
+        max_derived_bytes: usize,
+    ) -> Result<Self> {
+        if max_derived_bytes > self.limits.max_context_bytes {
+            return Err(Error::Invalid(
+                "derived context cap must fit the context limit".into(),
+            ));
+        }
+        self.context_policy = Some((policy, max_derived_bytes));
+        Ok(self)
     }
     pub fn id(&self) -> &str {
         &self.id
@@ -110,8 +127,12 @@ impl Agent {
         &self.limits
     }
     pub fn binding(&self) -> Value {
-        json!({"id":self.id,"instructions":&*self.instructions,"model":self.config,"tools":&*self.tool_specs,
-            "input_schema":self.input_schema,"output_schema":&*self.output_schema,"limits":self.limits})
+        let mut binding = json!({"id":self.id,"instructions":&*self.instructions,"model":self.config,"tools":&*self.tool_specs,
+            "input_schema":self.input_schema,"output_schema":&*self.output_schema,"limits":self.limits});
+        if let Some((policy, max_bytes)) = &self.context_policy {
+            binding["context_policy"] = json!({"binding":policy.binding(),"max_bytes":max_bytes});
+        }
+        binding
     }
     /// Accepts `input`, retaining the bounded suffix of `conversation` that fits the context limit.
     pub fn new_run(
@@ -417,11 +438,14 @@ impl Engine {
             let future = async {
                 // Assemble context after the dispatch checkpoint and inside the operation's
                 // deadline, so the checkpoint can contribute history and preparation is bounded.
+                let (history, derived_context) =
+                    assemble(state, self.agent.context_policy.as_ref(), &operation_cancel).await?;
                 let request = ModelRequest {
                     run_id: state.id,
                     instructions: self.agent.instructions.clone(),
                     config: self.agent.config.clone(),
-                    history: model_context(state)?,
+                    history,
+                    derived_context,
                     tools: self.agent.tool_specs.clone(),
                     output_schema: self.agent.output_schema.clone(),
                     turn: state.usage.model_calls,
@@ -482,7 +506,16 @@ impl Engine {
         operation_cancel.cancel();
         let cleanup = tokio::time::timeout(
             Duration::from_millis(state.limits.cleanup_timeout_ms),
-            self.agent.model.cleanup(state.id),
+            async {
+                let model = self.agent.model.cleanup(state.id);
+                match &self.agent.context_policy {
+                    None => model.await,
+                    Some((policy, _)) => {
+                        let (model, context) = tokio::join!(model, policy.cleanup(state.id));
+                        model.and(context)
+                    }
+                }
+            },
         )
         .await;
         refund(state, reservation, started.elapsed());

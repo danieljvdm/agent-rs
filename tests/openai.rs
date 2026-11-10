@@ -19,6 +19,7 @@ fn request() -> ModelRequest {
             temperature: None,
         },
         history: vec![],
+        derived_context: vec![],
         tools: Arc::new([]),
         output_schema: Arc::new(json!({"type":"integer"})),
         turn: 1,

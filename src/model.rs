@@ -33,6 +33,9 @@ pub struct ModelRequest {
     pub instructions: Arc<str>,
     pub config: ModelConfig,
     pub history: Vec<HistoryEntry>,
+    /// Lower-trust reference data from the agent's `ContextPolicy`, kept separate from history
+    /// and instructions. Providers must not present it as either.
+    pub derived_context: Vec<Value>,
     pub tools: Arc<[ToolSpec]>,
     pub output_schema: Arc<Value>,
     pub turn: u32,
