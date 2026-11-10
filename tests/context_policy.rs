@@ -316,6 +316,44 @@ async fn policy_binding_is_part_of_the_agent_binding() {
     assert_eq!(state.usage.model_calls, 0);
 }
 
+/// Stored runs compare their binding with the agent's, so its encoding must not drift for an
+/// unchanged definition. Changing it strands every accepted run behind `Incompatible`.
+#[test]
+fn binding_encoding_is_stable_for_an_unchanged_definition() {
+    #[derive(serde::Deserialize, schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct Question {
+        text: String,
+    }
+    #[derive(serde::Deserialize, schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct Answer {
+        text: String,
+        confidence: Option<u32>,
+    }
+    let agent = Agent::new::<Question, Answer>(
+        "binding",
+        "Answer briefly.",
+        Capture::new(vec![]),
+        ModelConfig {
+            model: "pinned".into(),
+            temperature: Some(0.5),
+        },
+        tools(),
+        Limits {
+            max_context_bytes: 4096,
+            ..Limits::default()
+        },
+    )
+    .unwrap()
+    .with_context_policy(Arc::new(PinNotes), 64)
+    .unwrap();
+    assert_eq!(
+        serde_json::to_string(&agent.binding()).unwrap(),
+        r#"{"context_policy":{"binding":"pin-notes-v1","max_bytes":64},"id":"binding","input_schema":{"$schema":"https://json-schema.org/draft/2020-12/schema","properties":{"text":{"type":"string"}},"required":["text"],"title":"Question","type":"object"},"instructions":"Answer briefly.","limits":{"active_budget_ms":600000,"cleanup_timeout_ms":1000,"max_context_bytes":4096,"max_model_calls":32,"max_parallel_tools":4,"max_response_bytes":1048576,"max_tokens":100000,"max_tool_calls":128,"max_tool_output_bytes":262144,"operation_timeout_ms":30000},"model":{"model":"pinned","temperature":0.5},"output_schema":{"$schema":"https://json-schema.org/draft/2020-12/schema","properties":{"confidence":{"format":"uint32","minimum":0,"type":["integer","null"]},"text":{"type":"string"}},"required":["text"],"title":"Answer","type":"object"},"tools":[{"description":"test","execution":"Parallel","input_schema":{"$schema":"https://json-schema.org/draft/2020-12/schema","format":"uint","minimum":0,"title":"uint","type":"integer"},"name":"note","requires_approval":false,"retry":"ReadOnly","version":"1"},{"description":"test","execution":"Parallel","input_schema":{"$schema":"https://json-schema.org/draft/2020-12/schema","format":"uint","minimum":0,"title":"uint","type":"integer"},"name":"blob","requires_approval":false,"retry":"ReadOnly","version":"1"}]}"#
+    );
+}
+
 /// Never finishes preparing; counts cleanups.
 #[derive(Default)]
 struct Pending {
