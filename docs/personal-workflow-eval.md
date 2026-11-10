@@ -1,5 +1,9 @@
 # Personal-agent workflow evaluation
 
+This page describes the default file-backed workflow. The [calendar integration](calendar-integration.md)
+extends the same scenarios and grader to Google Calendar or deterministic HTTP fixtures,
+including an extra case for uncertain-write reconciliation and an opt-in live service eval.
+
 The eval asks an agent to schedule a reminder before the user's earliest meeting. The model must read calendar and preference files, ask for the missing lead time, wait for application approval, perform the write, and report what actually happened. It is an end-to-end consumer of the public durable host and provider APIs, not a string comparison against a sample assistant answer.
 
 Four cases run per trial:

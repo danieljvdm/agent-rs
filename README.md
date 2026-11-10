@@ -61,6 +61,8 @@ See [the durability contract](docs/durability.md) for external-effect guarantees
 
 The [personal-agent workflow eval](docs/personal-workflow-eval.md) exercises a model choosing tools, requesting missing information, surviving host restarts, and creating a reminder only after approval. Run `scripts/eval-personal.sh --trials 3 --out eval-results/my-live-run` to use the existing Infisical credentials. Its deterministic counterpart and negative grading cases run in ordinary tests.
 
+The optional [`google-calendar` integration](docs/calendar-integration.md) connects those typed tools to real calendar reads and private popup reminders, with application-supplied credentials, approval and read-only reconciliation of uncertain writes. The same eval supports stateful HTTP fixtures and explicitly opted-in live service tests in isolated calendars.
+
 [Process recovery tests](docs/process-recovery.md) also terminate and relaunch real subprocesses at acceptance, dispatch, and outcome-commit boundaries. The opt-in restart soak keeps a persisted future deadline across repeated process deaths.
 
 [Interval automations](docs/automation.md) create new runs on a fixed schedule. A store implementing `AutomationStore` (`MemoryStore` and `SqliteStore` do) keeps each automation with the agent that fires it, and admits each occurrence's run atomically with its identity and the next due time; the application calls `Host::fire_automations` from its own poll loop and manages schedules through the store. Run `cargo run --example recurring_personal_agent` for a recurring inbox review across a restart. Calendar/cron schedules and authenticated event subscriptions are later YIE-252 slices.
