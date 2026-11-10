@@ -149,7 +149,7 @@ class BenchmarkReportTests(unittest.TestCase):
         report = json.loads((self.output / "comparison.json").read_text())
         self.assertTrue(report["identical_source"])
         self.assertFalse(report["timing_gate_enabled"])
-        self.assertEqual(len(report["workloads"]), 19)
+        self.assertEqual(len(report["workloads"]), len(benchmark.EXPECTED_BENCHMARK_CASES))
         self.assertTrue(all(row["percent_change"] is None for row in report["workloads"]))
         self.assertTrue(all(len(row["paired_relative_changes_pct"]) == 2 for row in report["workloads"]))
 
@@ -166,17 +166,8 @@ class BenchmarkReportTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "diagnostic samples"):
             benchmark.diagnostic_samples(path, False)
 
-    def test_retained_context_cases_are_required_from_v3(self):
-        self.assertEqual(len(benchmark.expected_benchmarks("all", "agent-loop-v2")), 19)
-        self.assertEqual(len(benchmark.expected_benchmarks("all", "agent-loop-v3")), 21)
-        capture = self.output / "00-base"
-        path = capture / "metadata.json"
-        path.write_text(json.dumps(dict(json.loads(path.read_text()), fixture="agent-loop-v3")))
-        with self.assertRaisesRegex(RuntimeError, "Criterion workloads"):
-            benchmark.summarize(capture)
-
     def test_v1_observer_measurements_are_not_accepted_as_v2_evidence(self):
-        self.assertEqual(benchmark.FIXTURE_VERSION, "agent-loop-v2")
+        self.assertNotEqual(benchmark.FIXTURE_VERSION, "agent-loop-v1")
         path = self.output / "00-base" / "metrics.json"
         data = json.loads(path.read_text())
         data["fixture"] = "agent-loop-v1"

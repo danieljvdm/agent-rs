@@ -16,15 +16,13 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_VERSION = "agent-loop-v3"
-# v3 added these cases; captures of earlier fixture versions predate them.
-RETAINED_CONTEXT_CASES = {f"sqlite/durable_retained_context/{n}" for n in (0, 1024)}
-PRE_RETAINED_CONTEXT_FIXTURES = {"agent-loop-v1", "agent-loop-v2"}
 EXPECTED_BENCHMARK_CASES = {
     "engine/minimal", "engine/four_tool_rounds", "engine/context_entries_0", "engine/context_entries_1024",
     *(f"engine/tools_8_bound_{n}" for n in (1, 4, 8)),
     *(f"engine/stream_chunks_{n}" for n in (1, 64, 1024)),
     *(f"conversations/engine_workers_4/{n}" for n in (1, 16, 64)),
-    "sqlite/durable_four_tool_rounds", *RETAINED_CONTEXT_CASES,
+    "sqlite/durable_four_tool_rounds",
+    *(f"sqlite/durable_retained_context/{n}" for n in (0, 1024)),
     *(f"sqlite_conversations/host_workers_4/{n}" for n in (1, 16, 64)),
     *(f"recovery/restart_to_completion/{n}" for n in (0, 512)),
 }
@@ -59,11 +57,6 @@ def suite_config(suite):
     if suite not in SUITES:
         raise RuntimeError(f"unknown benchmark suite: {suite}")
     return SUITES[suite]
-
-def expected_benchmarks(suite, fixture):
-    """Criterion workloads a capture of this suite and fixture version must contain."""
-    cases = suite_config(suite)["benchmarks"]
-    return cases - RETAINED_CONTEXT_CASES if fixture in PRE_RETAINED_CONTEXT_FIXTURES else cases
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -173,7 +166,7 @@ def distribution(values):
 def summarize(output):
     entries = []
     info = json.loads((output / "metadata.json").read_text())
-    expected = expected_benchmarks(info.get("suite", "all"), info["fixture"])
+    expected = suite_config(info.get("suite", "all"))["benchmarks"]
     minimum_samples = 10 if info["quick"] else 30
     for estimates in sorted((output / "criterion").rglob("new/estimates.json")):
         estimate = json.loads(estimates.read_text())
@@ -348,7 +341,7 @@ def capture(prepared, output, label, samples, quick):
 
 def compare_summary(output, base, candidate, cohorts):
     suite = base["metadata"].get("suite", "all")
-    expected = expected_benchmarks(suite, base["metadata"]["fixture"])
+    expected = suite_config(suite)["benchmarks"]
     if candidate["metadata"].get("suite", "all") != suite:
         raise RuntimeError("comparison suites differ")
     different_environment = [field for field in ENVIRONMENT_FIELDS
