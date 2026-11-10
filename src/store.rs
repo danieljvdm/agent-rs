@@ -76,6 +76,7 @@ pub enum RunUpdate {
 }
 /// What a store must persist after [`RunUpdate::apply`] changed a run.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct UpdateEffect {
     /// The state changed: advance its revision and persist it, fencing older workers.
     pub changed: bool,

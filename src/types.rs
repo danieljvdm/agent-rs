@@ -39,6 +39,7 @@ impl Default for Limits {
     }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Usage {
     pub model_calls: u32,
     pub tool_calls: u32,
@@ -134,11 +135,30 @@ pub enum OperationStatus {
     Unknown { reason: String },
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub struct Operation {
     pub call: ToolCall,
     pub spec: ToolSpec,
     pub idempotency_key: String,
     pub status: OperationStatus,
+}
+impl Operation {
+    /// Assembles a recorded operation. The engine records operations itself; this is for
+    /// stores and tests that construct run state directly, for example to simulate a crash
+    /// after dispatch.
+    pub fn new(
+        call: ToolCall,
+        spec: ToolSpec,
+        idempotency_key: impl Into<String>,
+        status: OperationStatus,
+    ) -> Self {
+        Self {
+            call,
+            spec,
+            idempotency_key: idempotency_key.into(),
+            status,
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[non_exhaustive]

@@ -7,11 +7,28 @@ use std::{future::Future, marker::PhantomData, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct ToolContext {
     pub run_id: RunId,
     pub call_id: String,
     pub idempotency_key: String,
     pub cancel: CancellationToken,
+}
+impl ToolContext {
+    /// A context for calling a tool outside the engine, such as in the tool's own tests, with a
+    /// fresh cancellation token. The engine builds the context for every call it dispatches.
+    pub fn new(
+        run_id: RunId,
+        call_id: impl Into<String>,
+        idempotency_key: impl Into<String>,
+    ) -> Self {
+        Self {
+            run_id,
+            call_id: call_id.into(),
+            idempotency_key: idempotency_key.into(),
+            cancel: CancellationToken::new(),
+        }
+    }
 }
 #[derive(Clone, Debug)]
 #[non_exhaustive]

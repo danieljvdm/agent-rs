@@ -1,4 +1,4 @@
-use crate::{Error, HistoryEntry, ModelResponse, Result, RunId, ToolSpec};
+use crate::{Error, HistoryEntry, Limits, ModelResponse, Result, RunId, ToolSpec};
 use async_trait::async_trait;
 use futures::{Stream, stream};
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,7 @@ impl Default for ModelConfig {
 /// One model turn. Instructions, model configuration, tools and the output schema are the
 /// agent's own, shared rather than copied on every turn.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct ModelRequest {
     pub run_id: RunId,
     pub instructions: Arc<str>,
@@ -42,6 +43,28 @@ pub struct ModelRequest {
     pub max_response_bytes: usize,
     /// Remaining cumulative token allowance; providers should cap generated output accordingly.
     pub remaining_tokens: u64,
+}
+impl ModelRequest {
+    /// A first turn of `run_id` over `history`, for calling a model outside the engine, such as
+    /// in a provider's own tests. Set further fields on the result. It has no instructions,
+    /// tools or derived context, the default [`ModelConfig`], an output schema that accepts any
+    /// JSON (`true`), and the byte and token allowances of [`Limits::default`]. The engine builds
+    /// the request for every turn it runs.
+    pub fn new(run_id: RunId, history: Vec<HistoryEntry>) -> Self {
+        let limits = Limits::default();
+        Self {
+            run_id,
+            instructions: Arc::from(""),
+            config: Arc::default(),
+            history,
+            derived_context: Vec::new(),
+            tools: Arc::new([]),
+            output_schema: Arc::new(Value::Bool(true)),
+            turn: 1,
+            max_response_bytes: limits.max_response_bytes,
+            remaining_tokens: limits.max_tokens,
+        }
+    }
 }
 #[derive(Clone, Debug)]
 #[non_exhaustive]

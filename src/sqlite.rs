@@ -37,6 +37,7 @@ const STORAGE_VERSION: i64 = 2;
 type Job = Box<dyn FnOnce(&mut Database) + Send>;
 
 #[derive(Clone, Copy, Debug, Default)]
+#[non_exhaustive]
 pub struct StoreMetrics {
     pub transactions: u64,
     pub writes: u64,

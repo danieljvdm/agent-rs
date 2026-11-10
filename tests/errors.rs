@@ -507,12 +507,7 @@ async fn tool_errors_keep_their_cause() {
     let error = tool.validate(&json!("one")).unwrap_err();
     assert!(matches!(error, Error::ModelOutput(_)), "{error:?}");
     assert!(error.source().unwrap().is::<serde_json::Error>());
-    let context = ToolContext {
-        run_id: RunId::nil(),
-        call_id: "call".into(),
-        idempotency_key: "key".into(),
-        cancel: CancellationToken::new(),
-    };
+    let context = ToolContext::new(RunId::nil(), "call", "key");
     let error = tool.execute(json!(1), context).await.unwrap_err();
     assert!(matches!(error, Error::Tool(_)), "{error:?}");
     assert_eq!(error.to_string(), "tool: cannot encode");

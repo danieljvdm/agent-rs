@@ -8,6 +8,7 @@ use std::{io, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
 /// What [`ContextPolicy::prepare`] receives for one model turn.
+#[non_exhaustive]
 pub struct ContextRequest<'a> {
     /// Identifies the run to [`ContextPolicy::cleanup`].
     pub run_id: RunId,

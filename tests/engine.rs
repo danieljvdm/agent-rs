@@ -462,12 +462,12 @@ async fn cancellation_retains_unknown_mutation_and_allows_reconciliation() {
     );
     let mut state = state(&agent);
     state.phase = Phase::Tools;
-    state.operations.push(Operation {
-        call: call("effect", "mutate", json!(1)),
-        spec: tool.spec().clone(),
-        idempotency_key: "stable".into(),
-        status: OperationStatus::Dispatched,
-    });
+    state.operations.push(Operation::new(
+        call("effect", "mutate", json!(1)),
+        tool.spec().clone(),
+        "stable",
+        OperationStatus::Dispatched,
+    ));
     state.cancel_requested = true;
     agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
@@ -972,12 +972,12 @@ async fn convenience_api_requires_reconciliation_before_replacing_cancelled_run(
     let mut state = state(&agent);
     let original_id = state.id;
     state.phase = Phase::Tools;
-    state.operations.push(Operation {
-        call: call("effect", "mutate", json!(1)),
-        spec: tool.spec().clone(),
-        idempotency_key: "stable".into(),
-        status: OperationStatus::Dispatched,
-    });
+    state.operations.push(Operation::new(
+        call("effect", "mutate", json!(1)),
+        tool.spec().clone(),
+        "stable",
+        OperationStatus::Dispatched,
+    ));
     state.cancel_requested = true;
     agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
@@ -1030,12 +1030,12 @@ async fn recovered_dispatched_work_becomes_resolvable_when_budgets_or_expiry_sto
         );
         let mut state = state(&agent);
         state.phase = Phase::Tools;
-        state.operations.push(Operation {
-            call: call("effect", "idempotent", json!(1)),
-            spec: tool.spec().clone(),
-            idempotency_key: "same-external-key".into(),
-            status: OperationStatus::Dispatched,
-        });
+        state.operations.push(Operation::new(
+            call("effect", "idempotent", json!(1)),
+            tool.spec().clone(),
+            "same-external-key",
+            OperationStatus::Dispatched,
+        ));
         if expired {
             state.expires_at_ms = Some(now_ms().saturating_sub(1));
         } else {

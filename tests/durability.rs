@@ -261,12 +261,12 @@ async fn ordinary_dispatched_effect_recovers_as_unknown_and_can_be_reconciled() 
         arguments: json!({}),
     };
     interrupted.pending_response = Some(ModelResponse::tools(vec![call.clone()]));
-    interrupted.operations = vec![Operation {
+    interrupted.operations = vec![Operation::new(
         call,
-        spec: tool.spec().clone(),
-        idempotency_key: format!("{id}/op"),
-        status: OperationStatus::Dispatched,
-    }];
+        tool.spec().clone(),
+        format!("{id}/op"),
+        OperationStatus::Dispatched,
+    )];
     db.commit(&mut interrupted).await.unwrap();
     db.close().await.unwrap();
     let db = store(&dir).await;
@@ -461,18 +461,18 @@ async fn terminal_uncertainty_remains_resolvable() {
     let mut state = db.claim(id).await.unwrap();
     state.phase = Phase::Settled(Settlement::Cancelled);
     state.cancel_requested = true;
-    state.operations.push(Operation {
-        call: ToolCall {
+    state.operations.push(Operation::new(
+        ToolCall {
             id: "effect".into(),
             name: "mutate".into(),
             arguments: json!({}),
         },
-        spec: spec("mutate", RetryPolicy::Never, false),
-        idempotency_key: "stable".into(),
-        status: OperationStatus::Unknown {
+        spec("mutate", RetryPolicy::Never, false),
+        "stable",
+        OperationStatus::Unknown {
             reason: "cancelled in flight".into(),
         },
-    });
+    ));
     db.commit(&mut state).await.unwrap();
     assert!(db.due(now_ms(), 10).await.unwrap().is_empty());
     db.resolve(
@@ -569,22 +569,22 @@ async fn safe_retry_reuses_key_and_completed_batch_members_are_not_repeated() {
     state.usage.tool_calls = 2;
     state.usage.active_ms = 30_000;
     state.operations = vec![
-        Operation {
-            call: first,
-            spec: tool.spec().clone(),
-            idempotency_key: "key-a".into(),
-            status: OperationStatus::Complete(ToolResult {
+        Operation::new(
+            first,
+            tool.spec().clone(),
+            "key-a",
+            OperationStatus::Complete(ToolResult {
                 call_id: "already".into(),
                 value: json!(1),
                 is_error: false,
             }),
-        },
-        Operation {
-            call: second,
-            spec: tool.spec().clone(),
-            idempotency_key: "key-b".into(),
-            status: OperationStatus::Dispatched,
-        },
+        ),
+        Operation::new(
+            second,
+            tool.spec().clone(),
+            "key-b",
+            OperationStatus::Dispatched,
+        ),
     ];
     db.commit(&mut state).await.unwrap();
     db.close().await.unwrap();
@@ -681,20 +681,20 @@ async fn waiting_sibling_does_not_hide_an_abandoned_dispatched_effect() {
     state.usage.model_calls = 1;
     state.usage.tool_calls = 2;
     state.operations = vec![
-        Operation {
-            call: calls[0].clone(),
-            spec: tool.spec().clone(),
-            idempotency_key: "a".into(),
-            status: OperationStatus::Waiting(WaitRequest::Input {
+        Operation::new(
+            calls[0].clone(),
+            tool.spec().clone(),
+            "a",
+            OperationStatus::Waiting(WaitRequest::Input {
                 prompt: "continue?".into(),
             }),
-        },
-        Operation {
-            call: calls[1].clone(),
-            spec: tool.spec().clone(),
-            idempotency_key: "b".into(),
-            status: OperationStatus::Dispatched,
-        },
+        ),
+        Operation::new(
+            calls[1].clone(),
+            tool.spec().clone(),
+            "b",
+            OperationStatus::Dispatched,
+        ),
     ];
     db.commit(&mut state).await.unwrap();
     db.close().await.unwrap();
@@ -739,16 +739,16 @@ async fn late_error_cannot_suppress_cancel_resolution_or_repair() {
         .unwrap();
     let mut state = db.claim(resolved).await.unwrap();
     state.phase = Phase::Tools;
-    state.operations.push(Operation {
-        call: ToolCall {
+    state.operations.push(Operation::new(
+        ToolCall {
             id: "wait".into(),
             name: "ask".into(),
             arguments: json!({}),
         },
-        spec: spec("ask", RetryPolicy::ReadOnly, false),
-        idempotency_key: "wait".into(),
-        status: OperationStatus::Waiting(WaitRequest::Input { prompt: "?".into() }),
-    });
+        spec("ask", RetryPolicy::ReadOnly, false),
+        "wait",
+        OperationStatus::Waiting(WaitRequest::Input { prompt: "?".into() }),
+    ));
     db.commit(&mut state).await.unwrap();
     let old = CheckpointPosition::from(&state);
     db.resolve(resolved, "wait", Resolution::Input(json!("reply")))
@@ -795,19 +795,21 @@ async fn safe_dispatched_sibling_with_wait_is_recovered_once_without_busy_loop()
     state.phase = Phase::Tools;
     state.operations = ["wait", "effect"]
         .iter()
-        .map(|id| Operation {
-            call: ToolCall {
-                id: (*id).into(),
-                name: "safe".into(),
-                arguments: json!({}),
-            },
-            spec: tool.spec().clone(),
-            idempotency_key: (*id).into(),
-            status: if *id == "wait" {
-                OperationStatus::Waiting(WaitRequest::Input { prompt: "?".into() })
-            } else {
-                OperationStatus::Dispatched
-            },
+        .map(|id| {
+            Operation::new(
+                ToolCall {
+                    id: (*id).into(),
+                    name: "safe".into(),
+                    arguments: json!({}),
+                },
+                tool.spec().clone(),
+                *id,
+                if *id == "wait" {
+                    OperationStatus::Waiting(WaitRequest::Input { prompt: "?".into() })
+                } else {
+                    OperationStatus::Dispatched
+                },
+            )
         })
         .collect();
     state.pending_response = Some(ModelResponse::tools(
@@ -843,19 +845,21 @@ async fn repaired_binding_retries_abandoned_dispatch_behind_an_input_wait() {
     state.phase = Phase::Tools;
     state.operations = ["wait", "effect"]
         .iter()
-        .map(|id| Operation {
-            call: ToolCall {
-                id: (*id).into(),
-                name: "mutate".into(),
-                arguments: json!({}),
-            },
-            spec: tool.spec().clone(),
-            idempotency_key: (*id).into(),
-            status: if *id == "wait" {
-                OperationStatus::Waiting(WaitRequest::Input { prompt: "?".into() })
-            } else {
-                OperationStatus::Dispatched
-            },
+        .map(|id| {
+            Operation::new(
+                ToolCall {
+                    id: (*id).into(),
+                    name: "mutate".into(),
+                    arguments: json!({}),
+                },
+                tool.spec().clone(),
+                *id,
+                if *id == "wait" {
+                    OperationStatus::Waiting(WaitRequest::Input { prompt: "?".into() })
+                } else {
+                    OperationStatus::Dispatched
+                },
+            )
         })
         .collect();
     state.pending_response = Some(ModelResponse::tools(

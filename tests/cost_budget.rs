@@ -481,12 +481,7 @@ async fn typed_allocation_budgets() {
 
     let tool = tools().remove(1);
     let arguments = json!({"key": "a key long enough to need its own allocation", "limit": 3});
-    let context = ToolContext {
-        run_id: RunId::nil(),
-        call_id: "call".into(),
-        idempotency_key: "key".into(),
-        cancel: tokio_util::sync::CancellationToken::new(),
-    };
+    let context = ToolContext::new(RunId::nil(), "call", "key");
     stable("typed_tool_call", ALLOC_TYPED_TOOL_CALL, || {
         let (arguments, context, tool) = (arguments.clone(), context.clone(), &tool);
         async move {

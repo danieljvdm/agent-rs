@@ -267,15 +267,17 @@ async fn safe_replay_and_budgets(fixture: &impl Fixture) {
     state.usage.active_ms = 31_000;
     state.operations = tools
         .iter()
-        .map(|tool| Operation {
-            call: ToolCall {
-                id: tool.spec().name.clone(),
-                name: tool.spec().name.clone(),
-                arguments: json!({}),
-            },
-            spec: tool.spec().clone(),
-            idempotency_key: format!("{id}/{}", tool.spec().name),
-            status: OperationStatus::Dispatched,
+        .map(|tool| {
+            Operation::new(
+                ToolCall {
+                    id: tool.spec().name.clone(),
+                    name: tool.spec().name.clone(),
+                    arguments: json!({}),
+                },
+                tool.spec().clone(),
+                format!("{id}/{}", tool.spec().name),
+                OperationStatus::Dispatched,
+            )
         })
         .collect();
     state.pending_response = Some(ModelResponse::tools(
@@ -326,19 +328,21 @@ async fn hidden_dispatch_and_repair(fixture: &impl Fixture) {
     state.phase = Phase::Tools;
     state.operations = ["wait", "effect"]
         .into_iter()
-        .map(|name| Operation {
-            call: ToolCall {
-                id: name.into(),
-                name: "effect".into(),
-                arguments: json!({}),
-            },
-            spec: tool.spec().clone(),
-            idempotency_key: name.into(),
-            status: if name == "wait" {
-                OperationStatus::Waiting(WaitRequest::Input { prompt: "?".into() })
-            } else {
-                OperationStatus::Dispatched
-            },
+        .map(|name| {
+            Operation::new(
+                ToolCall {
+                    id: name.into(),
+                    name: "effect".into(),
+                    arguments: json!({}),
+                },
+                tool.spec().clone(),
+                name,
+                if name == "wait" {
+                    OperationStatus::Waiting(WaitRequest::Input { prompt: "?".into() })
+                } else {
+                    OperationStatus::Dispatched
+                },
+            )
         })
         .collect();
     state.pending_response = Some(ModelResponse::tools(
@@ -487,16 +491,16 @@ async fn due_order_waits_and_expiry(fixture: &impl Fixture) {
             .unwrap();
         let mut state = store.claim(id).await.unwrap();
         state.phase = Phase::Tools;
-        state.operations = vec![Operation {
-            call: ToolCall {
+        state.operations = vec![Operation::new(
+            ToolCall {
                 id: "wait".into(),
                 name: "wait".into(),
                 arguments: json!({}),
             },
-            spec: spec("wait", RetryPolicy::ReadOnly),
-            idempotency_key: "wait".into(),
+            spec("wait", RetryPolicy::ReadOnly),
+            "wait",
             status,
-        }];
+        )];
         store.commit(&mut state).await.unwrap();
         (id, state.wake_at())
     };

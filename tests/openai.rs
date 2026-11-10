@@ -11,21 +11,16 @@ use tokio_util::sync::CancellationToken;
 use yielded_agent::{Model, ModelConfig, ModelEvent, ModelRequest, openai::OpenAiModel};
 
 fn request() -> ModelRequest {
-    ModelRequest {
-        run_id: uuid::Uuid::nil(),
-        instructions: "Return the number 42".into(),
-        config: Arc::new(ModelConfig {
-            model: "test-model".into(),
-            temperature: None,
-        }),
-        history: vec![],
-        derived_context: vec![],
-        tools: Arc::new([]),
-        output_schema: Arc::new(json!({"type":"integer"})),
-        turn: 1,
-        max_response_bytes: 1024,
-        remaining_tokens: 256,
-    }
+    let mut request = ModelRequest::new(uuid::Uuid::nil(), vec![]);
+    request.instructions = "Return the number 42".into();
+    request.config = Arc::new(ModelConfig {
+        model: "test-model".into(),
+        temperature: None,
+    });
+    request.output_schema = Arc::new(json!({"type":"integer"}));
+    request.max_response_bytes = 1024;
+    request.remaining_tokens = 256;
+    request
 }
 fn serve(body: String) -> (String, thread::JoinHandle<Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
