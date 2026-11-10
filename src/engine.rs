@@ -1,3 +1,4 @@
+use crate::context::{encoded_len, model_context, suffix_start};
 use crate::*;
 use async_trait::async_trait;
 use futures::{StreamExt, stream::FuturesUnordered};
@@ -107,11 +108,12 @@ impl Agent {
         json!({"id":self.id,"instructions":self.instructions,"model":self.config,"tools":self.tools.iter().map(|t|t.spec()).collect::<Vec<_>>(),
             "input_schema":self.input_schema,"output_schema":self.output_schema,"limits":self.limits})
     }
+    /// Accepts `input`, retaining the bounded suffix of `conversation` that fits the context limit.
     pub fn new_run(
         &self,
         conversation_id: impl Into<String>,
         input: Value,
-        prior_context: Vec<HistoryEntry>,
+        conversation: &[HistoryEntry],
         expires_at_ms: Option<u64>,
     ) -> Result<RunState> {
         (self.validate_input)(&input)?;
@@ -125,7 +127,8 @@ impl Agent {
         if encoded_len(&input_entry)? + 2 > self.limits.max_context_bytes {
             return Err(Error::Invalid("input exceeds context limit".into()));
         }
-        let prior_context = select_context(&prior_context, self.limits.max_context_bytes)?;
+        let prior_context =
+            conversation[suffix_start(conversation, self.limits.max_context_bytes)?..].to_vec();
         Ok(RunState {
             version: STATE_VERSION,
             id: RunId::new_v4(),
@@ -214,7 +217,7 @@ impl Engine {
         let input = serde_json::to_value(input).map_err(|e| Error::Invalid(e.to_string()))?;
         let state = self
             .agent
-            .new_run("memory", input, conversation.history.clone(), None)?;
+            .new_run("memory", input, &conversation.history, None)?;
         conversation.last_run = Some(state);
         self.resume_from(conversation, RunControl::default(), 0)
             .await
@@ -903,11 +906,6 @@ fn uncertain_dispatched(state: &mut RunState, reason: &str) {
         }
     }
 }
-fn encoded_len<T: Serialize>(value: &T) -> Result<usize> {
-    serde_json::to_vec(value)
-        .map(|v| v.len())
-        .map_err(|e| Error::Invalid(e.to_string()))
-}
 fn truncate(value: &str, max: usize) -> String {
     let mut end = value.len().min(max);
     while !value.is_char_boundary(end) {
@@ -1038,49 +1036,6 @@ async fn run_work<T>(
         _ = tokio::time::sleep_until(deadline) => WorkOutcome::TimedOut,
         result = future => WorkOutcome::Done(result),
     }
-}
-/// Select a bounded suffix while retaining each complete model/tool exchange intact.
-pub fn select_context(history: &[HistoryEntry], max_bytes: usize) -> Result<Vec<HistoryEntry>> {
-    let mut bytes = 2_usize;
-    let mut start = history.len();
-    for (index, entry) in history.iter().enumerate().rev() {
-        let size = encoded_len(entry)?.saturating_add(usize::from(start < history.len()));
-        if bytes.saturating_add(size) > max_bytes {
-            if start == history.len() {
-                return Err(Error::Invalid(
-                    "newest history group exceeds context limit".into(),
-                ));
-            }
-            break;
-        }
-        bytes += size;
-        start = index;
-    }
-    if bytes > max_bytes {
-        return Err(Error::Invalid("context limit too small".into()));
-    }
-    Ok(history[start..].to_vec())
-}
-fn model_context(state: &RunState) -> Result<Vec<HistoryEntry>> {
-    let all: Vec<_> = state
-        .prior_context
-        .iter()
-        .chain(&state.history)
-        .cloned()
-        .collect();
-    let mut selected = select_context(&all, state.limits.max_context_bytes)?;
-    let current_input_index = state.prior_context.len();
-    let selected_start = all.len() - selected.len();
-    if selected_start > current_input_index {
-        let input = HistoryEntry::Input(state.input.clone());
-        let input_bytes = encoded_len(&input)?.saturating_add(1);
-        selected = select_context(
-            &all,
-            state.limits.max_context_bytes.saturating_sub(input_bytes),
-        )?;
-        selected.insert(0, input);
-    }
-    Ok(selected)
 }
 /// Resolve only the exact outstanding operation. Resolution itself must be committed by the caller.
 /// Reconciliation is allowed after cancellation so uncertainty stays visible and resolvable.

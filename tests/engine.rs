@@ -32,7 +32,7 @@ fn agent(model: Arc<dyn Model>, tools: Vec<Arc<dyn Tool>>, limits: Limits) -> Ag
         .unwrap()
 }
 fn state(agent: &Agent) -> RunState {
-    agent.new_run("test", json!("go"), vec![], None).unwrap()
+    agent.new_run("test", json!("go"), &[], None).unwrap()
 }
 
 #[tokio::test]
@@ -644,7 +644,7 @@ async fn wall_expiry_interrupts_model_and_keeps_its_cleanup() {
         Limits::default(),
     );
     let mut state = agent
-        .new_run("expiry", json!("go"), vec![], Some(now_ms() + 30))
+        .new_run("expiry", json!("go"), &[], Some(now_ms() + 30))
         .unwrap();
     tokio::time::timeout(
         Duration::from_secs(2),
@@ -679,7 +679,7 @@ async fn wall_expiry_interrupts_mutation_and_retains_uncertainty() {
     )])]));
     let agent = agent(model, vec![tool], Limits::default());
     let mut state = agent
-        .new_run("expiry", json!("go"), vec![], Some(now_ms() + 50))
+        .new_run("expiry", json!("go"), &[], Some(now_ms() + 50))
         .unwrap();
     tokio::time::timeout(
         Duration::from_secs(2),
@@ -1156,7 +1156,7 @@ async fn model_context_fits_truncates_suffix_and_repins_current_input() {
         },
     );
     let mut state = agent
-        .new_run("test", json!("go"), vec![prior.clone()], None)
+        .new_run("test", json!("go"), std::slice::from_ref(&prior), None)
         .unwrap();
     Engine::new(agent)
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
