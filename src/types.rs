@@ -743,6 +743,9 @@ pub enum ProgressKind {
     ModelStarted,
     /// Streamed model text, delivered as received and never retained.
     TextDelta(String),
+    /// Streamed model reasoning, delivered as received and never retained. Only providers that
+    /// report reasoning apart from the answer emit it.
+    ReasoningDelta(String),
     /// `count` tool operations were admitted together; their dispatch intent is committed next.
     #[non_exhaustive]
     ToolsStarted {

@@ -2,7 +2,7 @@
 //! their allocation and byte budgets without a network. **Not a supported API**: hidden from
 //! the documentation, and it may change or disappear in any release.
 
-use super::{responses, transport::Decoder};
+use super::{Answer, llama, responses, transport::Decoder, transport::Provider};
 use crate::{ModelEvent, ModelRequest, Result};
 
 /// The adapter to probe.
@@ -12,6 +12,8 @@ pub enum Api {
     ChatCompletions,
     /// [`OpenAiResponsesModel`](super::OpenAiResponsesModel).
     Responses,
+    /// [`LlamaModel`](super::LlamaModel), decoding a plain-text answer.
+    Llama,
 }
 
 /// The request body the adapter would send for `request`, encoded as it is sent.
@@ -19,6 +21,7 @@ pub fn request_body(api: Api, request: ModelRequest) -> Result<Vec<u8>> {
     let body = match api {
         Api::ChatCompletions => super::request_body(request)?,
         Api::Responses => responses::request_body(request)?,
+        Api::Llama => llama::request_body(request)?,
     };
     // As `reqwest::RequestBuilder::json` encodes it.
     Ok(serde_json::to_vec(&body).expect("a JSON value encodes"))
@@ -41,6 +44,14 @@ pub fn decode(
         Api::Responses => run(
             Decoder::new(
                 responses::Parser::new(max_response_bytes),
+                max_response_bytes,
+            ),
+            chunks,
+            &mut observe,
+        ),
+        Api::Llama => run(
+            Decoder::new(
+                super::Parser::for_provider(Provider::Llama, Answer::Text, max_response_bytes),
                 max_response_bytes,
             ),
             chunks,

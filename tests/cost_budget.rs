@@ -82,9 +82,10 @@ const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(430, 50_618);
 /// `Agent::drive` of a final response streamed as 64 text deltas of 16 bytes, observed through
 /// an attached progress channel that a receiver drains concurrently. Includes the scripted
 /// model's copy of each delta, so the engine itself must add no allocation per delta. Bytes
-/// include the channel's two 32-slot blocks of 64-byte `ProgressEvent`s, a per-channel cost;
-/// naming a child's parent (`parent_run_id`) took the event from 40 bytes to 64.
-const ALLOC_STREAM_64_DELTAS_OBSERVED: Budget = Budget::new(97, 12_386);
+/// include the channel's two 32-slot blocks of 72-byte `ProgressEvent`s, a per-channel cost;
+/// naming a child's parent (`parent_run_id`) took the event from 40 bytes to 64, and a second
+/// string kind (`ReasoningDelta`) cost `ProgressKind` its niche tag, taking it to 72.
+const ALLOC_STREAM_64_DELTAS_OBSERVED: Budget = Budget::new(97, 12_898);
 /// `Agent::run` of a final-only response for an agent with typed input and output, in an empty
 /// conversation: includes validating the input and the output against their types.
 const ALLOC_RUN_TYPED_EMPTY_CONVERSATION: Budget = Budget::new(57, 7_926);
@@ -104,9 +105,11 @@ const ALLOC_DRIVE_BINDING_CHECK_MODEL_ADAPTER: Budget = Budget::new(0, 0);
 // OpenAI adapters, through the hidden `openai::cost_probe`: no network, so only the adapter's
 // own encoding and decoding count. (Allocations as above, with headroom; bytes exact.)
 /// Decoding a Chat Completions answer of 1,024 bytes streamed as 64 content deltas, one SSE
-/// event per network read, through the final response: two allocations per delta (its parsed
-/// chunk and its text) and the growing buffers.
-const ALLOC_CHAT_DECODE_64_DELTAS: Budget = Budget::new(153, 47_463);
+/// event per network read, through the final response: one allocation per delta (its text; the
+/// chunk's one choice is decoded in place) and the growing buffers.
+const ALLOC_CHAT_DECODE_64_DELTAS: Budget = Budget::new(88, 5_863);
+/// The same answer decoded by `LlamaModel` as plain text.
+const ALLOC_LLAMA_DECODE_64_DELTAS: Budget = Budget::new(85, 4_214);
 /// The same answer from Responses, with its item lifecycle events around the 64 deltas. Delta
 /// events decode without allocating; only the text they yield and the lifecycle objects do.
 const ALLOC_RESPONSES_DECODE_64_DELTAS: Budget = Budget::new(219, 47_374);
@@ -115,10 +118,14 @@ const ALLOC_RESPONSES_DECODE_64_DELTAS: Budget = Budget::new(219, 47_374);
 const ALLOC_CHAT_REQUEST_BODY: Budget = Budget::new(347, 47_557);
 /// The same turn's Responses request body.
 const ALLOC_RESPONSES_REQUEST_BODY: Budget = Budget::new(301, 38_926);
+/// The same turn's `LlamaModel` request body.
+const ALLOC_LLAMA_REQUEST_BODY: Budget = Budget::new(302, 43_321);
 /// Bytes of those request bodies on the wire (exact).
 const CHAT_REQUEST_BODY_BYTES: usize = 2_260;
 /// See `CHAT_REQUEST_BODY_BYTES`.
 const RESPONSES_REQUEST_BODY_BYTES: usize = 2_122;
+/// See `CHAT_REQUEST_BODY_BYTES`.
+const LLAMA_REQUEST_BODY_BYTES: usize = 2_143;
 
 // Type sizes (exact bytes). `Result<T, Error>` is returned on every hot path, so the error must
 // stay small: large payloads belong behind a box.
@@ -666,7 +673,7 @@ mod openai {
     fn chunks(api: Api) -> Vec<Vec<u8>> {
         let text = format!("{{\"value\":\"{}\"}}", "x".repeat(ANSWER_BYTES - 12));
         let wire = match api {
-            Api::ChatCompletions => Wire::Chat,
+            Api::ChatCompletions | Api::Llama => Wire::Chat,
             Api::Responses => Wire::Responses,
         };
         wire.streamed_text(&text, ANSWER_BYTES / 64)
@@ -684,6 +691,11 @@ mod openai {
                 "responses_decode_64_deltas",
                 Api::Responses,
                 ALLOC_RESPONSES_DECODE_64_DELTAS,
+            ),
+            (
+                "llama_decode_64_deltas",
+                Api::Llama,
+                ALLOC_LLAMA_DECODE_64_DELTAS,
             ),
         ] {
             let chunks = chunks(api);
@@ -752,6 +764,12 @@ mod openai {
                 Api::Responses,
                 ALLOC_RESPONSES_REQUEST_BODY,
                 RESPONSES_REQUEST_BODY_BYTES,
+            ),
+            (
+                "llama_request_body",
+                Api::Llama,
+                ALLOC_LLAMA_REQUEST_BODY,
+                LLAMA_REQUEST_BODY_BYTES,
             ),
         ] {
             let body = cost_probe::request_body(api, request.clone()).unwrap();

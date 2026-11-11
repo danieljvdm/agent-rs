@@ -6,7 +6,7 @@
 //! - <https://developers.openai.com/api/docs/guides/migrate-to-responses>
 
 use super::{
-    output_schema, output_value, protocol, protocol_caused_by, push_derived_context,
+    Provider, output_schema, output_value, protocol, protocol_caused_by, push_derived_context,
     steering_message,
     transport::{EventParser, Transport},
     validate_request,
@@ -382,7 +382,7 @@ impl Parser {
         let usage = usage(response)?
             .ok_or_else(|| protocol("Responses: completed response has no usage"))?;
         let output = if tools.is_empty() {
-            Some(output_value(&text)?)
+            Some(output_value(Provider::OpenAi, &text)?)
         } else {
             None
         };
@@ -399,6 +399,9 @@ impl Parser {
 impl EventParser for Parser {
     fn done(&self) -> bool {
         self.done
+    }
+    fn provider(&self) -> Provider {
+        Provider::OpenAi
     }
     fn event(&mut self, data: &str, events: &mut Vec<ModelEvent>) -> Result<()> {
         // A typed decode error can quote the offending value, so it is not kept as the cause.

@@ -914,6 +914,13 @@ impl Definition {
                             }
                             emit(state, control, ProgressKind::TextDelta(text));
                         }
+                        ModelEvent::ReasoningDelta(text) => {
+                            bytes = bytes.saturating_add(text.len());
+                            if bytes > state.limits.max_response_bytes {
+                                return Err(Error::provider("stream exceeds response byte limit"));
+                            }
+                            emit(state, control, ProgressKind::ReasoningDelta(text));
+                        }
                         ModelEvent::Response(value) => {
                             record_usage(&mut usage, &value.usage)?;
                             if encoded_len(&value) > state.limits.max_response_bytes {
