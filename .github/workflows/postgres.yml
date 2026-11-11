@@ -1,6 +1,7 @@
 name: PostgreSQL adapter
 
-on: [push, pull_request]
+# `workflow_dispatch` lets release.yml start this check on the release branch.
+on: [push, pull_request, workflow_dispatch]
 
 permissions:
   contents: read

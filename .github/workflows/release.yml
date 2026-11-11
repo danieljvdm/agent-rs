@@ -46,14 +46,11 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write # to start the checks on the release branch, below
     steps:
-      # A pull request opened with the default token does not start other workflows, so CI will
-      # not run on the release pull request unless RELEASE_TOKEN (a personal access token with
-      # write access to contents and pull requests) is set.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -62,7 +59,14 @@ jobs:
           version: 0.23.2
       - run: knope prepare-release --verbose
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # A push or pull request made with the workflow's token starts no workflows, and main
+      # requires these checks, so start them on the release branch directly.
+      - run: |
+          gh workflow run ci.yml --ref release
+          gh workflow run postgres.yml --ref release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish:
     needs: plan
