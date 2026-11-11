@@ -1,6 +1,6 @@
 # Durable steering of an active run
 
-`Host::steer` durably queues a free-form user instruction for a run that is already active, without the agent having asked for input. The instruction takes effect at the run's next model dispatch, after the current model/tool exchange completes. It is available on a `Host<S>` whose store implements `SteeringStore`: `MemoryStore` and `SqliteStore` do, and so does `Host<dyn SteeringStore>`. The engine and stores that do not implement the trait are unchanged.
+`Host::steer` durably queues a free-form user instruction for a run that is already active, without the agent having asked for input. The instruction takes effect at the run's next model dispatch, after the current model/tool exchange completes. It is available on a `Host<S>` whose store implements `SteeringStore`: `MemoryStore` and `SqliteStore` do, and so does `Host<dyn SteeringStore>`; `PostgresStore` does not yet, so `Host<PostgresStore>` has no `steer`. The engine and stores that do not implement the trait are unchanged.
 
 ```rust
 // Persist the key at the caller so retries use the same identity.

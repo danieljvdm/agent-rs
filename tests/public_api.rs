@@ -45,6 +45,10 @@ use yielded_agent::openai::{OpenAiModel, OpenAiResponsesModel};
 // Hidden and unsupported: probes for `tests/cost_budget.rs`.
 #[cfg(feature = "openai")]
 use yielded_agent::openai::cost_probe::{Api, decode, request_body};
+#[cfg(feature = "postgres")]
+use yielded_agent::postgres::{
+    Config, NoTls, PostgresOptions, PostgresStore, StoreMetrics as PostgresStoreMetrics,
+};
 #[cfg(feature = "sqlite")]
 use yielded_agent::sqlite::{SqliteStore, StoreMetrics};
 // Optional memory, behind its feature.
