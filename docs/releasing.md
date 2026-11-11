@@ -56,5 +56,5 @@ secret.
 
 ## If a release fails half-way
 
-Re-run the failed job. It skips publishing when crates.io already has the version, and tagging
-when the tag exists.
+Re-run the failed `publish` job. It skips publishing when crates.io already has the version, then
+tags and creates the GitHub release.
