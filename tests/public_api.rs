@@ -32,6 +32,10 @@ use yielded_agent::{
     FiringReport, IntervalAutomation, Occurrence, OccurrenceOutcome,
 };
 // Optional adapters, each behind its feature.
+#[cfg(feature = "mcp")]
+use yielded_agent::mcp::{
+    McpClient, McpOptions, McpTool, ServerIdentity, ToolDefinition, ToolPolicy,
+};
 #[cfg(feature = "openai")]
 use yielded_agent::openai::{OpenAiModel, OpenAiResponsesModel};
 // Hidden and unsupported: probes for `tests/cost_budget.rs`.

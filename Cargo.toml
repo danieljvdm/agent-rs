@@ -10,6 +10,8 @@ default = ["sqlite", "openai"]
 sqlite = ["dep:rusqlite"]
 openai = ["dep:reqwest"]
 memory = []
+# Stdio MCP servers as tools. Process groups are signalled through rustix, without unsafe code.
+mcp = ["dep:rmcp", "dep:jsonschema", "dep:rustix", "tokio/process", "tokio/io-util", "tokio-util/codec"]
 allocation-metrics = []
 [dependencies]
 async-trait = "0.1.92"
@@ -25,6 +27,10 @@ tracing = "0.1"
 uuid = { version = "1.20", features = ["v4", "serde"] }
 rusqlite = { version = "0.37", features = ["bundled"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"], optional = true }
+rmcp = { version = "=3.4.0", default-features = false, features = ["client"], optional = true }
+jsonschema = { version = "0.30", default-features = false, optional = true }
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"], optional = true }
 [dev-dependencies]
 criterion = { version = "0.6", features = ["async_tokio"] }
 dhat = "0.3.3"
@@ -41,6 +47,9 @@ required-features = ["sqlite"]
 [[example]]
 name = "recurring_personal_agent"
 required-features = ["sqlite"]
+[[example]]
+name = "mcp_filesystem"
+required-features = ["mcp"]
 [[bench]]
 name = "agent_loop"
 harness = false
@@ -56,3 +65,7 @@ required-features = ["sqlite"]
 name = "attached_subagents"
 harness = false
 required-features = ["sqlite"]
+[[bench]]
+name = "mcp"
+harness = false
+required-features = ["mcp"]

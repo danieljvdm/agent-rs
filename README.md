@@ -30,6 +30,8 @@ Every fallible call returns the one `Error` type. Its variants say what a caller
 
 Everything except the optional features is exported from the crate root, so `use yielded_agent::*;` brings in the engine, the durable host and the storage contract. Each optional feature lives in its own module: the adapters `yielded_agent::sqlite` and `yielded_agent::openai`, and the conversation-memory context policy `yielded_agent::memory`. Default features enable `sqlite` and `openai`. `default-features = false` builds the engine and the durable host without either adapter; the host then runs over the in-process `MemoryStore` or any other `DurableStore`. Tokio runs asynchronous work; a dedicated bounded worker keeps SQLite operations off its worker threads.
 
+The optional `mcp` feature, in `yielded_agent::mcp`, starts an application-owned MCP server over stdio and registers the tools the application selects as ordinary `Tool`s, under its own aliases and policy. See [MCP tools over stdio](docs/mcp.md).
+
 ## Durable execution
 
 ```rust
@@ -97,4 +99,4 @@ The manual [performance workflow](.github/workflows/performance.yml) runs longer
 
 [Recovery profiling](docs/recovery-profiling.md) describes the allocation-stack capture and the focused recovery comparison suite.
 
-This is a Rust-only initial implementation. There are no distributed leases, Node bindings, Cloudflare adapter, in-flight preemption, active-run input joining, agent graphs, nested or detached subagents, or MCP services.
+This is a Rust-only initial implementation. There are no distributed leases, Node bindings, Cloudflare adapter, in-flight preemption, active-run input joining, agent graphs, or nested or detached subagents. MCP support is an optional stdio adapter; other transports are separate work.

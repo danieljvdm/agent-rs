@@ -1574,3 +1574,124 @@ mod memory {
         store.close().await.unwrap();
     }
 }
+
+/// The MCP adapter against the scripted stdio server in `tests/support/mcp_server.py`.
+#[cfg(feature = "mcp")]
+mod mcp {
+    use super::*;
+    use std::path::Path;
+    use tokio::process::Command;
+    use tokio_util::sync::CancellationToken;
+    use yielded_agent::mcp::{McpClient, McpOptions, McpTool, ServerIdentity, ToolPolicy};
+
+    // ------------------------------------------------------------------------------------------
+    // Budget table: today's measured values.
+    // ------------------------------------------------------------------------------------------
+
+    // The server's protocol task runs on another runtime, so allocations count only what one
+    // call costs the task that drives its run.
+    /// Requests the server receives per tool call with a single-page catalog (exact): the
+    /// catalog is listed again before every call, then called.
+    const MCP_REQUESTS_PER_CALL_ONE_PAGE: usize = 2;
+    /// The same with a 32-tool catalog served in four pages (exact): one request per page.
+    const MCP_REQUESTS_PER_CALL_FOUR_PAGES: usize = 5;
+    /// `Tool::execute` of one MCP call against a three-tool, single-page catalog.
+    const ALLOC_MCP_CALL_ONE_PAGE: Budget = Budget::new(39, 11_036);
+    /// The same against the 32-tool catalog in four pages.
+    const ALLOC_MCP_CALL_FOUR_PAGES: Budget = Budget::new(64, 32_520);
+    /// `Tool::validate` of one MCP call against the compiled input schema: no allocation.
+    const ALLOC_MCP_VALIDATE: Budget = Budget::new(0, 0);
+
+    // ------------------------------------------------------------------------------------------
+
+    async fn connect(root: &Path, config: Value) -> McpClient {
+        std::fs::write(root.join("control.json"), config.to_string()).unwrap();
+        let mut command = Command::new("python3");
+        command
+            .arg("-u")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/support/mcp_server.py"
+            ))
+            .arg(root);
+        McpClient::connect(
+            ServerIdentity::new("cost", "fixture-v1"),
+            command,
+            McpOptions::default(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap()
+    }
+    fn echo(client: &McpClient) -> Arc<McpTool> {
+        let policy = ToolPolicy::default()
+            .with_retry(RetryPolicy::ReadOnly)
+            .with_requires_approval(false);
+        client.tool("echo", "echo", policy).unwrap()
+    }
+    /// Requests the server received, by method.
+    fn requests(root: &Path, kind: &str) -> usize {
+        std::fs::read_to_string(root.join("events.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.contains(&format!("\"kind\": \"{kind}\"")))
+            .count()
+    }
+
+    const TEXT: &str = "a text long enough to need its own allocation";
+    async fn call(tool: &McpTool) {
+        let context = ToolContext::new(RunId::nil(), "call", "key");
+        let output = tool
+            .execute(json!({ "text": TEXT }), context)
+            .await
+            .unwrap();
+        assert!(matches!(output, ToolOutput::Complete(_)), "{output:?}");
+    }
+
+    #[tokio::test]
+    async fn mcp_call_budgets() {
+        let server = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let catalogs = [
+            (
+                "one_page",
+                json!({}),
+                MCP_REQUESTS_PER_CALL_ONE_PAGE,
+                ALLOC_MCP_CALL_ONE_PAGE,
+            ),
+            (
+                "four_pages",
+                json!({"catalog_size": 32, "list_mode": "paginate", "page_size": 8}),
+                MCP_REQUESTS_PER_CALL_FOUR_PAGES,
+                ALLOC_MCP_CALL_FOUR_PAGES,
+            ),
+        ];
+        for (name, config, requests_per_call, budget) in catalogs {
+            let root = tempfile::TempDir::new().unwrap();
+            let path = root.path().to_owned();
+            let client = server
+                .spawn(async move { connect(&path, config).await })
+                .await
+                .unwrap();
+            let tool = echo(&client);
+            let before = requests(root.path(), "list") + requests(root.path(), "call");
+            call(&tool).await;
+            let sent = requests(root.path(), "list") + requests(root.path(), "call") - before;
+            eprintln!("mcp_requests_per_call_{name}: {sent} (budget {requests_per_call})");
+            assert_eq!(sent, requests_per_call);
+            stable(&format!("mcp_call_{name}"), budget, || call(&tool)).await;
+            if name == "one_page" {
+                let arguments = json!({ "text": TEXT });
+                stable("mcp_validate", ALLOC_MCP_VALIDATE, || async {
+                    tool.validate(&arguments).unwrap();
+                })
+                .await;
+            }
+            client.close().await.unwrap();
+        }
+        server.shutdown_background();
+    }
+}

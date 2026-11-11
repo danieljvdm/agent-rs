@@ -8,6 +8,8 @@ mod context;
 mod engine;
 mod error;
 mod host;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 #[cfg(feature = "memory")]
 pub mod memory;
 mod model;
