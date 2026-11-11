@@ -44,13 +44,20 @@ jobs:
     if: needs.plan.outputs.tagged == 'true' && needs.plan.outputs.pending == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
-      actions: write # to start the checks on the release branch, below
+      contents: read
     steps:
+      # GITHUB_TOKEN-created pull requests require approval before CI can run.
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: release-token
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ steps.release-token.outputs.token }}
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -59,14 +66,7 @@ jobs:
           version: 0.23.2
       - run: knope prepare-release --verbose
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # A push or pull request made with the workflow's token starts no workflows, and main
-      # requires these checks, so start them on the release branch directly.
-      - run: |
-          gh workflow run ci.yml --ref release
-          gh workflow run postgres.yml --ref release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.release-token.outputs.token }}
 
   publish:
     needs: plan
