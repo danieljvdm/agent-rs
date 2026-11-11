@@ -56,6 +56,9 @@ jobs:
       - uses: knope-dev/action@v2.1.2
         with:
           version: 0.23.2
+      # A pull request is checked out as a detached merge commit, and Knope's pull request step
+      # needs to be on a branch.
+      - run: git switch -c release-config-check
       - run: knope --validate
       - run: |
           if ls .changeset/*.md > /dev/null 2>&1; then knope prepare-release --dry-run; fi
