@@ -52,6 +52,8 @@ If steering changes a plan with an outstanding approval, the application can sti
 
 An accepted instruction may therefore wait indefinitely for an explicit resolution. Preempting model requests, replacing an outstanding tool batch, cancel-and-replan, and arbitrary input joining are not supported; each would need its own contract for the effect in flight.
 
+With [attached subagents](attached-subagents.md), steering still targets the root: a child is not a run of the store, so steering a child's ID is `Error::NotFound`. Instructions queued while children run or wait are applied at the root's next model dispatch, after the delegations' exchange; commits that carry a child's progress are commits of the root in `Tools` and never apply them. A root completes only after its children settled, so a reopened completion leaves them as they are. A child's history never receives an instruction.
+
 ## Inspection, history and context
 
 `SteeringStatus::Queued` means acceptance committed and no dispatch commit has applied the instruction. `Applied { revision }` names the dispatch commit that appended it. It does not say the provider received the request or followed it: a process can stop right after the commit, and recovery repeats the model attempt with the same history, never appending the instruction twice. `NotApplied` means the run settled while it was queued. Limits, token totals, call counters and active-time reservations carry through all of these transitions.
