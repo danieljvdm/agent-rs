@@ -1,5 +1,5 @@
 name: Rust
-# `workflow_dispatch` lets release.yml start these checks on the release branch.
+# `workflow_dispatch` also allows a manual run on a selected branch.
 on: [push, pull_request, workflow_dispatch]
 jobs:
   check:

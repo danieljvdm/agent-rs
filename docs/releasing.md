@@ -49,9 +49,22 @@ There is no crates.io token in the repository. Publishing uses
 [trusted publishing](https://crates.io/docs/trusted-publishing): crates.io accepts the `publish`
 job because the crate's settings name this repository and `release.yml`.
 
-The release pull request is opened with the workflow's own token. GitHub starts no workflows for
-pushes and pull requests made that way, and `main` requires the CI checks, so `release.yml` starts
-`ci.yml` and `postgres.yml` on the `release` branch itself.
+Release pull requests use a dedicated GitHub App installation token for both the Git push and
+Knope's pull request API calls. This lets the normal CI workflows start automatically. Pull
+requests created with the built-in `GITHUB_TOKEN` instead require a maintainer to approve their
+workflow runs, even when the release workflow separately dispatches the required checks.
+
+Before enabling release pull request automation:
+
+1. Register a GitHub App with repository **Contents: Read and write** and **Pull requests: Read
+   and write** permissions. It does not need a webhook or organization permissions.
+2. Install the app on this repository only.
+3. Add its client ID as the Actions repository variable `RELEASE_APP_CLIENT_ID` and its private
+   key as the Actions repository secret `RELEASE_APP_PRIVATE_KEY`.
+
+The workflow requests a token scoped to this repository and those two permissions. The app
+token is revoked when the release pull request job finishes; publishing continues to use
+`GITHUB_TOKEN` and crates.io trusted publishing.
 
 ## If a release fails half-way
 
