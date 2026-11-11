@@ -17,20 +17,27 @@
 //!   entries the run owns, and the discovery fields `wake_at`, `recover` and `last_error`.
 //! - `history` holds each entry once, appended in order; `operations` retains every operation
 //!   the run recorded, across batches, upserted only when it changed.
+//! - `children` holds one progress row per child a run's delegations admitted. A child's
+//!   acceptance is a `runs` row written once, at admission, under its conversation
+//!   `child:{root}:{call}`, and its history and operations are rows like a run's. A child has no
+//!   `checkpoints` row: it is never discovered, claimed or read on its own, and its root's
+//!   `wake_at` and `recover` columns account for it.
 //!
 //! Every write is a single statement, so it is one implicit transaction and one network round
 //! trip: a commit's fenced `UPDATE` of the checkpoint row, its history append and its operation
 //! upserts are data-modifying parts of one `WITH` query, and only reach the history and
-//! operations tables when the fence matched. Reads that precede a write in the same job (the
-//! load before a claim or an update) cannot race another writer, because only the owning
-//! session writes the schema, and the write is fenced regardless. JSON is stored as text,
+//! operations tables when the fence matched. A commit that changed children writes them in the
+//! same query, behind the same fence; one that changed none sends the plain statement. Reads
+//! that precede a write in the same job (the load before a claim or an update) cannot race
+//! another writer, because only the owning session writes the schema, and the write is fenced
+//! regardless. JSON is stored as text,
 //! byte for byte; discovery reads the stored `wake_at` and `recover` columns, never JSON.
 use crate::store;
 use crate::types::STATE_VERSION;
 use crate::{
-    Agent, Checkpoint, CheckpointPosition, DurableStore, Error, ErrorDetail, HistoryEntry,
-    HostSlot, ModelResponse, Operation, Phase, Result, RunId, RunState, RunUpdate, StoreLease,
-    Usage,
+    Agent, AttachedChild, Checkpoint, CheckpointPosition, DurableStore, Error, ErrorDetail,
+    HistoryEntry, HostSlot, ModelResponse, Operation, ParentRun, Phase, Result, RunId, RunState,
+    RunUpdate, StoreLease, Usage,
 };
 use async_trait::async_trait;
 use futures::future::{BoxFuture, try_join_all};
@@ -53,9 +60,10 @@ use tokio::{
 use tokio_postgres::{Client, Row, Socket, Statement, tls::MakeTlsConnect, types::ToSql};
 pub use tokio_postgres::{Config, NoTls};
 
-/// The layout version in `store_metadata`. Versions 1 and 2 were pre-release layouts that kept
-/// whole states in an `active` table; they are refused as incompatible, not migrated.
-const STORAGE_VERSION: i32 = 3;
+/// The layout version in `store_metadata`. Versions 1 to 3 were pre-release layouts (1 and 2
+/// kept whole states in an `active` table; 3 had no `children` table); they are refused as
+/// incompatible, not migrated.
+const STORAGE_VERSION: i32 = 4;
 /// Jobs that may wait for the session before callers feel backpressure.
 const QUEUE: usize = 64;
 /// History rows read per round trip while selecting a new run's bounded prior context.
@@ -119,11 +127,13 @@ struct Counters {
 /// Statements prepared once per session, so each later use is a single round trip.
 struct Statements {
     load: Statement,
+    load_children: Statement,
     find: Statement,
     context: Statement,
     insert: Statement,
     claim: Statement,
     write: Statement,
+    write_children: Statement,
     inspect: Statement,
     due: Statement,
     recovery: Statement,
@@ -212,9 +222,15 @@ pub struct PostgresStore {
     /// Only a hint for which entries to send: the commit's fence checks it against the stored
     /// length, and a missing hint sends the run's whole history.
     history_hints: Mutex<HashMap<RunId, usize>>,
+    /// The same for children: the revision and history length stored for each, so a commit
+    /// sends only the children it changed. A missing hint sends the whole child, acceptance
+    /// included; the statement skips what is already stored.
+    child_hints: Mutex<HashMap<RunId, (u64, usize)>>,
 }
 
-/// The part of a `RunState` a commit may change, other than appending history.
+/// The part of a `RunState` a commit may change, other than appending history. A run that has
+/// admitted children also records their usage and how many there are; a run without children
+/// encodes exactly as it did before children existed.
 #[derive(Serialize)]
 struct ProgressRef<'a> {
     cancel_requested: bool,
@@ -222,6 +238,26 @@ struct ProgressRef<'a> {
     usage: &'a Usage,
     pending_response: &'a Option<ModelResponse>,
     operations: &'a [Operation],
+    #[serde(skip_serializing_if = "is_zero")]
+    children: usize,
+    #[serde(skip_serializing_if = "Usage::is_zero")]
+    child_usage: &'a Usage,
+}
+impl<'a> ProgressRef<'a> {
+    fn of(state: &'a RunState) -> Self {
+        Self {
+            cancel_requested: state.cancel_requested,
+            phase: &state.phase,
+            usage: &state.usage,
+            pending_response: &state.pending_response,
+            operations: &state.operations,
+            children: state.children.len(),
+            child_usage: &state.child_usage,
+        }
+    }
+}
+fn is_zero(count: &usize) -> bool {
+    *count == 0
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -231,6 +267,10 @@ struct Progress {
     usage: Usage,
     pending_response: Option<ModelResponse>,
     operations: Vec<Operation>,
+    #[serde(default)]
+    children: usize,
+    #[serde(default)]
+    child_usage: Usage,
 }
 
 /// Everything one write sends, encoded from a borrow of the caller's state.
@@ -247,6 +287,8 @@ struct Delta {
     history: Vec<String>,
     call_ids: Vec<String>,
     operations: Vec<String>,
+    /// The children this write changed; empty unless the run has children.
+    children: Children,
 }
 impl Delta {
     fn encode(
@@ -258,13 +300,7 @@ impl Delta {
         Ok(Self {
             id: state.id.to_string(),
             revision: int(revision)?,
-            progress: encode(&ProgressRef {
-                cancel_requested: state.cancel_requested,
-                phase: &state.phase,
-                usage: &state.usage,
-                pending_response: &state.pending_response,
-                operations: &state.operations,
-            })?,
+            progress: encode(&ProgressRef::of(state))?,
             settled: state.is_terminal(),
             wake_at: if wake_now {
                 Some(0)
@@ -284,18 +320,113 @@ impl Delta {
                 .map(|op| op.call.id.clone())
                 .collect(),
             operations: state.operations.iter().map(encode).collect::<Result<_>>()?,
+            children: Children::default(),
         })
     }
     /// JSON bytes this delta sends, as counted by [`StoreMetrics::payload_bytes`].
     fn bytes(&self) -> u64 {
         let texts = self.history.iter().chain(&self.operations);
-        (self.progress.len() + texts.map(String::len).sum::<usize>()) as u64
+        (self.progress.len() + texts.map(String::len).sum::<usize>()) as u64 + self.children.bytes()
+    }
+}
+
+/// The children one write changed, flattened into the array parameters of `WRITE_CHILDREN`:
+/// one element per child in the first group, then one per new history entry and one per
+/// current operation, each naming its child by 1-based position in the first group.
+#[derive(Default)]
+struct Children {
+    ids: Vec<String>,
+    /// Admission order within the root.
+    ordinals: Vec<i64>,
+    call_ids: Vec<String>,
+    conversations: Vec<String>,
+    revisions: Vec<i64>,
+    progress: Vec<String>,
+    history_lens: Vec<i64>,
+    /// The ordinal of each child's first entry sent.
+    history_froms: Vec<i64>,
+    /// A child's acceptance, sent only when this store does not know it is stored; otherwise
+    /// `None`. A child with a binding and `history_from` 0 may be admitted by the write.
+    agent_ids: Vec<Option<String>>,
+    bindings: Vec<Option<String>>,
+    inputs: Vec<Option<String>>,
+    limits: Vec<Option<String>>,
+    expires_at: Vec<Option<i64>>,
+    entry_children: Vec<i64>,
+    entry_ordinals: Vec<i64>,
+    entries: Vec<String>,
+    operation_children: Vec<i64>,
+    operation_call_ids: Vec<String>,
+    operations: Vec<String>,
+}
+impl Children {
+    /// Encodes every child whose revision differs from what `known` says is stored. A child
+    /// `known` does not know is encoded whole, acceptance included.
+    fn encode(state: &RunState, known: impl Fn(RunId) -> Option<(u64, usize)>) -> Result<Self> {
+        let mut out = Self::default();
+        for (ordinal, attached) in state.children.iter().enumerate() {
+            let child = &attached.state;
+            let known = known(child.id);
+            if known.is_some_and(|(revision, _)| revision == child.revision) {
+                continue;
+            }
+            let from = known
+                .map(|(_, len)| len)
+                .filter(|len| *len <= child.history.len())
+                .unwrap_or(0);
+            let position = int(out.ids.len() as u64 + 1)?;
+            out.ids.push(child.id.to_string());
+            out.ordinals.push(int(ordinal as u64)?);
+            out.call_ids.push(attached.call_id.clone());
+            out.conversations.push(child.conversation_id.clone());
+            out.revisions.push(int(child.revision)?);
+            out.progress.push(encode(&ProgressRef::of(child))?);
+            out.history_lens.push(int(child.history.len() as u64)?);
+            out.history_froms.push(int(from as u64)?);
+            let whole = known.is_none();
+            out.agent_ids.push(whole.then(|| child.agent_id.clone()));
+            out.bindings
+                .push(whole.then(|| encode(&child.binding)).transpose()?);
+            out.inputs
+                .push(whole.then(|| encode(&child.input)).transpose()?);
+            out.limits
+                .push(whole.then(|| encode(&child.limits)).transpose()?);
+            out.expires_at
+                .push(sql_time(child.expires_at_ms).filter(|_| whole));
+            for (ordinal, entry) in child.history.iter().enumerate().skip(from) {
+                out.entry_children.push(position);
+                out.entry_ordinals.push(int(ordinal as u64)?);
+                out.entries.push(encode(entry)?);
+            }
+            for op in &child.operations {
+                out.operation_children.push(position);
+                out.operation_call_ids.push(op.call.id.clone());
+                out.operations.push(encode(op)?);
+            }
+        }
+        Ok(out)
+    }
+    fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+    fn bytes(&self) -> u64 {
+        let acceptance = [&self.bindings, &self.inputs, &self.limits]
+            .into_iter()
+            .flatten()
+            .flatten();
+        let texts = (self.progress.iter())
+            .chain(acceptance)
+            .chain(&self.entries)
+            .chain(&self.operations);
+        texts.map(String::len).sum::<usize>() as u64
     }
 }
 enum Written {
     Done,
     /// The stored history is shorter than the delta's first encoded entry.
     NeedHistoryFrom(usize),
+    /// A child's stored progress does not match the hint it was encoded from.
+    NeedChildren,
 }
 
 fn encode(value: &impl Serialize) -> Result<String> {
@@ -365,6 +496,12 @@ CREATE TABLE $schema.operations (
     call_id TEXT COLLATE "C" NOT NULL, first_revision BIGINT NOT NULL,
     batch_index BIGINT NOT NULL, operation TEXT NOT NULL,
     PRIMARY KEY (run_id, call_id));
+CREATE TABLE $schema.children (
+    child_id TEXT COLLATE "C" PRIMARY KEY REFERENCES $schema.runs(id),
+    root_id TEXT COLLATE "C" NOT NULL REFERENCES $schema.runs(id),
+    ordinal BIGINT NOT NULL, call_id TEXT COLLATE "C" NOT NULL, revision BIGINT NOT NULL,
+    history_len BIGINT NOT NULL, progress TEXT NOT NULL,
+    UNIQUE (root_id, ordinal));
 "#;
 
 /// Reassemble a run from its acceptance, checkpoint and history rows, in one round trip.
@@ -375,6 +512,15 @@ SELECT r.version, r.conversation, r.agent_id, r.binding, r.input, r.limits, r.ex
         WHERE h.run_id = r.id AND h.ordinal < c.history_len ORDER BY h.ordinal)
 FROM $schema.runs r JOIN $schema.checkpoints c ON c.run_id = r.id
 WHERE r.id = $1::text";
+/// A root's children in admission order, each with its acceptance and history, in one round
+/// trip. Read only for a run whose progress records children.
+const LOAD_CHILDREN: &str = "
+SELECT c.child_id, c.call_id, c.revision, c.history_len, c.progress, r.version, r.conversation,
+    r.agent_id, r.binding, r.input, r.limits, r.expires_at,
+    ARRAY(SELECT h.entry FROM $schema.history h
+        WHERE h.run_id = c.child_id AND h.ordinal < c.history_len ORDER BY h.ordinal)
+FROM $schema.children c JOIN $schema.runs r ON r.id = c.child_id
+WHERE c.root_id = $1::text ORDER BY c.ordinal";
 /// An earlier acceptance under this key, if any, and whether the conversation is busy.
 const FIND: &str = "
 SELECT r.id, r.input, r.binding, r.expires_at,
@@ -449,6 +595,100 @@ op AS (
         WHERE o.operation <> excluded.operation
     RETURNING 1)
 SELECT (SELECT count(*) FROM cp), (SELECT count(*) FROM h), (SELECT count(*) FROM op)";
+/// `WRITE` for a delta that changed children: the root's parts are the same, and its fence also
+/// requires every child sent to match how it was encoded. `d` pairs each child sent with its
+/// stored progress row, read from the statement's snapshot: a child with no row is admitted if
+/// its acceptance was sent and its history sent whole; a child whose stored revision equals the
+/// one sent is unchanged and skipped; any other must have a stored history length between its
+/// first entry sent and its new length. Children are written only through the fenced row, so a
+/// refused fence writes no child either. An admitted child gets its acceptance as a `runs` row
+/// and its progress row; a changed child gets its progress updated; both append their new
+/// history and upsert their operations, which first appear at the root's new revision. A
+/// child's history rows carry its root's acceptance sequence: its conversation holds only it.
+/// The last two columns classify children for a refusal: those whose stored history is longer
+/// than the one sent, and every child that does not match.
+const WRITE_CHILDREN: &str = "
+WITH d AS (
+    SELECT t.k, t.id, t.ordinal, t.call_id, t.conversation, t.revision, t.progress,
+        t.history_len, t.agent_id, t.binding, t.input, t.limits, t.expires_at,
+        s.child_id IS NULL AS fresh,
+        s.child_id IS NULL OR s.revision <> t.revision AS changed,
+        CASE WHEN s.child_id IS NULL THEN t.binding IS NOT NULL AND t.history_from = 0
+            WHEN s.revision = t.revision THEN true
+            ELSE s.history_len BETWEEN t.history_from AND t.history_len END AS ok,
+        s.child_id IS NOT NULL AND s.revision <> t.revision AND s.history_len > t.history_len
+            AS shrunk
+    FROM UNNEST($16::text[], $17::int8[], $18::text[], $19::text[], $20::int8[], $21::text[],
+            $22::int8[], $23::int8[], $24::text[], $25::text[], $26::text[], $27::text[],
+            $28::int8[])
+        WITH ORDINALITY AS t(id, ordinal, call_id, conversation, revision, progress,
+            history_len, history_from, agent_id, binding, input, limits, expires_at, k)
+    LEFT JOIN $schema.children s ON s.child_id = t.id AND s.root_id = $1::text),
+cp AS (
+    UPDATE $schema.checkpoints
+    SET revision = $4::int8, history_len = $5::int8, progress = $6::text, settled = $7::bool,
+        wake_at = $8::int8, recover = $9::bool,
+        last_error = CASE WHEN $10::bool THEN NULL ELSE last_error END
+    WHERE run_id = $1::text AND generation = $2::int8 AND revision = $3::int8
+        AND ($11::bool OR NOT settled) AND history_len BETWEEN $12::int8 AND $5::int8
+        AND NOT EXISTS (SELECT 1 FROM d WHERE d.ok IS NOT TRUE)
+    RETURNING run_seq, conversation),
+h AS (
+    INSERT INTO $schema.history (run_id, ordinal, conversation, run_seq, entry)
+    SELECT $1::text, $12::int8 + t.i - 1, cp.conversation, cp.run_seq, t.entry
+    FROM cp, UNNEST($13::text[]) WITH ORDINALITY AS t(entry, i)
+    ON CONFLICT (run_id, ordinal) DO NOTHING
+    RETURNING 1),
+op AS (
+    INSERT INTO $schema.operations AS o (run_id, call_id, first_revision, batch_index,
+        operation)
+    SELECT $1::text, t.call_id, $4::int8, t.i, t.operation
+    FROM cp, UNNEST($14::text[], $15::text[]) WITH ORDINALITY AS t(call_id, operation, i)
+    ON CONFLICT (run_id, call_id) DO UPDATE SET operation = excluded.operation
+        WHERE o.operation <> excluded.operation
+    RETURNING 1),
+cr AS (
+    INSERT INTO $schema.runs (id, conversation, idempotency_key, version, agent_id, binding,
+        input, limits, expires_at, prior_context)
+    SELECT d.id, d.conversation, d.call_id, $29::int4, d.agent_id, d.binding, d.input,
+        d.limits, d.expires_at, '[]'
+    FROM cp, d WHERE d.fresh
+    RETURNING 1),
+cc AS (
+    INSERT INTO $schema.children (child_id, root_id, ordinal, call_id, revision, history_len,
+        progress)
+    SELECT d.id, $1::text, d.ordinal, d.call_id, d.revision, d.history_len, d.progress
+    FROM cp, d WHERE d.fresh
+    RETURNING 1),
+cu AS (
+    UPDATE $schema.children AS c
+    SET revision = d.revision, history_len = d.history_len, progress = d.progress
+    FROM cp, d WHERE c.child_id = d.id AND d.changed AND NOT d.fresh
+    RETURNING 1),
+ch AS (
+    INSERT INTO $schema.history (run_id, ordinal, conversation, run_seq, entry)
+    SELECT d.id, e.ordinal, d.conversation, cp.run_seq, e.entry
+    FROM cp CROSS JOIN UNNEST($30::int8[], $31::int8[], $32::text[]) AS e(k, ordinal, entry)
+        JOIN d ON d.k = e.k
+    WHERE d.changed
+    ON CONFLICT (run_id, ordinal) DO NOTHING
+    RETURNING 1),
+co AS (
+    INSERT INTO $schema.operations AS o (run_id, call_id, first_revision, batch_index,
+        operation)
+    SELECT d.id, e.call_id, $4::int8, e.i, e.operation
+    FROM cp CROSS JOIN UNNEST($33::int8[], $34::text[], $35::text[])
+            WITH ORDINALITY AS e(k, call_id, operation, i)
+        JOIN d ON d.k = e.k
+    WHERE d.changed
+    ON CONFLICT (run_id, call_id) DO UPDATE SET operation = excluded.operation
+        WHERE o.operation <> excluded.operation
+    RETURNING 1)
+SELECT (SELECT count(*) FROM cp), (SELECT count(*) FROM h), (SELECT count(*) FROM op),
+    (SELECT count(*) FROM cr) + (SELECT count(*) FROM cc) + (SELECT count(*) FROM cu)
+        + (SELECT count(*) FROM ch) + (SELECT count(*) FROM co),
+    (SELECT count(*) FROM d WHERE d.shrunk),
+    (SELECT count(*) FROM d WHERE d.ok IS NOT TRUE)";
 /// Why a write was refused; read only after a refusal.
 const INSPECT: &str = "
 SELECT generation, revision, settled, history_len FROM $schema.checkpoints
@@ -571,11 +811,13 @@ impl Database {
         // Prepared together: the client pipelines them in one exchange.
         let texts = [
             LOAD,
+            LOAD_CHILDREN,
             FIND,
             CONTEXT,
             INSERT,
             CLAIM,
             WRITE,
+            WRITE_CHILDREN,
             INSPECT,
             DUE,
             RECOVERY,
@@ -591,11 +833,13 @@ impl Database {
             .map_err(Error::storage)?;
         let [
             load,
+            load_children,
             find,
             context,
             insert,
             claim,
             write,
+            write_children,
             inspect,
             due,
             recovery,
@@ -604,16 +848,18 @@ impl Database {
             last_error,
             history,
             operations,
-        ] = <[Statement; 14]>::try_from(prepared).map_err(|_| Error::storage("prepare"))?;
+        ] = <[Statement; 16]>::try_from(prepared).map_err(|_| Error::storage("prepare"))?;
         Ok(Self {
             client,
             sql: Statements {
                 load,
+                load_children,
                 find,
                 context,
                 insert,
                 claim,
                 write,
+                write_children,
                 inspect,
                 due,
                 recovery,
@@ -654,7 +900,7 @@ async fn load(db: &Database, id: RunId) -> Result<RunState> {
         .map(decode)
         .collect::<Result<Vec<HistoryEntry>>>()?;
     let progress: Progress = decode(get(&row, 11)?)?;
-    Ok(RunState {
+    let mut state = RunState {
         version: STATE_VERSION,
         id,
         conversation_id: get(&row, 1)?,
@@ -674,8 +920,76 @@ async fn load(db: &Database, id: RunId) -> Result<RunState> {
         operations: progress.operations,
         parent: None,
         children: Vec::new(),
-        child_usage: Usage::default(),
-    })
+        child_usage: progress.child_usage,
+    };
+    if progress.children > 0 {
+        state.children = load_children(db, &state, progress.children).await?;
+    }
+    Ok(state)
+}
+/// The `count` children of `root`, in admission order, in one round trip.
+async fn load_children(db: &Database, root: &RunState, count: usize) -> Result<Vec<AttachedChild>> {
+    let rows = db
+        .query(&db.sql.load_children, &[&root.id.to_string()])
+        .await?;
+    if rows.len() != count {
+        return Err(Error::storage(format!(
+            "run {} records {count} children but {} are stored",
+            root.id,
+            rows.len()
+        )));
+    }
+    let mut children = Vec::with_capacity(count);
+    for row in &rows {
+        let version: i32 = get(row, 5)?;
+        if i64::from(version) != i64::from(STATE_VERSION) {
+            return Err(Error::incompatible(format!(
+                "child state version {version}"
+            )));
+        }
+        let id = run_id(get(row, 0)?)?;
+        let call_id: String = get(row, 1)?;
+        let history_len = usize::try_from(get::<i64>(row, 3)?).map_err(Error::storage)?;
+        let entries: Vec<&str> = get(row, 12)?;
+        if entries.len() != history_len {
+            return Err(Error::storage(format!(
+                "child {id} records {history_len} history entries but {} are stored",
+                entries.len()
+            )));
+        }
+        let progress: Progress = decode(get(row, 4)?)?;
+        let state = RunState {
+            version: STATE_VERSION,
+            id,
+            conversation_id: get(row, 6)?,
+            agent_id: get(row, 7)?,
+            binding: decode(get(row, 8)?)?,
+            input: decode(get(row, 9)?)?,
+            limits: decode(get(row, 10)?)?,
+            expires_at_ms: get::<Option<i64>>(row, 11)?.map(uint).transpose()?,
+            // Children are fenced by their root, never claimed themselves.
+            generation: 0,
+            revision: uint(get(row, 2)?)?,
+            cancel_requested: progress.cancel_requested,
+            phase: progress.phase,
+            usage: progress.usage,
+            prior_context: Vec::new(),
+            history: entries.into_iter().map(decode).collect::<Result<_>>()?,
+            pending_response: progress.pending_response,
+            operations: progress.operations,
+            parent: Some(ParentRun {
+                run_id: root.id,
+                call_id: call_id.clone(),
+            }),
+            children: Vec::new(),
+            child_usage: progress.child_usage,
+        };
+        children.push(AttachedChild {
+            call_id,
+            state: Box::new(state),
+        });
+    }
+    Ok(children)
 }
 /// The conversation's newest history that fits `limit` encoded bytes, oldest first, read in
 /// pages of `CONTEXT_PAGE` rows: the same rule as SQLite and `MemoryStore`.
@@ -789,32 +1103,65 @@ async fn write_delta(
 ) -> Result<Written> {
     let (generation, revision) = (int(expected.generation)?, int(expected.revision)?);
     let clear_error = clear_error || delta.settled;
-    let row = db
-        .query_one(
-            &db.sql.write,
-            &[
-                &delta.id,
-                &generation,
-                &revision,
-                &delta.revision,
-                &delta.history_len,
-                &delta.progress,
-                &delta.settled,
-                &delta.wake_at,
-                &delta.recover,
-                &clear_error,
-                &allow_settled,
-                &delta.history_from,
-                &delta.history,
-                &delta.call_ids,
-                &delta.operations,
-            ],
-        )
-        .await?;
+    let root: [&(dyn ToSql + Sync); 15] = [
+        &delta.id,
+        &generation,
+        &revision,
+        &delta.revision,
+        &delta.history_len,
+        &delta.progress,
+        &delta.settled,
+        &delta.wake_at,
+        &delta.recover,
+        &clear_error,
+        &allow_settled,
+        &delta.history_from,
+        &delta.history,
+        &delta.call_ids,
+        &delta.operations,
+    ];
+    // A write that changed no child sends the plain statement, unchanged by children.
+    let children = &delta.children;
+    let row = if children.is_empty() {
+        db.query_one(&db.sql.write, &root).await?
+    } else {
+        let version = i32::try_from(STATE_VERSION).map_err(Error::storage)?;
+        let child: [&(dyn ToSql + Sync); 20] = [
+            &children.ids,
+            &children.ordinals,
+            &children.call_ids,
+            &children.conversations,
+            &children.revisions,
+            &children.progress,
+            &children.history_lens,
+            &children.history_froms,
+            &children.agent_ids,
+            &children.bindings,
+            &children.inputs,
+            &children.limits,
+            &children.expires_at,
+            &version,
+            &children.entry_children,
+            &children.entry_ordinals,
+            &children.entries,
+            &children.operation_children,
+            &children.operation_call_ids,
+            &children.operations,
+        ];
+        let params: Vec<_> = root.into_iter().chain(child).collect();
+        db.query_one(&db.sql.write_children, &params).await?
+    };
     let (checkpoints, history, operations): (i64, i64, i64) =
         (get(&row, 0)?, get(&row, 1)?, get(&row, 2)?);
+    // Children's rows written, children with a longer stored history, children that differ.
+    let (child_writes, shrunk, mismatched): (i64, i64, i64) = if children.is_empty() {
+        (0, 0, 0)
+    } else {
+        (get(&row, 3)?, get(&row, 4)?, get(&row, 5)?)
+    };
     if checkpoints == 1 {
-        db.count(1 + uint(history)? + uint(operations)?, delta.bytes());
+        let writes = 1 + uint(history)? + uint(operations)? + uint(child_writes)?;
+        db.count(writes, delta.bytes());
         return Ok(Written::Done);
     }
     // Refused: one more read says why, in the order SQLite checks.
@@ -834,6 +1181,13 @@ async fn write_delta(
         return Ok(Written::NeedHistoryFrom(
             usize::try_from(stored).map_err(Error::storage)?,
         ));
+    }
+    // The run itself matched, so its children refused the write.
+    if shrunk > 0 {
+        return Err(Error::input("history is append-only"));
+    }
+    if mismatched > 0 {
+        return Ok(Written::NeedChildren);
     }
     Err(Error::storage(
         "checkpoint write refused at a matching position",
@@ -984,6 +1338,7 @@ impl PostgresStore {
             counters,
             slot: HostSlot::default(),
             history_hints: Mutex::new(HashMap::new()),
+            child_hints: Mutex::new(HashMap::new()),
         })
     }
     /// Work done since the store connected.
@@ -1065,6 +1420,26 @@ impl PostgresStore {
             .and_then(|hints| hints.get(&state.id).copied())
             .filter(|length| *length <= state.history.len())
             .unwrap_or(0)
+    }
+    /// Records what is now stored for each of the run's children, or forgets them.
+    fn hint_children(&self, state: &RunState, stored: bool) {
+        if let Ok(mut hints) = self.child_hints.lock() {
+            for child in &state.children {
+                let child = &child.state;
+                if stored && !state.is_terminal() {
+                    hints.insert(child.id, (child.revision, child.history.len()));
+                } else {
+                    hints.remove(&child.id);
+                }
+            }
+        }
+    }
+    fn encode_children(&self, state: &RunState) -> Result<Children> {
+        let hints = self
+            .child_hints
+            .lock()
+            .map_err(|_| Error::storage("PostgreSQL hint lock poisoned"))?;
+        Children::encode(state, |id| hints.get(&id).copied())
     }
 }
 fn stopped(cause: Arc<Error>) -> Error {
@@ -1151,6 +1526,9 @@ impl DurableStore for PostgresStore {
             })
             .await?;
         self.hint(id, Some(state.history.len()));
+        if !state.children.is_empty() {
+            self.hint_children(&state, true);
+        }
         Ok(state)
     }
     async fn update(&self, id: RunId, update: RunUpdate) -> Result<()> {
@@ -1158,17 +1536,29 @@ impl DurableStore for PostgresStore {
             let mut state = load(&db, id).await?;
             let fence = CheckpointPosition::from(&state);
             let durable = state.history.len();
+            let stored: HashMap<RunId, (u64, usize)> = (state.children.iter())
+                .map(|child| {
+                    (
+                        child.state.id,
+                        (child.state.revision, child.state.history.len()),
+                    )
+                })
+                .collect();
             let effect = update.apply(&mut state)?;
             if !effect.changed {
                 return Ok(());
             }
             let revision = store::advance(state.revision, "revision")?;
-            let delta = Delta::encode(&state, revision, durable, effect.wake_now)?;
+            let mut delta = Delta::encode(&state, revision, durable, effect.wake_now)?;
+            if !state.children.is_empty() {
+                delta.children = Children::encode(&state, |id| stored.get(&id).copied())?;
+            }
             match write_delta(&db, &delta, fence, true, effect.clear_error).await? {
                 Written::Done => Ok(()),
                 Written::NeedHistoryFrom(_) => {
                     Err(Error::storage("run history changed during update"))
                 }
+                Written::NeedChildren => Err(Error::storage("run children changed during update")),
             }
         })
         .await
@@ -1243,33 +1633,55 @@ impl DurableStore for PostgresStore {
 #[async_trait]
 impl Checkpoint for PostgresStore {
     /// One statement, one round trip: the run's progress, its new history and its changed
-    /// operations, encoded here from a borrow. The stored acceptance is never compared or
-    /// rewritten.
+    /// operations, encoded here from a borrow, and for each child whose revision advanced its
+    /// progress, new history and operations (with its acceptance when it was just admitted).
+    /// The stored acceptance is never compared or rewritten.
     async fn commit(&self, state: &mut RunState) -> Result<()> {
         let fence = CheckpointPosition::from(&*state);
         let revision = store::advance(state.revision, "revision")?;
         let mut from = self.hinted(state);
+        let mut resent_children = false;
         loop {
-            let delta = Delta::encode(state, revision, from, false)?;
+            let mut delta = Delta::encode(state, revision, from, false)?;
+            if !state.children.is_empty() {
+                delta.children = self.encode_children(state)?;
+            }
             let written = self
                 .call(move |db| async move { write_delta(&db, &delta, fence, false, false).await })
                 .await;
-            match written {
+            let failed = match written {
                 Ok(Written::Done) => break,
                 // The hint ran ahead of durable history; resend from the stored length.
-                Ok(Written::NeedHistoryFrom(stored)) if stored < from => from = stored,
+                Ok(Written::NeedHistoryFrom(stored)) if stored < from => {
+                    from = stored;
+                    continue;
+                }
+                // A child's hint was wrong; forget them all and resend every child whole, once.
+                Ok(Written::NeedChildren) if !resent_children => {
+                    resent_children = true;
+                    self.hint_children(state, false);
+                    continue;
+                }
                 Ok(Written::NeedHistoryFrom(_)) => {
-                    return Err(Error::storage("checkpoint history changed during commit"));
+                    Error::storage("checkpoint history changed during commit")
                 }
-                Err(error) => {
-                    self.hint(state.id, None);
-                    return Err(error);
+                Ok(Written::NeedChildren) => {
+                    Error::storage("checkpoint children changed during commit")
                 }
+                Err(error) => error,
+            };
+            self.hint(state.id, None);
+            if !state.children.is_empty() {
+                self.hint_children(state, false);
             }
+            return Err(failed);
         }
         state.revision = revision;
         let settled = state.is_terminal();
         self.hint(state.id, (!settled).then_some(state.history.len()));
+        if !state.children.is_empty() {
+            self.hint_children(state, true);
+        }
         Ok(())
     }
 }
@@ -1286,48 +1698,114 @@ impl Drop for PostgresStore {
 mod tests {
     use super::*;
     use crate::{
-        RunControl, ScriptedModel, Settlement, Tool, ToolCall, ToolOutput, ToolSpec, typed_tool,
+        Limits, RunControl, ScriptedModel, Settlement, Subagent, Tool, ToolCall, ToolOutput,
+        ToolSpec, typed_tool,
     };
     use serde_json::json;
 
     /// Bytes of JSON one four-round run sends from claim through settlement (with 2% headroom
     /// for wall-clock digits in `active_ms`). Prior context is sent once, at acceptance.
     const PAYLOAD_BYTES_FOUR_TOOL_ROUNDS: u64 = 19_655;
+    /// Commits (exact) from claim to settlement of a parent that delegates once to a child that
+    /// answers at once: SQLite's 10 transactions in `tests/cost_budget.rs` less the claim.
+    const COMMITS_DELEGATE_ONCE: u64 = 9;
+    /// Of those, commits that change the child and so send `WRITE_CHILDREN` (exact): its
+    /// admission, its model intent, and its settlement with the parent's result.
+    const CHILD_COMMITS_DELEGATE_ONCE: u64 = 3;
+    /// Commits (exact) each tool round of the child adds, every one of them the child's: the
+    /// six of a run's own tool round.
+    const COMMITS_PER_CHILD_TOOL_ROUND: u64 = 6;
+    /// JSON bytes (with 2% headroom) the delegating parent sends from claim to settlement when
+    /// its child answers at once, the child's acceptance included, sent once.
+    const PAYLOAD_BYTES_DELEGATE_ONCE: u64 = 9_998;
+    /// JSON bytes (with 2% headroom) each tool round of the child adds, the same for its first
+    /// round and its eighth: a commit sends the child it changed, never every child whole.
+    const PAYLOAD_BYTES_PER_CHILD_TOOL_ROUND: u64 = 12_839;
 
-    /// Encodes each commit's delta exactly as `PostgresStore::commit` does, with the hint a
-    /// claim leaves, and counts what it would send. No server is involved.
+    /// What the commits of one drive would send.
+    #[derive(Debug, Default)]
+    struct Sent {
+        commits: u64,
+        bytes: u64,
+        /// The run's own history entries.
+        entries: u64,
+        /// Commits that sent children, so `WRITE_CHILDREN` rather than `WRITE`.
+        child_commits: u64,
+        /// Children sent, summed over commits.
+        children: u64,
+        acceptances: u64,
+        child_entries: u64,
+    }
+    /// Encodes each commit's delta exactly as `PostgresStore::commit` does, with the hints a
+    /// claim leaves and each successful commit updates, and counts what it would send. No
+    /// server is involved.
     struct Encoder {
         hint: Mutex<usize>,
-        bytes: AtomicU64,
-        entries: AtomicU64,
-        commits: AtomicU64,
+        child_hints: Mutex<HashMap<RunId, (u64, usize)>>,
+        sent: Mutex<Sent>,
     }
     impl Encoder {
         fn claimed(state: &RunState) -> Self {
+            assert!(state.children.is_empty());
             Self {
                 hint: Mutex::new(state.history.len()),
-                bytes: AtomicU64::new(0),
-                entries: AtomicU64::new(0),
-                commits: AtomicU64::new(0),
+                child_hints: Mutex::new(HashMap::new()),
+                sent: Mutex::new(Sent::default()),
             }
+        }
+        fn sent(self) -> Sent {
+            self.sent.into_inner().unwrap()
         }
     }
     #[async_trait]
     impl Checkpoint for Encoder {
         async fn commit(&self, state: &mut RunState) -> Result<()> {
             let mut hint = self.hint.lock().unwrap();
+            let mut child_hints = self.child_hints.lock().unwrap();
             let from = (*hint).min(state.history.len());
-            let delta = Delta::encode(state, state.revision + 1, from, false)?;
-            self.bytes.fetch_add(delta.bytes(), Ordering::Relaxed);
-            self.entries
-                .fetch_add(delta.history.len() as u64, Ordering::Relaxed);
-            self.commits.fetch_add(1, Ordering::Relaxed);
+            let mut delta = Delta::encode(state, state.revision + 1, from, false)?;
+            if state.children.is_empty() {
+                // A run without children encodes its progress exactly as before children.
+                let progress: Value = serde_json::from_str(&delta.progress).unwrap();
+                let keys: Vec<_> = progress.as_object().unwrap().keys().cloned().collect();
+                assert_eq!(
+                    keys,
+                    [
+                        "cancel_requested",
+                        "operations",
+                        "pending_response",
+                        "phase",
+                        "usage"
+                    ]
+                );
+            } else {
+                delta.children = Children::encode(state, |id| child_hints.get(&id).copied())?;
+            }
+            let mut sent = self.sent.lock().unwrap();
+            sent.commits += 1;
+            sent.bytes += delta.bytes();
+            sent.entries += delta.history.len() as u64;
+            let children = &delta.children;
+            if !children.is_empty() {
+                sent.child_commits += 1;
+                sent.children += children.ids.len() as u64;
+                sent.acceptances += children.bindings.iter().flatten().count() as u64;
+                sent.child_entries += children.entries.len() as u64;
+            }
             *hint = state.history.len();
+            for child in &state.children {
+                let child = &child.state;
+                if state.is_terminal() {
+                    child_hints.remove(&child.id);
+                } else {
+                    child_hints.insert(child.id, (child.revision, child.history.len()));
+                }
+            }
             state.revision += 1;
             Ok(())
         }
     }
-    fn agent(rounds: usize) -> Agent {
+    fn responses(rounds: usize) -> Vec<ModelResponse> {
         let mut responses: Vec<_> = (0..rounds)
             .map(|round| {
                 ModelResponse::tools(vec![ToolCall {
@@ -1338,13 +1816,18 @@ mod tests {
             })
             .collect();
         responses.push(ModelResponse::final_output(json!("done")));
-        let echo: Arc<dyn Tool> = typed_tool::<Value, Value, _, _>(
+        responses
+    }
+    fn echo() -> Arc<dyn Tool> {
+        typed_tool::<Value, Value, _, _>(
             ToolSpec::new("echo", "1").with_description("Echo the arguments."),
             |args, _| async move { Ok(ToolOutput::Complete(args)) },
-        );
-        Agent::builder("cost", Arc::new(ScriptedModel::new(responses)))
+        )
+    }
+    fn agent(rounds: usize) -> Agent {
+        Agent::builder("cost", Arc::new(ScriptedModel::new(responses(rounds))))
             .instructions("Answer with the scripted result.")
-            .tools(vec![echo])
+            .tools(vec![echo()])
             .build()
             .unwrap()
     }
@@ -1366,16 +1849,64 @@ mod tests {
             state.phase,
             Phase::Settled(Settlement::Completed(json!("done")))
         );
-        // Every entry after the accepted input is sent exactly once.
-        assert_eq!(
-            encoder.entries.load(Ordering::Relaxed),
-            state.history.len() as u64 - 1
-        );
-        (
-            encoder.bytes.load(Ordering::Relaxed),
-            encoder.entries.load(Ordering::Relaxed),
-            encoder.commits.load(Ordering::Relaxed),
+        let sent = encoder.sent();
+        // Every entry after the accepted input is sent exactly once, by the plain statement.
+        assert_eq!(sent.entries, state.history.len() as u64 - 1);
+        assert_eq!(sent.child_commits, 0);
+        (sent.bytes, sent.entries, sent.commits)
+    }
+    /// Drives a parent that delegates once to a child doing `rounds` rounds of one tool, as
+    /// `tests/cost_budget.rs` does for SQLite.
+    async fn delegated(rounds: usize) -> Sent {
+        let child = Agent::builder(
+            "cost-child",
+            Arc::new(ScriptedModel::new(responses(rounds))),
         )
+        .instructions("Answer with the scripted result.")
+        .tools(vec![echo()])
+        .limits(
+            Limits::default()
+                .with_max_model_calls(16)
+                .with_max_tool_calls(16)
+                .with_max_tokens(10_000)
+                .with_active_budget(Duration::from_secs(120)),
+        )
+        .build()
+        .unwrap();
+        let parent = Agent::builder(
+            "cost-parent",
+            Arc::new(ScriptedModel::new(vec![
+                ModelResponse::tools(vec![ToolCall {
+                    id: "delegate".into(),
+                    name: "delegate".into(),
+                    arguments: json!("go"),
+                }]),
+                ModelResponse::final_output(json!("done")),
+            ])),
+        )
+        .instructions("Delegate, then answer.")
+        .subagents(1, [Subagent::new("delegate", "Do the task.", child)])
+        .build()
+        .unwrap();
+        let mut state = parent.new_run("c", json!("go"), &[], None).unwrap();
+        let encoder = Encoder::claimed(&state);
+        parent
+            .drive(&mut state, &encoder, RunControl::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            state.phase,
+            Phase::Settled(Settlement::Completed(json!("done")))
+        );
+        let child = &state.children[0].state;
+        assert_eq!(child.usage.tool_calls as usize, rounds);
+        let sent = encoder.sent();
+        // The child's acceptance is sent once, and each of its history entries once.
+        assert_eq!(sent.acceptances, 1);
+        assert_eq!(sent.child_entries, child.history.len() as u64);
+        // Every commit that sent children sent the one child it changed.
+        assert_eq!(sent.children, sent.child_commits);
+        sent
     }
 
     #[tokio::test]
@@ -1391,6 +1922,46 @@ mod tests {
         // Sixty-four KiB of retained context add nothing after acceptance.
         let (retained, _, _) = sent(64).await;
         assert!(retained.abs_diff(empty) < 64, "{retained} vs {empty}");
+    }
+
+    #[tokio::test]
+    async fn commits_send_only_the_children_they_changed() {
+        let headroom = |budget: u64| budget + budget.div_ceil(50);
+        let mut bytes = Vec::new();
+        for rounds in [0, 1, 4, 8] {
+            let sent = delegated(rounds).await;
+            eprintln!("postgres_delegation_child_rounds_{rounds}: {sent:?}");
+            let added = rounds as u64 * COMMITS_PER_CHILD_TOOL_ROUND;
+            assert_eq!(
+                sent.commits,
+                COMMITS_DELEGATE_ONCE + added,
+                "{rounds} rounds"
+            );
+            assert_eq!(
+                sent.child_commits,
+                CHILD_COMMITS_DELEGATE_ONCE + added,
+                "{rounds} rounds"
+            );
+            bytes.push(sent.bytes);
+        }
+        eprintln!(
+            "postgres_payload_bytes_delegate_once: {} (budget {PAYLOAD_BYTES_DELEGATE_ONCE})",
+            bytes[0]
+        );
+        assert!(bytes[0] <= headroom(PAYLOAD_BYTES_DELEGATE_ONCE));
+        // Every child round costs about the same, however many came before it.
+        for (from, to, (before, after)) in [
+            (0, 1, (bytes[0], bytes[1])),
+            (1, 4, (bytes[1], bytes[2])),
+            (4, 8, (bytes[2], bytes[3])),
+        ] {
+            let per_round = (after - before) / (to - from);
+            eprintln!(
+                "postgres_payload_bytes_per_child_tool_round ({from} to {to}): {per_round} \
+                 (budget {PAYLOAD_BYTES_PER_CHILD_TOOL_ROUND})"
+            );
+            assert!(per_round <= headroom(PAYLOAD_BYTES_PER_CHILD_TOOL_ROUND));
+        }
     }
 
     #[test]

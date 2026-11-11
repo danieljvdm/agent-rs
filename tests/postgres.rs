@@ -42,6 +42,14 @@ const ACCEPT_ROUND_TRIPS: u64 = 3;
 const REPLAY_ROUND_TRIPS: u64 = 1;
 /// Round trips for `status`: one query reassembles acceptance, checkpoint and history.
 const STATUS_ROUND_TRIPS: u64 = 1;
+/// Round trips for `status` of a run with children: one more query reads every child, with
+/// its acceptance and history, however many there are.
+const STATUS_WITH_CHILDREN_ROUND_TRIPS: u64 = 2;
+/// Transactions for `claim` plus `drive` of a parent that delegates once, then answers: equal
+/// to SQLite's in `tests/cost_budget.rs`, 10 when the child answers at once and 6 more for each
+/// of the child's tool rounds. A child's commits are its parent's, so each is one round trip.
+const TRANSACTIONS_DELEGATE_ONCE: u64 = 10;
+const TRANSACTIONS_PER_CHILD_TOOL_ROUND: u64 = 6;
 
 struct Fixture {
     config: Config,
@@ -461,14 +469,19 @@ async fn incompatible_layouts_and_states_fail_explicitly() {
     store.close().await.unwrap();
     let observer = fixture.observer().await;
     let schema = &fixture.schema;
-    observer
-        .batch_execute(&format!("UPDATE {schema}.store_metadata SET version=2"))
-        .await
-        .unwrap();
-    assert!(matches!(fixture.open().await, Err(Error::Incompatible(_))));
+    // Earlier layouts, including 3 without `children`, are refused rather than migrated.
+    for version in [2, 3] {
+        observer
+            .batch_execute(&format!(
+                "UPDATE {schema}.store_metadata SET version={version}"
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(fixture.open().await, Err(Error::Incompatible(_))));
+    }
     observer
         .batch_execute(&format!(
-            "UPDATE {schema}.store_metadata SET version=3; UPDATE {schema}.runs SET version=999"
+            "UPDATE {schema}.store_metadata SET version=4; UPDATE {schema}.runs SET version=999"
         ))
         .await
         .unwrap();
@@ -539,7 +552,7 @@ async fn accepted_json_with_nul_survives_restart_and_discovery() {
 struct Echo {
     n: u64,
 }
-fn costed(rounds: usize, batch: usize) -> Agent {
+fn responses(rounds: usize, batch: usize) -> Vec<ModelResponse> {
     let mut responses: Vec<_> = (0..rounds)
         .map(|round| {
             ModelResponse::tools(
@@ -554,11 +567,82 @@ fn costed(rounds: usize, batch: usize) -> Agent {
         })
         .collect();
     responses.push(ModelResponse::final_output(json!("done")));
-    let echo = typed_tool::<Echo, u64, _, _>(
+    responses
+}
+fn echo() -> Arc<dyn Tool> {
+    typed_tool::<Echo, u64, _, _>(
         ToolSpec::new("echo", "1").with_retry(RetryPolicy::ReadOnly),
         |args, _| async move { Ok(ToolOutput::Complete(args.n)) },
+    )
+}
+fn costed(rounds: usize, batch: usize) -> Agent {
+    agent(responses(rounds, batch), vec![echo()])
+}
+/// A parent that delegates once to `child`, then answers.
+fn delegating(child: Agent) -> Agent {
+    Agent::builder(
+        "postgres-parent",
+        Arc::new(ScriptedModel::new(vec![
+            ModelResponse::tools(vec![ToolCall {
+                id: "delegate".into(),
+                name: "delegate".into(),
+                arguments: json!("go"),
+            }]),
+            ModelResponse::final_output(json!("done")),
+        ])),
+    )
+    .instructions("Delegate, then answer.")
+    .subagents(1, [Subagent::new("delegate", "Do the task.", child)])
+    .build()
+    .unwrap()
+}
+/// A child doing `rounds` rounds of one tool, within an allocation its parent can afford.
+fn child(rounds: usize) -> Agent {
+    Agent::builder(
+        "postgres-child",
+        Arc::new(ScriptedModel::new(responses(rounds, 1))),
+    )
+    .instructions("test")
+    .tools(vec![echo()])
+    .limits(
+        Limits::default()
+            .with_max_model_calls(16)
+            .with_max_tool_calls(16)
+            .with_max_tokens(10_000)
+            .with_active_budget(Duration::from_secs(120)),
+    )
+    .build()
+    .unwrap()
+}
+/// A child that waits for input, so its parent stays unsettled with it.
+fn waiting_child() -> Agent {
+    let ask = typed_tool::<Value, Value, _, _>(
+        ToolSpec::new("ask", "1").with_retry(RetryPolicy::ReadOnly),
+        |_, _| async {
+            Ok(ToolOutput::Wait(WaitRequest::Input {
+                prompt: "which?".into(),
+            }))
+        },
     );
-    agent(responses, vec![echo])
+    Agent::builder(
+        "postgres-child",
+        Arc::new(ScriptedModel::new(vec![ModelResponse::tools(vec![
+            ToolCall {
+                id: "ask".into(),
+                name: "ask".into(),
+                arguments: json!(null),
+            },
+        ])])),
+    )
+    .tool(ask)
+    .limits(
+        Limits::default()
+            .with_max_model_calls(2)
+            .with_max_tool_calls(1)
+            .with_active_budget(Duration::from_secs(10)),
+    )
+    .build()
+    .unwrap()
 }
 
 #[tokio::test]
@@ -611,6 +695,159 @@ async fn transactions_and_round_trips_per_run() {
             "{name}"
         );
     }
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL: scripts/test-postgres.sh"]
+async fn delegation_costs_one_round_trip_per_commit() {
+    let fixture = Fixture::new();
+    let store = fixture.open().await.unwrap();
+    for rounds in [0, 1, 4, 8] {
+        let agent = delegating(child(rounds));
+        let conversation = format!("delegation-{rounds}");
+        let id = store
+            .accept(&agent, &conversation, "measured", json!("go"), None)
+            .await
+            .unwrap();
+        let accepted = store.metrics();
+        let mut state = store.claim(id).await.unwrap();
+        agent
+            .drive(&mut state, &store, RunControl::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            state.phase,
+            Phase::Settled(Settlement::Completed(json!("done")))
+        );
+        let run = since(store.metrics(), accepted);
+        eprintln!("postgres_delegation_child_rounds_{rounds}: {run:?}");
+        let transactions =
+            TRANSACTIONS_DELEGATE_ONCE + rounds as u64 * TRANSACTIONS_PER_CHILD_TOOL_ROUND;
+        assert_eq!(run.transactions, transactions, "{rounds} child rounds");
+        // No commit was refused or resent: the hints were right.
+        assert_eq!(
+            run.round_trips,
+            CLAIM_ROUND_TRIPS + (transactions - 1) * COMMIT_ROUND_TRIPS,
+            "{rounds} child rounds"
+        );
+        let before = store.metrics();
+        let stored = store.status(id).await.unwrap();
+        assert_eq!(
+            since(store.metrics(), before).round_trips,
+            STATUS_WITH_CHILDREN_ROUND_TRIPS
+        );
+        assert_eq!(
+            serde_json::to_value(&stored.children).unwrap(),
+            serde_json::to_value(&state.children).unwrap()
+        );
+        assert_eq!(stored.usage, state.usage);
+        assert_eq!(stored.child_usage, state.child_usage);
+        let child = &state.children[0].state;
+        assert_eq!(child.usage.tool_calls as usize, rounds);
+        assert_eq!(
+            store.history(&child.conversation_id).await.unwrap(),
+            child.history
+        );
+        assert_eq!(store.operations(child.id).await.unwrap().len(), rounds);
+    }
+    store.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "needs PostgreSQL: scripts/test-postgres.sh"]
+async fn children_are_written_only_behind_their_roots_fence() {
+    let fixture = Fixture::new();
+    let store = fixture.open().await.unwrap();
+    let agent = delegating(waiting_child());
+    let id = store
+        .accept(&agent, "parent", "key", json!("go"), None)
+        .await
+        .unwrap();
+    let mut state = store.claim(id).await.unwrap();
+    agent
+        .drive(&mut state, &store, RunControl::default())
+        .await
+        .unwrap();
+    assert_eq!(state.phase, Phase::Tools);
+    let child = state.children[0].state.clone();
+    assert_eq!(child.history.len(), 1);
+    let observer = fixture.observer().await;
+    let schema = &fixture.schema;
+
+    // A child whose stored progress no longer matches this store's hint (here, from the last
+    // commit of `drive`) is resent whole, once, in one transaction.
+    observer
+        .batch_execute(&format!(
+            "UPDATE {schema}.children SET history_len = 0 WHERE child_id = '{0}';
+             DELETE FROM {schema}.history WHERE run_id = '{0}'",
+            child.id
+        ))
+        .await
+        .unwrap();
+    state.children[0].state.usage.input_tokens = 7;
+    state.children[0].state.revision += 1;
+    let before = store.metrics();
+    store.commit(&mut state).await.unwrap();
+    let resent = since(store.metrics(), before);
+    // The refused statement, the read that classifies it, and the whole resend.
+    assert_eq!(resent.round_trips, 3);
+    assert_eq!(resent.transactions, 1);
+    let stored = store.status(id).await.unwrap();
+    assert_eq!(
+        serde_json::to_value(&stored.children).unwrap(),
+        serde_json::to_value(&state.children).unwrap()
+    );
+    assert_eq!(
+        store.history(&child.conversation_id).await.unwrap(),
+        child.history
+    );
+
+    // A refused fence admits no child: no acceptance, progress, history or operations. The
+    // failed commit also makes the store forget its hints for every child it named.
+    let mut stale = state.clone();
+    let mut admitted = stale.children[0].clone();
+    admitted.call_id = "other".into();
+    admitted.state.id = RunId::new_v4();
+    admitted.state.conversation_id = format!("child:{id}:other");
+    stale.children.push(admitted.clone());
+    stale.revision -= 1;
+    assert!(matches!(store.commit(&mut stale).await, Err(Error::Stale)));
+    let other = admitted.state.id.to_string();
+    for (table, column) in [
+        ("runs", "id"),
+        ("children", "child_id"),
+        ("history", "run_id"),
+    ] {
+        let rows: i64 = observer
+            .query_one(
+                &format!("SELECT count(*) FROM {schema}.{table} WHERE {column} = $1"),
+                &[&other],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(rows, 0, "{table}");
+    }
+    assert!(
+        store
+            .operations(admitted.state.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(store.status(id).await.unwrap().children.len(), 1);
+
+    // A child's history is append-only, and a refused child refuses its root. Without hints,
+    // the commit sends the root and child whole.
+    let mut shrunk = state.clone();
+    shrunk.children[0].state.history.clear();
+    shrunk.children[0].state.revision += 1;
+    assert!(matches!(
+        store.commit(&mut shrunk).await,
+        Err(Error::Input(_))
+    ));
+    assert_eq!(store.position(id).await.unwrap().revision, state.revision);
     store.close().await.unwrap();
 }
 
