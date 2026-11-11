@@ -1,8 +1,10 @@
 # Model adapters and explicit selection
 
 The `Model` boundary stays provider-neutral. With the `openai` feature,
-`openai::OpenAiModel` calls Chat Completions and `openai::OpenAiResponsesModel`
-calls Responses. The application chooses the adapter and the exact `ModelConfig`;
+`openai::OpenAiModel` calls Chat Completions, `openai::OpenAiResponsesModel`
+calls Responses, and `openai::LlamaModel` calls a local llama.cpp
+`llama-server` through its Chat Completions endpoint. The application chooses
+the adapter and the exact `ModelConfig`;
 the engine never infers an endpoint from a model name, and an adapter never
 substitutes one.
 
@@ -65,10 +67,62 @@ wire bytes, single lines and events, event counts, and Responses item and part
 counts are bounded. Cancellation drops the request and response stream, including
 buffered output; there is no detached reader or provider-side background job.
 
+## llama.cpp's llama-server
+
+`LlamaModel` speaks Chat Completions, sharing `OpenAiModel`'s transport, stream
+parser and tool handling, but writes requests for a local chat model:
+
+| | `OpenAiModel` | `LlamaModel` |
+| --- | --- | --- |
+| A `String` output | JSON in the `{"value": O}` envelope | Plain text, no `response_format` |
+| Any other output | `json_schema`, non-strict, in the envelope | llama-server's JSON-schema grammar, in the envelope |
+| Instructions | `developer` messages | One `system` message, with the derived-context notice appended |
+| Inputs and string tool results | JSON (`"hello"` arrives quoted) | As written; other values as JSON |
+| Consecutive user messages | Separate | Joined, for chat templates that require alternating roles |
+| Reasoning (`reasoning_content`) | Ignored | Streamed as `ModelEvent::ReasoningDelta` |
+| Failed status or stream error | Status or kind only | Also the server's `error.message`, bounded |
+| API key | Required | Optional (`with_api_key`) |
+| Token cap | `max_completion_tokens` | `max_tokens` |
+
+An output is plain text when its schema accepts any string: `{"type": "string"}`
+with only annotations (`title`, `description`, `$schema`, `$comment`), `{}` or
+`true`. A string with constraints, such as an `enum`, uses the grammar.
+
+Typed outputs keep the envelope because a grammar whose root is a bare scalar
+stops a local model after its first token. Against Gemma 4 26B-A4B, asking
+"What is 6 times 7?" with an `integer` root schema answered `6` every time
+(the model began "6 times 7…" and the grammar ended the number), while the
+envelope answered `{"value": 42}`.
+
+Reasoning is streamed, never retained, never replayed on later turns, and
+counts against `Limits::max_response_bytes` with the answer. The engine passes
+it on as `ProgressKind::ReasoningDelta`. A reasoning model can spend its whole
+token allowance thinking; the finish reason `length` fails the turn with
+"output reached the token limit before it was complete".
+
+`LlamaModel::new` builds a client with no proxy (local traffic must not go
+through a proxy from the environment), no redirects and no read timeout, since
+a model may load for minutes before its first byte. The engine's
+`Limits::operation_timeout_ms` still bounds each turn, so raise it, and the
+active budget, for local models. A router-mode server picks the model from
+`ModelConfig::model`.
+
+`tests/llama.rs` replays streams recorded from llama-server 0.9.0 serving
+Gemma 4 26B-A4B: a reasoning chat, a tool call, a typed answer, a reply that
+ran out of tokens, and a context-size error. Its ignored
+`live_server_chats_answers_typed_and_calls_a_tool` runs the same cases against
+a live server:
+
+```sh
+LLAMA_SERVER_URL=http://127.0.0.1:8080/v1 LLAMA_MODEL=<name> \
+  cargo test --test llama -- --ignored --nocapture
+```
+
 ## Errors persisted with a failed run
 
-A failed run stores its error text, so network and protocol errors from either
-adapter never contain request URLs, server bodies or credentials:
+A failed run stores its error text, so network and protocol errors from every
+adapter never contain request URLs or credentials, and the OpenAI adapters
+never contain server bodies:
 
 - HTTP failures report the status code only.
 - `reqwest` errors are kept as causes only after `without_url()`.
@@ -78,6 +132,11 @@ adapter never contain request URLs, server bodies or credentials:
   arguments) are kept: they name a position, never the text.
 - Provider error events (`error`, `response.failed`) are reported by kind,
   without the provider's message.
+- `LlamaModel` is the exception for server messages: a failed status or a
+  stream `error` also reports llama-server's `error.message`, such as a request
+  that exceeds the context size. At most 8 KiB of the body is read, and the
+  message is cut to 512 bytes with control characters replaced. It names what
+  to fix, and a local server's messages carry no credentials.
 
 Unit tests in `src/openai.rs`, `src/openai/responses.rs` and
 `src/openai/transport.rs` walk every error's message and cause chain for planted
@@ -89,7 +148,9 @@ redirects.
 `Model::binding()` supplies a stable, non-secret adapter identity, and
 `AgentBuilder::build` adds it to the agent's binding as `model_adapter`. Both
 OpenAI adapters report `{"provider":"openai","api":…,"version":1,"endpoint":…}`,
-with `api` either `chat_completions` or `responses`. With the exact model
+with `api` either `chat_completions` or `responses`. `LlamaModel` reports
+`"provider":"llama.cpp"` with `"api":"chat_completions"`, so a run started
+through it cannot resume through `OpenAiModel` at the same endpoint. With the exact model
 configuration already in the binding, a stored run cannot silently resume
 through another API, endpoint or model; rotating a key keeps it compatible.
 Build a new agent to change the route. A model wrapper must forward its inner
@@ -131,7 +192,8 @@ is outside this contract.
 
 ## Costs and measurements
 
-`tests/cost_budget.rs` holds deterministic budgets for each adapter's hot paths,
+`tests/cost_budget.rs` holds deterministic budgets for each adapter's hot paths
+(`LlamaModel` decoding plain text),
 measured through the hidden, unsupported `openai::cost_probe` (no network):
 allocations to decode a 1,024-byte answer streamed as 64 deltas, and
 allocations and exact wire bytes for a request body with four tools and one

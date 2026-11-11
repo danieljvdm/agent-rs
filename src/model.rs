@@ -109,6 +109,11 @@ pub enum ModelEvent {
     /// Text streamed as it arrives, passed on as [`ProgressKind::TextDelta`](crate::ProgressKind)
     /// and never retained.
     TextDelta(String),
+    /// Reasoning ("thinking") text streamed as it arrives, from a provider that reports it apart
+    /// from the answer. Passed on as [`ProgressKind::ReasoningDelta`](crate::ProgressKind), never
+    /// retained, and never part of history or the response. It counts against
+    /// [`ModelRequest::max_response_bytes`] with the answer's text.
+    ReasoningDelta(String),
     /// Cumulative tokens this attempt has consumed so far, as the provider reports them.
     ///
     /// Snapshots must not decrease, and [`ModelResponse::usage`] repeats the final totals rather

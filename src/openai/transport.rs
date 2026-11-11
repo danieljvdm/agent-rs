@@ -1,13 +1,14 @@
-//! The HTTP transport and bounded SSE framing both OpenAI adapters share.
+//! The HTTP transport and bounded SSE framing the OpenAI-protocol adapters share.
 //!
-//! Errors keep the adapters' privacy contract: request URLs, server bodies and credentials never
-//! reach an error's message or cause, because error text is persisted with a failed run.
+//! Errors keep the adapters' privacy contract: request URLs and credentials never reach an
+//! error's message or cause, because error text is persisted with a failed run. Server bodies
+//! never do either, except the error message a provider that [reports them](Provider::Llama)
+//! sends with a failed status, bounded in length.
 
-use super::{protocol, protocol_caused_by};
 use crate::{Error, ErrorDetail, ModelEvent, ModelStream, Result};
 use futures::stream;
 use reqwest::{
-    Client, Response, Url,
+    Client, ClientBuilder, Response, Url,
     header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue},
 };
 use serde_json::{Value, json};
@@ -22,48 +23,112 @@ const WIRE_FACTOR: usize = 32;
 const FRAME_FACTOR: usize = 6;
 /// SSE events one response may contain.
 const MAX_EVENTS: usize = 65_536;
+/// Bytes of a failed response's body read for its error message.
+const ERROR_BODY_BYTES: usize = 8_192;
+/// Bytes of a server's error message kept in an error.
+const ERROR_MESSAGE_BYTES: usize = 512;
+
+/// The server an adapter speaks to, which names its errors and binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Provider {
+    /// OpenAI's hosted API. Its error bodies are never reported.
+    OpenAi,
+    /// llama.cpp's `llama-server`. Its error messages are reported, because they say what to fix
+    /// (a full context, a model that failed to load) and carry no credentials.
+    Llama,
+}
+impl Provider {
+    /// The prefix of every error the adapter reports.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::OpenAi => "OpenAI",
+            Self::Llama => "llama-server",
+        }
+    }
+    /// A protocol error, prefixed with the provider's label.
+    pub fn error(self, message: &str) -> Error {
+        Error::provider(format!("{}: {message}", self.label()))
+    }
+    /// A protocol failure caused by `error`, which is kept as the source and shown in the
+    /// message. Pass only causes whose text cannot quote server content or the request URL.
+    pub fn error_caused_by(
+        self,
+        message: &str,
+        error: impl std::error::Error + Send + Sync + 'static,
+    ) -> Error {
+        Error::Provider(ErrorDetail::caused_by(
+            format!("{}: {message}", self.label()),
+            error,
+        ))
+    }
+    fn binding_name(self) -> &'static str {
+        match self {
+            Self::OpenAi => "openai",
+            Self::Llama => "llama.cpp",
+        }
+    }
+}
+
+/// The default client: a connect timeout, no redirects, and `configure`'s other settings.
+pub(super) fn client(configure: impl FnOnce(ClientBuilder) -> ClientBuilder) -> Result<Client> {
+    configure(
+        Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none()),
+    )
+    .build()
+    .map_err(|error| Error::Config(ErrorDetail::caused_by("could not build HTTP client", error)))
+}
 
 /// One endpoint with its credentials. Cloning shares the client.
 #[derive(Clone)]
 pub(super) struct Transport {
+    provider: Provider,
     client: Client,
-    authorization: HeaderValue,
+    authorization: Option<HeaderValue>,
     endpoint: Url,
 }
 
 impl Transport {
     /// `path` under `https://api.openai.com/v1`, with a client that does not follow redirects.
     pub fn new(api_key: impl Into<String>, path: &str) -> Result<Self> {
-        let client = Client::builder()
-            .connect_timeout(Duration::from_secs(15))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|error| {
-                Error::Config(ErrorDetail::caused_by("could not build HTTP client", error))
-            })?;
-        Self::with_client(client, api_key, "https://api.openai.com/v1", path)
+        Self::with_client(
+            client(|builder| builder)?,
+            api_key,
+            "https://api.openai.com/v1",
+            path,
+        )
     }
 
-    /// `path` under `base_url`, which must be HTTPS (or loopback HTTP) without credentials,
-    /// query or fragment.
+    /// An OpenAI endpoint: `path` under `base_url`, sent with `api_key`.
     pub fn with_client(
         client: Client,
         api_key: impl Into<String>,
         base_url: impl AsRef<str>,
         path: &str,
     ) -> Result<Self> {
-        let key = api_key.into();
-        if key.trim().is_empty() {
-            return Err(Error::config("empty OpenAI API key"));
-        }
-        let mut authorization = HeaderValue::from_str(&format!("Bearer {key}"))
-            .map_err(|_| Error::config("invalid OpenAI API key header"))?;
-        authorization.set_sensitive(true);
+        Self::endpoint(Provider::OpenAi, client, base_url, path)?.with_api_key(api_key)
+    }
+
+    /// `path` under `base_url` for `provider`, without credentials. `base_url` must be HTTPS (or
+    /// loopback HTTP) without credentials, query or fragment.
+    pub fn endpoint(
+        provider: Provider,
+        client: Client,
+        base_url: impl AsRef<str>,
+        path: &str,
+    ) -> Result<Self> {
+        let label = provider.label();
         let endpoint = Url::parse(&format!(
             "{}/{path}",
             base_url.as_ref().trim_end_matches('/')
         ))
-        .map_err(|error| Error::Config(ErrorDetail::caused_by("invalid OpenAI base URL", error)))?;
+        .map_err(|error| {
+            Error::Config(ErrorDetail::caused_by(
+                format!("invalid {label} base URL"),
+                error,
+            ))
+        })?;
         let local = matches!(
             endpoint.host_str(),
             Some("localhost" | "127.0.0.1" | "[::1]")
@@ -74,21 +139,36 @@ impl Transport {
             || endpoint.query().is_some()
             || endpoint.fragment().is_some()
         {
-            return Err(Error::config(
-                "OpenAI base URL requires HTTPS (or loopback HTTP), without credentials/query/fragment",
-            ));
+            return Err(Error::config(format!(
+                "{label} base URL requires HTTPS (or loopback HTTP), without credentials/query/fragment"
+            )));
         }
         Ok(Self {
+            provider,
             client,
-            authorization,
+            authorization: None,
             endpoint,
         })
+    }
+
+    /// Sends `api_key` as a bearer token. Fails for an empty or unusable key.
+    pub fn with_api_key(mut self, api_key: impl Into<String>) -> Result<Self> {
+        let label = self.provider.label();
+        let key = api_key.into();
+        if key.trim().is_empty() {
+            return Err(Error::config(format!("empty {label} API key")));
+        }
+        let mut authorization = HeaderValue::from_str(&format!("Bearer {key}"))
+            .map_err(|_| Error::config(format!("invalid {label} API key header")))?;
+        authorization.set_sensitive(true);
+        self.authorization = Some(authorization);
+        Ok(self)
     }
 
     /// The adapter's durable identity: provider, API, protocol version and endpoint. The
     /// endpoint holds no credentials, so rotating a key keeps the binding.
     pub fn binding(&self, api: &str) -> Value {
-        json!({"provider":"openai", "api":api, "version":1, "endpoint":self.endpoint.as_str()})
+        json!({"provider":self.provider.binding_name(), "api":api, "version":1, "endpoint":self.endpoint.as_str()})
     }
 
     /// Posts `body` and streams the events `parser` reads from the SSE response.
@@ -99,18 +179,35 @@ impl Transport {
         limit: usize,
         cancel: CancellationToken,
     ) -> Result<ModelStream> {
+        let provider = self.provider;
+        let mut request = self
+            .client
+            .post(self.endpoint.clone())
+            .header("Accept", "text/event-stream")
+            .json(body);
+        if let Some(authorization) = &self.authorization {
+            request = request.header(AUTHORIZATION, authorization.clone());
+        }
         let response = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(Error::Interrupted),
-            response = self.client.post(self.endpoint.clone()).header(AUTHORIZATION, self.authorization.clone())
-                .header("Accept", "text/event-stream").json(body).send() =>
-                response.map_err(|error| protocol_caused_by("HTTP request failed", error.without_url()))?,
+            response = request.send() =>
+                response.map_err(|error| provider.error_caused_by("HTTP request failed", error.without_url()))?,
         };
         if !response.status().is_success() {
-            return Err(protocol(&format!(
-                "HTTP status {}",
-                response.status().as_u16()
-            )));
+            let status = response.status().as_u16();
+            let message = match provider {
+                Provider::OpenAi => None,
+                Provider::Llama => tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => return Err(Error::Interrupted),
+                    message = error_message(response) => message,
+                },
+            };
+            return Err(provider.error(&match message {
+                Some(message) => format!("HTTP status {status}: {message}"),
+                None => format!("HTTP status {status}"),
+            }));
         }
         if !response
             .headers()
@@ -122,7 +219,7 @@ impl Transport {
                     .is_some_and(|v| v.trim().eq_ignore_ascii_case("text/event-stream"))
             })
         {
-            return Err(protocol("expected text/event-stream"));
+            return Err(provider.error("expected text/event-stream"));
         }
         Ok(events(
             Body::Http(response),
@@ -130,6 +227,42 @@ impl Transport {
             cancel,
         ))
     }
+}
+
+/// The `error.message` of a failed response's JSON body, read up to a bound, or `None` when the
+/// body has none.
+async fn error_message(mut response: Response) -> Option<String> {
+    let mut body = Vec::new();
+    while body.len() < ERROR_BODY_BYTES {
+        match response.chunk().await {
+            Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+            _ => break,
+        }
+    }
+    let body: Value = serde_json::from_slice(&body).ok()?;
+    server_message(body.pointer("/error/message")?)
+}
+
+/// A server's error message as an error may quote it: non-empty, without control characters, and
+/// at most [`ERROR_MESSAGE_BYTES`] long.
+pub(super) fn server_message(message: &Value) -> Option<String> {
+    let message: String = message
+        .as_str()?
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let message = message.trim();
+    if message.is_empty() {
+        return None;
+    }
+    if message.len() <= ERROR_MESSAGE_BYTES {
+        return Some(message.to_owned());
+    }
+    let mut end = ERROR_MESSAGE_BYTES;
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(format!("{}…", &message[..end]))
 }
 
 /// Where a stream's bytes come from.
@@ -165,7 +298,7 @@ pub(super) fn events<P: EventParser + Send + 'static>(
                         let chunk = tokio::select! {
                             biased;
                             _ = cancel.cancelled() => return Err(Error::Interrupted),
-                            chunk = response.chunk() => chunk.map_err(|error| protocol_caused_by("HTTP response read failed", error.without_url()))?,
+                            chunk = response.chunk() => chunk.map_err(|error| decoder.parser.provider().error_caused_by("HTTP response read failed", error.without_url()))?,
                         };
                         chunk.map(|bytes| decoder.feed(&bytes)).is_some()
                     }
@@ -176,7 +309,7 @@ pub(super) fn events<P: EventParser + Send + 'static>(
                         .is_some(),
                 };
                 if !fed {
-                    return Err(protocol("truncated SSE response"));
+                    return Err(decoder.parser.provider().error("truncated SSE response"));
                 }
             }
         },
@@ -189,6 +322,8 @@ pub(super) trait EventParser {
     fn event(&mut self, data: &str, events: &mut Vec<ModelEvent>) -> Result<()>;
     /// Whether the response is complete; nothing but whitespace may follow.
     fn done(&self) -> bool;
+    /// The provider that names this parser's errors.
+    fn provider(&self) -> Provider;
 }
 
 /// Bounded SSE framing for both APIs. On an error it keeps the usage and text already decoded
@@ -233,20 +368,21 @@ impl<P: EventParser> Decoder<P> {
     }
 
     fn decode(&mut self, bytes: &[u8]) -> Result<()> {
+        let provider = self.parser.provider();
         self.wire_bytes = self.wire_bytes.saturating_add(bytes.len());
         if self.wire_bytes > self.wire_limit {
-            return Err(protocol("wire byte limit exceeded"));
+            return Err(provider.error("wire byte limit exceeded"));
         }
         for &byte in bytes {
             if self.parser.done() {
                 if !byte.is_ascii_whitespace() {
-                    return Err(protocol("data after SSE terminator"));
+                    return Err(provider.error("data after SSE terminator"));
                 }
                 continue;
             }
             if byte != b'\n' {
                 if self.line.len() >= self.frame_limit {
-                    return Err(protocol("SSE line limit exceeded"));
+                    return Err(provider.error("SSE line limit exceeded"));
                 }
                 self.line.push(byte);
                 continue;
@@ -256,12 +392,12 @@ impl<P: EventParser> Decoder<P> {
             }
             // Buffers are reused, so framing allocates only while they grow.
             let line = std::str::from_utf8(&self.line)
-                .map_err(|error| protocol_caused_by("invalid UTF-8 in SSE", error))?;
+                .map_err(|error| provider.error_caused_by("invalid UTF-8 in SSE", error))?;
             if line.is_empty() {
                 if !self.data.is_empty() {
                     self.events += 1;
                     if self.events > MAX_EVENTS {
-                        return Err(protocol("SSE event count exceeds limit"));
+                        return Err(provider.error("SSE event count exceeds limit"));
                     }
                     self.parser
                         .event(self.data.trim_end_matches('\n'), &mut self.decoded)?;
@@ -276,7 +412,7 @@ impl<P: EventParser> Decoder<P> {
                     .saturating_add(1)
                     > self.frame_limit
                 {
-                    return Err(protocol("SSE event limit exceeded"));
+                    return Err(provider.error("SSE event limit exceeded"));
                 }
                 self.data.push_str(value);
                 self.data.push('\n');
@@ -315,13 +451,16 @@ mod tests {
                         json!("done"),
                     )));
                 }
-                "fail" => return Err(protocol("failed")),
+                "fail" => return Err(Provider::OpenAi.error("failed")),
                 text => events.push(ModelEvent::TextDelta(text.to_owned())),
             }
             Ok(())
         }
         fn done(&self) -> bool {
             self.done
+        }
+        fn provider(&self) -> Provider {
+            Provider::OpenAi
         }
     }
     fn chunks(chunks: &[&str]) -> Body {

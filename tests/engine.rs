@@ -1423,6 +1423,66 @@ async fn progress_events_for_one_tool_round_are_exact() {
     assert_eq!(state.revision, 8);
 }
 
+#[tokio::test]
+async fn reasoning_streams_as_progress_and_shares_the_response_byte_limit() {
+    let turn = || {
+        vec![
+            ModelEvent::ReasoningDelta("think".into()),
+            ModelEvent::TextDelta("done".into()),
+            ModelEvent::Response(ModelResponse::final_output(json!("done"))),
+        ]
+    };
+    let agent_with = |limits| {
+        agent(
+            Arc::new(ScriptedModel::with_events(vec![turn()])),
+            vec![],
+            limits,
+        )
+    };
+    let agent = agent_with(Limits::default());
+    let mut run = state(&agent);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    agent
+        .drive(
+            &mut run,
+            &MemoryCheckpoint,
+            RunControl::default().with_events(tx),
+        )
+        .await
+        .unwrap();
+    let mut streamed = Vec::new();
+    while let Some(event) = rx.recv().await {
+        match event.kind {
+            ProgressKind::ReasoningDelta(text) => streamed.push(format!("reasoning:{text}")),
+            ProgressKind::TextDelta(text) => streamed.push(format!("delta:{text}")),
+            _ => {}
+        }
+    }
+    assert_eq!(streamed, ["reasoning:think", "delta:done"]);
+    assert_eq!(
+        run.phase,
+        Phase::Settled(Settlement::Completed(json!("done")))
+    );
+    // Reasoning is never retained: the exchange holds only the response.
+    let retained = serde_json::to_string(&run.history).unwrap();
+    assert!(!retained.contains("think"), "{retained}");
+
+    // Five reasoning bytes and four answer bytes exceed an eight-byte limit together.
+    let agent = agent_with(Limits::default().with_max_response_bytes(8));
+    let mut run = state(&agent);
+    agent
+        .drive(&mut run, &MemoryCheckpoint, RunControl::default())
+        .await
+        .unwrap();
+    let Phase::Settled(Settlement::Failed(error)) = &run.phase else {
+        panic!("{:?}", run.phase)
+    };
+    assert!(
+        error.contains("stream exceeds response byte limit"),
+        "{error}"
+    );
+}
+
 /// Streams its own run ID as every text delta, yielding between deltas so concurrent runs
 /// interleave on a shared channel.
 struct RunIdEcho;

@@ -39,7 +39,7 @@ use agent_rs::google_calendar::{
 #[cfg(feature = "mcp")]
 use agent_rs::mcp::{McpClient, McpOptions, McpTool, ServerIdentity, ToolDefinition, ToolPolicy};
 #[cfg(feature = "openai")]
-use agent_rs::openai::{OpenAiModel, OpenAiResponsesModel};
+use agent_rs::openai::{LlamaModel, OpenAiModel, OpenAiResponsesModel};
 // Hidden and unsupported: probes for `tests/cost_budget.rs`.
 #[cfg(feature = "openai")]
 use agent_rs::openai::cost_probe::{Api, decode, request_body};
