@@ -1,4 +1,10 @@
 //! Shared public-API consumer for deterministic and live long-conversation evaluation.
+use agent_rs::memory::{
+    Embedder, ExtractiveSummarizer, MemoryPolicy, SemanticRetriever, SourceStore, SourceTrust,
+    Summarizer, index_source, index_summary,
+};
+use agent_rs::sqlite::SqliteStore;
+use agent_rs::*;
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
 use schemars::JsonSchema;
@@ -11,12 +17,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
-use yielded_agent::memory::{
-    Embedder, ExtractiveSummarizer, MemoryPolicy, SemanticRetriever, SourceStore, SourceTrust,
-    Summarizer, index_source, index_summary,
-};
-use yielded_agent::sqlite::SqliteStore;
-use yielded_agent::*;
 
 pub const FIXTURE_VERSION: &str = "memory-workflow-v4";
 pub const DEFAULT_MODEL: &str = "gpt-4.1-2025-04-14";
@@ -444,7 +444,7 @@ async fn sample(
         Mode::Live => {
             #[cfg(feature = "openai")]
             {
-                Arc::new(yielded_agent::openai::OpenAiModel::new(
+                Arc::new(agent_rs::openai::OpenAiModel::new(
                     std::env::var("OPENAI_API_KEY")
                         .map_err(|_| Error::config("OPENAI_API_KEY is required for live mode"))?,
                 )?)

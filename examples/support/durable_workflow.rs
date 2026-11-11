@@ -1,6 +1,7 @@
 //! An inspectable workflow: approval → input → time → uncertain mutation → reconciliation,
 //! closing and reopening storage at each boundary. All model and tool work is deterministic.
 //! Each storage example supplies how to open and close its store.
+use agent_rs::*;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::{
@@ -11,7 +12,6 @@ use std::{
     },
     time::Duration,
 };
-use yielded_agent::*;
 
 fn spec(name: &str, approval: bool, retry: RetryPolicy) -> ToolSpec {
     ToolSpec::new(name, "1")

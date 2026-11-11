@@ -61,7 +61,7 @@ use tokio_util::sync::CancellationToken;
 /// ```
 /// # use std::sync::Arc;
 /// # use serde_json::json;
-/// # use yielded_agent::*;
+/// # use agent_rs::*;
 /// # fn main() -> Result<()> {
 /// let researcher = Agent::builder("researcher", Arc::new(ScriptedModel::new(vec![])))
 ///     .limits(Limits::default().with_max_model_calls(4).with_active_budget(std::time::Duration::from_secs(60)))

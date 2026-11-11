@@ -1,5 +1,6 @@
 //! Invariants of tool scheduling, observed through every committed checkpoint and through what
 //! each tool saw when it started. Tests run under paused Tokio time, so every timing is exact.
+use agent_rs::*;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::{
@@ -9,7 +10,6 @@ use std::sync::{
 use std::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
-use yielded_agent::*;
 
 fn spec(name: &str) -> ToolSpec {
     ToolSpec::new(name, "1")

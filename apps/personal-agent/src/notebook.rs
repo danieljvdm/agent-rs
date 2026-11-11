@@ -1,4 +1,5 @@
 //! Local notebook tools for the runnable app. All effects stay in its data directory.
+use agent_rs::*;
 use async_trait::async_trait;
 use futures::stream;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -12,7 +13,6 @@ use std::{
     time::Duration,
 };
 use tokio_util::sync::CancellationToken;
-use yielded_agent::*;
 
 #[derive(Clone)]
 pub struct Notebook {

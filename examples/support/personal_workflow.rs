@@ -1,6 +1,7 @@
 //! Shared live/scripted personal-workflow consumer and independent effect-based grader.
 #![allow(dead_code)]
 
+use agent_rs::{Host, HostOptions, sqlite::SqliteStore, *};
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
 use schemars::{JsonSchema, schema_for};
@@ -22,7 +23,6 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
-use yielded_agent::{Host, HostOptions, sqlite::SqliteStore, *};
 
 pub const FIXTURE_VERSION: &str = "personal-reminder-v3";
 pub const DEFAULT_MODEL: &str = "gpt-4.1-2025-04-14";
@@ -231,7 +231,7 @@ pub enum ServiceMode {
     Files,
     #[cfg(feature = "google-calendar")]
     GoogleCalendar {
-        client: Arc<yielded_agent::google_calendar::GoogleCalendar>,
+        client: Arc<agent_rs::google_calendar::GoogleCalendar>,
         lose_response: bool,
     },
 }
@@ -1274,10 +1274,10 @@ pub async fn run_case_with_services(
                     .map_err(|_| Error::config("OPENAI_API_KEY is required for live evaluation"))?;
                 match api {
                     ProviderApi::ChatCompletions => {
-                        Arc::new(yielded_agent::openai::OpenAiModel::new(key)?)
+                        Arc::new(agent_rs::openai::OpenAiModel::new(key)?)
                     }
                     ProviderApi::Responses => {
-                        Arc::new(yielded_agent::openai::OpenAiResponsesModel::new(key)?)
+                        Arc::new(agent_rs::openai::OpenAiResponsesModel::new(key)?)
                     }
                 }
             }

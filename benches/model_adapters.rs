@@ -6,15 +6,15 @@
 #[path = "../tests/support/openai_wire.rs"]
 mod openai_wire;
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use openai_wire::Api as Wire;
-use serde_json::json;
-use std::{hint::black_box, sync::Arc, time::Duration};
-use yielded_agent::{
+use agent_rs::{
     HistoryEntry, ModelConfig, ModelEvent, ModelRequest, ModelResponse, RunId, ToolCall,
     ToolResult, ToolSpec,
     openai::cost_probe::{self, Api},
 };
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use openai_wire::Api as Wire;
+use serde_json::json;
+use std::{hint::black_box, sync::Arc, time::Duration};
 
 const APIS: [(&str, Api, Wire); 2] = [
     ("chat", Api::ChatCompletions, Wire::Chat),

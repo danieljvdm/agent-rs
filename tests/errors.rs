@@ -1,11 +1,11 @@
 //! How `Agent::drive` treats each kind of failure: either the run's own work went wrong and the
 //! run settles as `Failed` with the error's message, or the run could not be advanced and `drive`
 //! returns the error, leaving the run as of its last checkpoint so it can be driven again.
+use agent_rs::*;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::{error::Error as _, sync::Arc};
 use tokio_util::sync::CancellationToken;
-use yielded_agent::*;
 
 fn spec(name: &str) -> ToolSpec {
     ToolSpec::new(name, "1")

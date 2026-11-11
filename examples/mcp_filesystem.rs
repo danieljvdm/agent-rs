@@ -1,13 +1,13 @@
 //! Run with the path to an installed @modelcontextprotocol/server-filesystem entrypoint.
+use agent_rs::mcp::{McpClient, McpOptions, ServerIdentity, ToolPolicy};
+use agent_rs::{
+    Agent, Conversation, Error, HistoryEntry, ModelResponse, Result, RetryPolicy, ScriptedModel,
+    ToolCall,
+};
 use serde_json::json;
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
-use yielded_agent::mcp::{McpClient, McpOptions, ServerIdentity, ToolPolicy};
-use yielded_agent::{
-    Agent, Conversation, Error, HistoryEntry, ModelResponse, Result, RetryPolicy, ScriptedModel,
-    ToolCall,
-};
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {

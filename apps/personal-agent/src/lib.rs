@@ -14,6 +14,7 @@ pub mod notebook;
 pub use catalog::{Conversation, Submission};
 pub use http::{AccessToken, router};
 
+use agent_rs::{sqlite::SqliteStore, *};
 use catalog::{Admission, Catalog};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -21,7 +22,6 @@ use std::{path::Path, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
-use yielded_agent::{sqlite::SqliteStore, *};
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]

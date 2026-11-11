@@ -73,7 +73,7 @@ const CONTEXT_PAGE: usize = 64;
 ///
 /// ```
 /// # use std::time::Duration;
-/// # use yielded_agent::postgres::PostgresOptions;
+/// # use agent_rs::postgres::PostgresOptions;
 /// let options = PostgresOptions::default().with_operation_timeout(Duration::from_secs(5));
 /// ```
 #[derive(Clone, Debug)]
@@ -714,7 +714,7 @@ ORDER BY first_revision, batch_index";
 impl Database {
     /// Take ownership of `schema`, create or check its tables, and prepare every statement.
     async fn open(mut client: Client, schema: &str, counters: Arc<Counters>) -> Result<Self> {
-        let namespace = format!("yielded-agent:{schema}");
+        let namespace = format!("agent-rs:{schema}");
         let locked: bool = client
             .query_one(
                 "SELECT pg_catalog.pg_try_advisory_lock(pg_catalog.hashtextextended($1::text, 0))",

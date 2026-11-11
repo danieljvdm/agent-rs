@@ -5,7 +5,7 @@ An agent can delegate to child agents that its model calls like tools. A delegat
 ```rust
 use std::sync::Arc;
 use std::time::Duration;
-use yielded_agent::{Agent, Limits, Result, ScriptedModel, Subagent};
+use agent_rs::{Agent, Limits, Result, ScriptedModel, Subagent};
 
 fn planner(model: Arc<ScriptedModel>, researcher_model: Arc<ScriptedModel>) -> Result<Agent<u32, String>> {
     let researcher = Agent::builder("researcher", researcher_model)

@@ -1,6 +1,6 @@
 # Persistent interval automation
 
-An automation creates **new runs** on a fixed interval. It is the first working slice of [YIE-252](https://linear.app/yielded/issue/YIE-252). A persisted `WaitRequest::Until` still resumes an existing run; it does not create a recurrence.
+An automation creates **new runs** on a fixed interval. A persisted `WaitRequest::Until` still resumes an existing run; it does not create a recurrence.
 
 Automations are an extension of the storage contract. `AutomationStore` (implemented by `MemoryStore` and `sqlite::SqliteStore`) keeps automations beside the runs, and a `Host` over such a store gains `Host::fire_automations`. The scheduling rules and the firing protocol are defined once in the crate; each store supplies only the primitive reads and writes inside one atomic write. Nothing changes in the engine, and the host spawns no automation task: the application calls `fire_automations` from its own poll loop.
 
@@ -8,7 +8,7 @@ Automations are an extension of the storage contract. `AutomationStore` (impleme
 use std::{sync::Arc, time::Duration};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
-use yielded_agent::{sqlite::SqliteStore, *};
+use agent_rs::{sqlite::SqliteStore, *};
 
 async fn serve(agent: Agent, stop: CancellationToken) -> Result<()> {
     let store = Arc::new(SqliteStore::open("personal.sqlite").await?);
@@ -85,7 +85,7 @@ These policies are fixed rather than configurable modes:
 ## Inspect and manage
 
 ```rust
-use yielded_agent::{sqlite::SqliteStore, *};
+use agent_rs::{sqlite::SqliteStore, *};
 
 async fn manage(host: &Host<SqliteStore>, agent: Agent) -> Result<()> {
     let store = host.store();
@@ -133,7 +133,7 @@ One admitted firing writes five rows in its call's single transaction: the run's
 
 ## Calendar and external-event follow-ups
 
-YIE-252 remains broader than this interval implementation:
+Scheduling is broader than this interval implementation:
 
 | Slice | Remaining contract/work |
 | --- | --- |

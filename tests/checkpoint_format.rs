@@ -2,11 +2,11 @@
 //! storage error, and a newer schema or state version is `Error::Incompatible`.
 #![cfg(feature = "sqlite")]
 
+use agent_rs::{sqlite::SqliteStore, *};
 use rusqlite::{Connection, params};
 use serde_json::json;
 use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
-use yielded_agent::{sqlite::SqliteStore, *};
 
 struct Fixture {
     _directory: TempDir,

@@ -55,8 +55,8 @@ use tokio_util::sync::CancellationToken;
 ///
 /// ```
 /// # use std::sync::Arc;
-/// # use yielded_agent::{Agent, ModelConfig, openai::OpenAiResponsesModel};
-/// # fn main() -> yielded_agent::Result<()> {
+/// # use agent_rs::{Agent, ModelConfig, openai::OpenAiResponsesModel};
+/// # fn main() -> agent_rs::Result<()> {
 /// # let key = String::from("example-key");
 /// let agent = Agent::builder("assistant", Arc::new(OpenAiResponsesModel::new(key)?))
 ///     .config(ModelConfig::new("gpt-4.1-2025-04-14"))

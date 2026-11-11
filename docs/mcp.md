@@ -18,8 +18,8 @@ It accepts the `initialize` protocol versions `2024-11-05`, `2025-03-26`, `2025-
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
-use yielded_agent::mcp::{McpClient, McpOptions, ServerIdentity, ToolPolicy};
-use yielded_agent::{Agent, Execution, Model, Result, RetryPolicy};
+use agent_rs::mcp::{McpClient, McpOptions, ServerIdentity, ToolPolicy};
+use agent_rs::{Agent, Execution, Model, Result, RetryPolicy};
 
 async fn example(model: Arc<dyn Model>) -> Result<()> {
     let mut command = Command::new("node");

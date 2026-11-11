@@ -57,7 +57,7 @@ fn validate<T: DeserializeOwned + 'static>(value: &Value) -> serde_json::Result<
 /// ```
 /// # use std::sync::Arc;
 /// # use serde_json::json;
-/// # use yielded_agent::*;
+/// # use agent_rs::*;
 /// # async fn example() -> Result<()> {
 /// let model = ScriptedModel::new(vec![ModelResponse::final_output(json!("hi"))]);
 /// let agent: Agent<String, String> = Agent::builder("greeter", Arc::new(model))
@@ -70,7 +70,7 @@ fn validate<T: DeserializeOwned + 'static>(value: &Value) -> serde_json::Result<
 ///
 /// ```compile_fail
 /// # use std::sync::Arc;
-/// # use yielded_agent::*;
+/// # use agent_rs::*;
 /// # async fn example(agent: Agent<String, String>) -> Result<()> {
 /// // The input must convert into `String`.
 /// let reply: String = agent.run(&mut Conversation::default(), 42_u64).await?;
@@ -79,7 +79,7 @@ fn validate<T: DeserializeOwned + 'static>(value: &Value) -> serde_json::Result<
 ///
 /// ```compile_fail
 /// # use std::sync::Arc;
-/// # use yielded_agent::*;
+/// # use agent_rs::*;
 /// # async fn example(agent: Agent<String, String>) -> Result<()> {
 /// // The output is a `String`.
 /// let reply: u64 = agent.run(&mut Conversation::default(), "hello").await?;
@@ -132,7 +132,7 @@ impl Agent {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use yielded_agent::*;
+    /// # use agent_rs::*;
     /// # fn main() -> Result<()> {
     /// let agent = Agent::builder("support", Arc::new(ScriptedModel::new(vec![])))
     ///     .instructions("Answer briefly.")
@@ -260,7 +260,7 @@ impl<I: Serialize + 'static, O: DeserializeOwned> Agent<I, O> {
     /// ```
     /// # use std::sync::Arc;
     /// # use serde_json::json;
-    /// # use yielded_agent::*;
+    /// # use agent_rs::*;
     /// # async fn example(agent: Agent<String, String>) -> Result<()> {
     /// let mut conversation = Conversation::default();
     /// match agent.run(&mut conversation, "hello").await {
@@ -634,7 +634,7 @@ impl Checkpoint for MemoryCheckpoint {
 ///
 /// ```
 /// # use tokio_util::sync::CancellationToken;
-/// # use yielded_agent::RunControl;
+/// # use agent_rs::RunControl;
 /// let cancel = CancellationToken::new();
 /// let control = RunControl::default().with_cancel(cancel.clone());
 /// ```

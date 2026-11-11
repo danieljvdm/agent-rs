@@ -1,4 +1,5 @@
 //! Application metadata and a write-ahead admission journal. Never edits engine tables.
+use agent_rs::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -10,7 +11,6 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
-use yielded_agent::{Error, Result};
 
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
 

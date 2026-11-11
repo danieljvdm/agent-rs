@@ -18,6 +18,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "agent-rs"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "criterion",
+ "dhat",
+ "futures",
+ "jsonschema",
+ "libc",
+ "reqwest",
+ "rmcp",
+ "rusqlite",
+ "rustix",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-postgres",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1436,6 +1463,26 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+
+[[package]]
+name = "personal-agent"
+version = "0.1.0"
+dependencies = [
+ "agent-rs",
+ "async-trait",
+ "axum",
+ "futures",
+ "rusqlite",
+ "schemars",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "uuid",
+]
 
 [[package]]
 name = "phf"
@@ -3083,53 +3130,6 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
-
-[[package]]
-name = "yielded-agent"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "criterion",
- "dhat",
- "futures",
- "jsonschema",
- "libc",
- "reqwest",
- "rmcp",
- "rusqlite",
- "rustix",
- "schemars",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "tokio-postgres",
- "tokio-util",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "yielded-personal-agent"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "axum",
- "futures",
- "rusqlite",
- "schemars",
- "serde",
- "serde_json",
- "subtle",
- "tempfile",
- "tokio",
- "tokio-util",
- "tower",
- "uuid",
- "yielded-agent",
-]
 
 [[package]]
 name = "yoke"

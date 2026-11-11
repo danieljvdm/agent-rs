@@ -1,4 +1,5 @@
 #![cfg(feature = "sqlite")]
+use agent_rs::{Host, HostOptions, sqlite::SqliteStore, *};
 use serde_json::{Value, json};
 use std::{
     sync::{
@@ -8,7 +9,6 @@ use std::{
     time::Duration,
 };
 use tempfile::TempDir;
-use yielded_agent::{Host, HostOptions, sqlite::SqliteStore, *};
 
 fn agent(responses: Vec<ModelResponse>, tools: Vec<Arc<dyn Tool>>) -> Agent {
     Agent::builder("test", Arc::new(ScriptedModel::new(responses)))
@@ -708,7 +708,7 @@ async fn waiting_sibling_does_not_hide_an_abandoned_dispatched_effect() {
 
 #[tokio::test]
 async fn late_error_cannot_suppress_cancel_resolution_or_repair() {
-    use yielded_agent::CheckpointPosition;
+    use agent_rs::CheckpointPosition;
     let dir = TempDir::new().unwrap();
     let db = store(&dir).await;
     let agent = final_agent();

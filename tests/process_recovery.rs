@@ -1,6 +1,7 @@
 //! Real process-death recovery checks. `process_child` is an ignored subprocess entrypoint.
 #![cfg(all(feature = "sqlite", unix))]
 
+use agent_rs::{Host, HostOptions, sqlite::SqliteStore, *};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -15,7 +16,6 @@ use std::{
 };
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
-use yielded_agent::{Host, HostOptions, sqlite::SqliteStore, *};
 
 const CHILD_CONFIG: &str = "AGENT_RS_PROCESS_CHILD";
 const READY_TIMEOUT: Duration = Duration::from_secs(20);

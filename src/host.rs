@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 ///
 /// ```
 /// # use std::time::Duration;
-/// # use yielded_agent::HostOptions;
+/// # use agent_rs::HostOptions;
 /// let options = HostOptions::default()
 ///     .with_max_concurrent_runs(4)
 ///     .with_poll_interval(Duration::from_millis(50));

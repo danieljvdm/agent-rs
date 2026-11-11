@@ -2,16 +2,16 @@
 //! whose effects and controls live in a temporary directory.
 #![cfg(feature = "mcp")]
 
+use agent_rs::{
+    mcp::{McpClient, McpOptions, ServerIdentity, ToolPolicy},
+    *,
+};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::{path::Path, sync::Arc, time::Duration};
 use tempfile::TempDir;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
-use yielded_agent::{
-    mcp::{McpClient, McpOptions, ServerIdentity, ToolPolicy},
-    *,
-};
 
 fn command(root: &Path) -> Command {
     let mut command = Command::new("python3");
@@ -705,7 +705,7 @@ async fn engine_timeout_closes_the_connection_and_cleanup_joins_the_process_grou
 
 #[cfg(feature = "sqlite")]
 async fn interrupted_mutation_reopens_as_unknown_and_only_reconciliation_continues() {
-    use yielded_agent::sqlite::SqliteStore;
+    use agent_rs::sqlite::SqliteStore;
     let root = TempDir::new().unwrap();
     let db_path = root.path().join("state.sqlite");
     let store = Arc::new(SqliteStore::open(&db_path).await.unwrap());
@@ -800,7 +800,7 @@ async fn interrupted_mutation_reopens_as_unknown_and_only_reconciliation_continu
 /// against a changed schema, server version or deployment revision, and does against the same.
 #[cfg(feature = "sqlite")]
 async fn read_only_recovery_rejects_changed_server_and_schema_then_retries_compatible_contract() {
-    use yielded_agent::sqlite::SqliteStore;
+    use agent_rs::sqlite::SqliteStore;
     let root = TempDir::new().unwrap();
     let db_path = root.path().join("state.sqlite");
     let store = Arc::new(SqliteStore::open(&db_path).await.unwrap());

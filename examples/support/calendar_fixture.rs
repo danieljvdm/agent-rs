@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 use super::personal_workflow::{DATE, Scenario};
+use agent_rs::google_calendar::{CalendarScope, GoogleCalendar};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -16,7 +17,6 @@ use std::{
     thread::{self, JoinHandle},
     time::Duration,
 };
-use yielded_agent::google_calendar::{CalendarScope, GoogleCalendar};
 
 pub const TEST_TOKEN: &str = "fixture-secret-must-not-be-retained";
 

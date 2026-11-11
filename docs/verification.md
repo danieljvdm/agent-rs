@@ -1,4 +1,4 @@
-# YIE-245 verification
+# Verification
 
 The implementation was built from an empty repository. The initial source revision is `555b124`; the benchmark's additional seeded-context assertions are in `4388ae4`.
 

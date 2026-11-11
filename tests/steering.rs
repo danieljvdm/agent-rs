@@ -1,6 +1,7 @@
 //! The steering contract, asserted identically against every `SteeringStore`, including runs
 //! that delegate to attached subagents. A new adapter adds a `Fixture` and one `steering_tests!`
 //! invocation.
+use agent_rs::*;
 use async_trait::async_trait;
 use futures::stream;
 use serde_json::{Value, json};
@@ -15,7 +16,6 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use yielded_agent::*;
 
 /// Opens a store and simulates a host restart over the same durable contents.
 #[async_trait]

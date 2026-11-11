@@ -1,5 +1,6 @@
 //! Identical durability assertions against every `DurableStore`. A new adapter adds a
 //! `Fixture` and one `conformance_tests!` invocation.
+use agent_rs::{Host, HostOptions, *};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::{
@@ -10,7 +11,6 @@ use std::{
     time::Duration,
 };
 use tokio::sync::Notify;
-use yielded_agent::{Host, HostOptions, *};
 
 /// Opens a store and simulates a host restart over the same durable contents.
 #[async_trait]
@@ -77,8 +77,8 @@ impl Postgres {
 #[async_trait]
 impl Fixture for Postgres {
     async fn open(&self) -> Arc<dyn DurableStore> {
-        let config: postgres::Config = std::env::var("YIELDED_TEST_POSTGRES_URL")
-            .expect("set YIELDED_TEST_POSTGRES_URL, or run scripts/test-postgres.sh")
+        let config: postgres::Config = std::env::var("AGENT_RS_TEST_POSTGRES_URL")
+            .expect("set AGENT_RS_TEST_POSTGRES_URL, or run scripts/test-postgres.sh")
             .parse()
             .unwrap();
         let store = Arc::new(

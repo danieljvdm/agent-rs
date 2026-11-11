@@ -1,5 +1,6 @@
 //! The `ContextPolicy` seam, exercised by small test-only policies: one that pins entries and one
 //! that contributes derived context.
+use agent_rs::*;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::{
@@ -7,7 +8,6 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 use tokio_util::sync::CancellationToken;
-use yielded_agent::*;
 
 /// Records each request's history and derived context, then plays a script.
 struct Capture {

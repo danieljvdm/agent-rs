@@ -1,5 +1,11 @@
 //! Warm calls through an MCP tool against the same contract served in-process, and cold
 //! connection cost. See `docs/mcp.md`; run with `--features mcp`.
+use agent_rs::mcp::{McpClient, McpOptions, ServerIdentity, ToolPolicy};
+use agent_rs::{
+    Agent, Error, Execution, HistoryEntry, MemoryCheckpoint, ModelResponse, Phase, Result,
+    RetryPolicy, RunControl, RunState, ScriptedModel, Settlement, Tool, ToolCall, ToolContext,
+    ToolOutput, ToolSpec,
+};
 use async_trait::async_trait;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use serde::Deserialize;
@@ -12,12 +18,6 @@ use std::{
 use tempfile::TempDir;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
-use yielded_agent::mcp::{McpClient, McpOptions, ServerIdentity, ToolPolicy};
-use yielded_agent::{
-    Agent, Error, Execution, HistoryEntry, MemoryCheckpoint, ModelResponse, Phase, Result,
-    RetryPolicy, RunControl, RunState, ScriptedModel, Settlement, Tool, ToolCall, ToolContext,
-    ToolOutput, ToolSpec,
-};
 
 const FIXTURE: &str = "mcp-stdio-v1";
 const SERVER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/support/mcp_server.py");

@@ -22,7 +22,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      YIELDED_TEST_POSTGRES_URL: host=localhost port=5432 user=postgres dbname=postgres
+      AGENT_RS_TEST_POSTGRES_URL: host=localhost port=5432 user=postgres dbname=postgres
       CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@v4

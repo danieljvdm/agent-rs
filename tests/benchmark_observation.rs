@@ -3,10 +3,10 @@
 #[path = "../benches/support/mod.rs"]
 mod support;
 
+use agent_rs::{Phase, Settlement};
 use std::time::{Duration, Instant};
 use support::durable::{Resident, join_batch_observation};
 use support::{CONCURRENT_TOTAL, Fixture};
-use yielded_agent::{Phase, Settlement};
 
 #[tokio::test]
 async fn observes_early_completion_before_later_admission_finishes() {

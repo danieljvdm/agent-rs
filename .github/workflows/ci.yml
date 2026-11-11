@@ -25,6 +25,23 @@ jobs:
       - run: cargo bench --features mcp --bench mcp --locked -- --test
       - run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py
       # The personal-agent application, a workspace member the root-package steps above skip.
-      - run: cargo fmt -p yielded-personal-agent --check
-      - run: cargo clippy -p yielded-personal-agent --all-targets --locked -- -D warnings
-      - run: cargo test -p yielded-personal-agent --locked
+      - run: cargo fmt -p personal-agent --check
+      - run: cargo clippy -p personal-agent --all-targets --locked -- -D warnings
+      - run: cargo test -p personal-agent --locked
+  # `rust-version` in Cargo.toml is a promise to dependents; build the library on exactly that toolchain.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.89 --profile minimal
+      - run: cargo +1.89 check --all-features --locked
+      - run: cargo +1.89 check --no-default-features --locked
+  # What `cargo publish` would upload must build on its own, from the packaged files only.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+      - run: cargo package -p agent-rs --locked
+      # The verification build covers the library only; the packaged examples must compile too.
+      - run: cd target/package/agent-rs-*/ && cargo check --all-features --examples

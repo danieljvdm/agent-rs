@@ -8,9 +8,9 @@ substitutes one.
 
 ```rust
 use std::sync::Arc;
-use yielded_agent::{Agent, Limits, ModelConfig, openai::OpenAiResponsesModel};
+use agent_rs::{Agent, Limits, ModelConfig, openai::OpenAiResponsesModel};
 
-fn assistant(key: String) -> yielded_agent::Result<Agent<String, String>> {
+fn assistant(key: String) -> agent_rs::Result<Agent<String, String>> {
     Agent::builder("personal-assistant-v1", Arc::new(OpenAiResponsesModel::new(key)?))
         .instructions("Answer the request using the available tools.")
         .config(ModelConfig::new("gpt-4.1-2025-04-14").with_temperature(0.0))
@@ -22,8 +22,7 @@ fn assistant(key: String) -> yielded_agent::Result<Agent<String, String>> {
 ```
 
 Swapping `OpenAiResponsesModel` for `OpenAiModel` selects Chat Completions with
-nothing else changed. This is the first slice of
-[YIE-251](https://linear.app/yielded/issue/YIE-251): Responses for text/JSON and
+nothing else changed. The Responses adapter covers text/JSON and
 ordinary application function tools, with explicit adapter selection. Dynamic
 per-turn routing, automatic fallback, other providers, and provider-specific
 reasoning or hosted-tool replay are later slices, driven by consumer needs.

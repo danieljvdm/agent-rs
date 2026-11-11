@@ -1,6 +1,7 @@
 //! Deterministic consumer fixture: a planner delegates to two venue researchers, one of which
 //! asks for input. The run waits, SQLite is closed and reopened, the child's question is
 //! answered, and the planner chooses a venue within budget.
+use agent_rs::{sqlite::SqliteStore, *};
 use async_trait::async_trait;
 use futures::stream;
 use schemars::JsonSchema;
@@ -15,7 +16,6 @@ use std::{
     time::Duration,
 };
 use tokio_util::sync::CancellationToken;
-use yielded_agent::{sqlite::SqliteStore, *};
 
 pub const FIXTURE: &str = "attached-venue-research-v1";
 type Failure = Box<dyn std::error::Error + Send + Sync>;

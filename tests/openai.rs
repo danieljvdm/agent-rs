@@ -5,6 +5,13 @@
 mod openai_http;
 #[path = "support/openai_wire.rs"]
 mod openai_wire;
+use agent_rs::{
+    Agent, Error, HistoryEntry, Limits, MemoryCheckpoint, Model, ModelConfig, ModelEvent,
+    ModelRequest, Phase, RetryPolicy, RunControl, Settlement, TokenUsage, Tool, ToolOutput,
+    ToolSpec,
+    openai::{OpenAiModel, OpenAiResponsesModel},
+    typed_tool,
+};
 use futures::StreamExt;
 use openai_http::{serve, serve_status};
 use openai_wire::Api;
@@ -19,13 +26,6 @@ use std::{
     thread,
 };
 use tokio_util::sync::CancellationToken;
-use yielded_agent::{
-    Agent, Error, HistoryEntry, Limits, MemoryCheckpoint, Model, ModelConfig, ModelEvent,
-    ModelRequest, Phase, RetryPolicy, RunControl, Settlement, TokenUsage, Tool, ToolOutput,
-    ToolSpec,
-    openai::{OpenAiModel, OpenAiResponsesModel},
-    typed_tool,
-};
 
 fn client() -> reqwest::Client {
     reqwest::Client::builder()
@@ -82,7 +82,7 @@ fn agent(api: Api, base: &str, tools: Vec<Arc<dyn Tool>>, limits: Limits) -> Age
         .build()
         .unwrap()
 }
-async fn drive(agent: &Agent<String, u64>) -> yielded_agent::RunState {
+async fn drive(agent: &Agent<String, u64>) -> agent_rs::RunState {
     let mut state = agent.new_run("c", json!("hello"), &[], None).unwrap();
     agent
         .drive(&mut state, &MemoryCheckpoint, RunControl::default())
@@ -440,8 +440,8 @@ fn bindings_pin_api_and_endpoint_but_allow_key_rotation() {
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn durable_recovery_rejects_a_changed_api_until_the_original_route_is_restored() {
+    use agent_rs::{DurableStore, Host, HostOptions, sqlite::SqliteStore};
     use std::time::Duration;
-    use yielded_agent::{DurableStore, Host, HostOptions, sqlite::SqliteStore};
     for api in Api::ALL {
         let (base, server) = serve(api, vec![api.text("{\"value\":42}")]);
         let original = agent(api, &base, vec![], Limits::default());
@@ -521,7 +521,7 @@ async fn durable_recovery_rejects_a_changed_api_until_the_original_route_is_rest
 #[cfg(feature = "memory")]
 #[tokio::test]
 async fn derived_memory_is_labelled_reference_data_with_provenance_on_the_wire() {
-    use yielded_agent::memory::{DERIVED_CONTEXT_VERSION, DerivedContext, DerivedKind, SourceRef};
+    use agent_rs::memory::{DERIVED_CONTEXT_VERSION, DerivedContext, DerivedKind, SourceRef};
     // `MemoryPolicy` sends each item as this encoding.
     let item = DerivedContext {
         version: DERIVED_CONTEXT_VERSION,

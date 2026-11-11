@@ -4,6 +4,10 @@
 //! Tests that need a server are ignored by default; `scripts/test-postgres.sh` provisions an
 //! isolated database and runs them with `--include-ignored`. Each test creates its own schema.
 #![cfg(feature = "postgres")]
+use agent_rs::{
+    postgres::{Config, NoTls, PostgresOptions, PostgresStore, StoreMetrics},
+    *,
+};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::{
@@ -15,10 +19,6 @@ use std::{
 };
 use tokio::sync::Notify;
 use tokio_postgres::Client;
-use yielded_agent::{
-    postgres::{Config, NoTls, PostgresOptions, PostgresStore, StoreMetrics},
-    *,
-};
 
 // ---------------------------------------------------------------------------------------------
 // Budget table (exact). Each write is one statement, so one transaction and one round trip.
@@ -60,7 +60,7 @@ impl Fixture {
         Self::named(&format!("postgres_{}", RunId::new_v4().simple()))
     }
     fn named(schema: &str) -> Self {
-        let config = std::env::var("YIELDED_TEST_POSTGRES_URL")
+        let config = std::env::var("AGENT_RS_TEST_POSTGRES_URL")
             .expect("run scripts/test-postgres.sh against an isolated PostgreSQL database")
             .parse()
             .unwrap();
@@ -90,7 +90,7 @@ impl Fixture {
     }
     async fn observer(&self) -> Client {
         let mut config = self.config.clone();
-        config.application_name("yielded-test-observer");
+        config.application_name("agent-rs-test-observer");
         let (client, connection) = config.connect(NoTls).await.unwrap();
         tokio::spawn(connection);
         client
