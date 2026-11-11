@@ -32,6 +32,10 @@ use yielded_agent::{
     FiringReport, IntervalAutomation, Occurrence, OccurrenceOutcome,
 };
 // Optional adapters, each behind its feature.
+#[cfg(feature = "google-calendar")]
+use yielded_agent::google_calendar::{
+    CalendarDay, CalendarScope, GoogleCalendar, Meeting, ReminderReceipt,
+};
 #[cfg(feature = "mcp")]
 use yielded_agent::mcp::{
     McpClient, McpOptions, McpTool, ServerIdentity, ToolDefinition, ToolPolicy,

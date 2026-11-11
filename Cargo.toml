@@ -12,6 +12,7 @@ openai = ["dep:reqwest"]
 memory = []
 # Stdio MCP servers as tools. Process groups are signalled through rustix, without unsafe code.
 mcp = ["dep:rmcp", "dep:jsonschema", "dep:rustix", "tokio/process", "tokio/io-util", "tokio-util/codec"]
+google-calendar = ["dep:reqwest", "dep:chrono", "dep:sha2"]
 allocation-metrics = []
 [dependencies]
 async-trait = "0.1.92"
@@ -29,6 +30,8 @@ rusqlite = { version = "0.37", features = ["bundled"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"], optional = true }
 rmcp = { version = "=3.4.0", default-features = false, features = ["client"], optional = true }
 jsonschema = { version = "0.30", default-features = false, optional = true }
+chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
+sha2 = { version = "0.10", optional = true }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["process"], optional = true }
 [dev-dependencies]

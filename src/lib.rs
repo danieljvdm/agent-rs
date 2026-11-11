@@ -7,6 +7,8 @@ mod children;
 mod context;
 mod engine;
 mod error;
+#[cfg(feature = "google-calendar")]
+pub mod google_calendar;
 mod host;
 #[cfg(feature = "mcp")]
 pub mod mcp;
