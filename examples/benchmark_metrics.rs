@@ -3,10 +3,10 @@
 #[path = "../benches/support/mod.rs"]
 mod support;
 
+use agent_rs::*;
 use serde::Serialize;
 use std::{future::Future, time::Instant};
 use support::*;
-use yielded_agent::*;
 
 #[cfg(feature = "allocation-metrics")]
 mod allocations {
@@ -298,7 +298,7 @@ async fn collect(samples: usize, filter: &str) -> Vec<Sample> {
                 let (store, sample) = measure(
                     "startup_sqlite",
                     0,
-                    yielded_agent::sqlite::SqliteStore::open(path),
+                    agent_rs::sqlite::SqliteStore::open(path),
                 )
                 .await;
                 results.push(sample);

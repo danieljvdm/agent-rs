@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use agent_rs::*;
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
 use schemars::JsonSchema;
@@ -11,7 +12,6 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
-use yielded_agent::*;
 
 pub const FIXTURE_VERSION: &str = "agent-loop-v4";
 pub const WORKERS: usize = 4;
@@ -406,11 +406,11 @@ pub fn percentile(values: &[u64], quantile: f64) -> u64 {
 #[cfg(feature = "sqlite")]
 pub mod durable {
     use super::*;
+    use agent_rs::sqlite::SqliteStore;
+    use agent_rs::{Host, HostOptions};
     use std::collections::{HashMap, HashSet};
     use std::future::Future;
     use std::path::Path;
-    use yielded_agent::sqlite::SqliteStore;
-    use yielded_agent::{Host, HostOptions};
 
     pub struct Resident {
         pub store: Arc<SqliteStore>,

@@ -2,6 +2,7 @@
 //! the same instruction queued with `Host::steer` during the first model request. Both complete
 //! 64 runs of two model calls and one read-only tool each. Setup, verification and shutdown are
 //! outside the measured interval; see `docs/steering.md`.
+use agent_rs::{sqlite::SqliteStore, *};
 use async_trait::async_trait;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use futures::stream;
@@ -12,7 +13,6 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use yielded_agent::{sqlite::SqliteStore, *};
 
 const RUNS: usize = 64;
 

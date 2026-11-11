@@ -1,7 +1,7 @@
 //! Deterministic consumer shared by the recurring example and its integration test.
+use agent_rs::{sqlite::SqliteStore, *};
 use serde_json::{Value, json};
 use std::{path::Path, sync::Arc, time::Duration};
-use yielded_agent::{sqlite::SqliteStore, *};
 
 pub async fn run(directory: &Path) -> Result<Vec<RunState>> {
     let tasks = json!(["Book the dentist", "Renew the passport"]);

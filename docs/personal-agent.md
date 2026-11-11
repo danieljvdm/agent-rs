@@ -1,6 +1,6 @@
 # Personal agent application
 
-The `yielded-personal-agent` workspace package adds a local, single-owner application to the reusable runtime: authenticated HTTP operations, conversations, saved history, and an approval/input/reconciliation inbox. Its browser UI uses durable snapshots after reconnect, not progress events. The runtime crate has no dependency on the application or its HTTP/authentication/UI dependencies.
+The `personal-agent` workspace package adds a local, single-owner application to the reusable runtime: authenticated HTTP operations, conversations, saved history, and an approval/input/reconciliation inbox. Its browser UI uses durable snapshots after reconnect, not progress events. The runtime crate has no dependency on the application or its HTTP/authentication/UI dependencies.
 
 ## Run it
 
@@ -8,7 +8,7 @@ Supply a randomly generated access token through `PERSONAL_AGENT_TOKEN` (32–51
 
 ```sh
 # With PERSONAL_AGENT_TOKEN already in the environment:
-scripts/rust.sh run -p yielded-personal-agent --locked -- --demo
+scripts/rust.sh run -p personal-agent --locked -- --demo
 ```
 
 Open `http://127.0.0.1:3000`. Create a conversation and send a message such as “Friday errands.” The explicit offline demo asks for the note body, requests approval for the exact title/body, and saves a real entry to its local notebook only after approval. Denial finishes without a write. The demo is a deterministic workflow, not a language model.
@@ -100,9 +100,9 @@ The catalogue indexes runs for discovery; the durable runtime remains the author
 
 ## Scope and evidence
 
-This first application slice supports a local owner, notebook effects, the existing OpenAI adapter, and explicit demo mode. It does not provide shared accounts, remote hosting/TLS, production email/calendar/reminder integrations, streaming token presentation, notebook search beyond the latest 20 entries, or agent-configuration migrations. These remain separate application/adapter work; YIE-245's engine scope is unchanged.
+This first application slice supports a local owner, notebook effects, the existing OpenAI adapter, and explicit demo mode. It does not provide shared accounts, remote hosting/TLS, production email/calendar/reminder integrations, streaming token presentation, notebook search beyond the latest 20 entries, or agent-configuration migrations. These remain separate application/adapter work; the engine's scope is unchanged.
 
-The application tests send real HTTP requests through the served router in-process (routing, authentication, body limits, extraction, error mapping, and headers, without a socket) against file-backed SQLite stores. They cover reconnect, restart, approval/denial, rejected notes, cancellation, exact-operation/version conflicts, admission recovery, and reconciliation. A subprocess test kills the owning process after a non-replayable effect, then confirms restart exposes uncertainty and reconciliation does not repeat it. Run them with `scripts/rust.sh test -p yielded-personal-agent --locked`.
+The application tests send real HTTP requests through the served router in-process (routing, authentication, body limits, extraction, error mapping, and headers, without a socket) against file-backed SQLite stores. They cover reconnect, restart, approval/denial, rejected notes, cancellation, exact-operation/version conflicts, admission recovery, and reconciliation. A subprocess test kills the owning process after a non-replayable effect, then confirms restart exposes uncertainty and reconciliation does not repeat it. Run them with `scripts/rust.sh test -p personal-agent --locked`.
 
 The browser regression flow is `scripts/personal_agent_browser_smoke.js`. Start `--demo` with a disposable `PERSONAL_AGENT_DIR` and the public fixture token `test-only-personal-agent-access-token`, open the local URL with a named `playwright-cli` session, then run `playwright-cli -s=<session> run-code --filename=scripts/personal_agent_browser_smoke.js`. It exercises draft/focus preservation, untrusted text rendering, reauthentication after reload, offline reconnect, denial, approved completion, and mobile overflow. Never use that public token for real personal data.
 

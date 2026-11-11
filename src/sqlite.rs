@@ -664,7 +664,7 @@ impl SqliteStore {
         let (sender, mut receiver) = mpsc::channel::<Job>(64);
         let (ready_tx, ready_rx) = oneshot::channel();
         let thread = thread::Builder::new()
-            .name("yielded-sqlite".into())
+            .name("agent-rs-sqlite".into())
             .spawn(move || match Database::open(&path, worker_counters) {
                 Ok(mut database) => {
                     if ready_tx.send(Ok(())).is_err() {

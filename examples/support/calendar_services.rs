@@ -5,6 +5,10 @@ use super::{
     calendar_fixture::{CalendarFixture, source_events},
     personal_workflow::*,
 };
+use agent_rs::{
+    Error, Result,
+    google_calendar::{CalendarScope, GoogleCalendar},
+};
 use chrono::{DateTime, Duration as TimeDelta};
 use reqwest::{
     Client, Method, StatusCode, Url,
@@ -18,10 +22,6 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
-};
-use yielded_agent::{
-    Error, Result,
-    google_calendar::{CalendarScope, GoogleCalendar},
 };
 
 /// The service suite's own fixture: the provider events, the lost-write case and the oracle. The
@@ -302,7 +302,7 @@ struct Sandbox {
 }
 impl Sandbox {
     fn new(token: &str, path: PathBuf) -> Result<Self> {
-        let marker = format!("yielded-calendar-eval-{}", uuid::Uuid::new_v4());
+        let marker = format!("agent-rs-calendar-eval-{}", uuid::Uuid::new_v4());
         let calendars = ["source", "reminders"]
             .into_iter()
             .map(|purpose| CalendarRecord {
@@ -457,7 +457,7 @@ pub async fn cleanup_sandbox(path: &Path, allow_service_writes: bool) -> Result<
         .map_err(|_| invalid("invalid sandbox manifest"))?;
     let suffix = manifest
         .marker
-        .strip_prefix("yielded-calendar-eval-")
+        .strip_prefix("agent-rs-calendar-eval-")
         .ok_or_else(|| invalid("invalid sandbox marker"))?;
     uuid::Uuid::parse_str(suffix).map_err(|_| invalid("invalid sandbox marker"))?;
     if manifest.version != 1

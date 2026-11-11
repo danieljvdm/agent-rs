@@ -6,8 +6,8 @@ mod workflow;
 
 #[cfg(feature = "sqlite")]
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
-async fn main() -> yielded_agent::Result<()> {
-    use yielded_agent::{Error, sqlite::SqliteStore};
+async fn main() -> agent_rs::Result<()> {
+    use agent_rs::{Error, sqlite::SqliteStore};
     let temporary = tempfile::tempdir().map_err(Error::storage)?;
     let path = std::env::args()
         .nth(1)

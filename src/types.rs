@@ -16,7 +16,7 @@ pub type RunId = Uuid;
 ///
 /// ```
 /// # use std::time::Duration;
-/// # use yielded_agent::Limits;
+/// # use agent_rs::Limits;
 /// let limits = Limits::default()
 ///     .with_max_model_calls(8)
 ///     .with_operation_timeout(Duration::from_secs(5));
@@ -192,7 +192,7 @@ pub struct ToolCall {
 ///
 /// ```
 /// # use serde_json::json;
-/// # use yielded_agent::{ModelResponse, TokenUsage};
+/// # use agent_rs::{ModelResponse, TokenUsage};
 /// let response = ModelResponse::final_output(json!("done")).with_usage(TokenUsage::new(12, 3));
 /// ```
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -300,7 +300,7 @@ pub enum Execution {
 /// [`ToolSpec::new`] and set what differs from its defaults:
 ///
 /// ```
-/// # use yielded_agent::{RetryPolicy, ToolSpec};
+/// # use agent_rs::{RetryPolicy, ToolSpec};
 /// let spec = ToolSpec::new("create_reminder", "1")
 ///     .with_description("Create a reminder at a time.")
 ///     .with_retry(RetryPolicy::Idempotent { contract: "reminder-key-v1".into() })

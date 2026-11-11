@@ -7,13 +7,13 @@ mod calendar_fixture;
 #[path = "../examples/support/personal_workflow.rs"]
 mod personal_workflow;
 
+use agent_rs::{google_calendar::GoogleCalendar, *};
 use async_trait::async_trait;
 use calendar_fixture::{CalendarFixture, Reply, TEST_TOKEN, scope, source_events};
 use personal_workflow::{DATE, scenarios};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-use yielded_agent::{google_calendar::GoogleCalendar, *};
 
 /// A base URL nothing listens on: a test using it must finish before sending a request.
 const UNREACHABLE: &str = "http://127.0.0.1:1/calendar/v3/";

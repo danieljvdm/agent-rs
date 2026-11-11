@@ -358,7 +358,7 @@ pub(super) fn start(
     let job = tokio::spawn(async move {
         let info = ClientConfig::new(
             ClientCapabilities::default(),
-            Implementation::new("yielded-agent", env!("CARGO_PKG_VERSION")),
+            Implementation::new("agent-rs", env!("CARGO_PKG_VERSION")),
         );
         let initialized = tokio::select! {
             biased;

@@ -4,8 +4,8 @@
 mod recurring_workflow;
 
 #[tokio::main]
-async fn main() -> yielded_agent::Result<()> {
-    let directory = tempfile::tempdir().map_err(yielded_agent::Error::storage)?;
+async fn main() -> agent_rs::Result<()> {
+    let directory = tempfile::tempdir().map_err(agent_rs::Error::storage)?;
     let states = recurring_workflow::run(directory.path()).await?;
     for state in states {
         println!("Inbox review {}: {:?}", state.id, state.phase);

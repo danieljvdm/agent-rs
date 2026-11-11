@@ -24,7 +24,7 @@ const MAX_MS: u64 = i64::MAX as u64;
 ///
 /// ```
 /// # use serde_json::json;
-/// # use yielded_agent::IntervalAutomation;
+/// # use agent_rs::IntervalAutomation;
 /// let inbox = json!("Review my inbox");
 /// let hourly = IntervalAutomation::new("personal-inbox", inbox, 1_000, 3_600_000);
 /// assert_eq!(hourly.interval_ms, 3_600_000);
@@ -189,7 +189,7 @@ pub struct Occurrence {
 /// deployment limits, not persisted schedule policy.
 ///
 /// ```
-/// # use yielded_agent::AutomationOptions;
+/// # use agent_rs::AutomationOptions;
 /// let options = AutomationOptions::default().with_max_in_flight(8);
 /// assert_eq!(options.max_per_fire, 64);
 /// ```
@@ -368,7 +368,7 @@ impl<S: AutomationStore + ?Sized + 'static> Host<S> {
     /// ```
     /// # use std::sync::Arc;
     /// # use serde_json::json;
-    /// # use yielded_agent::*;
+    /// # use agent_rs::*;
     /// # async fn example(agent: Agent) -> Result<()> {
     /// let store = Arc::new(MemoryStore::new());
     /// let hourly = IntervalAutomation::new("inbox", json!("Review my inbox"), 0, 3_600_000);

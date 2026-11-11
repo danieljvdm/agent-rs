@@ -1,13 +1,13 @@
+use agent_rs::{ModelConfig, openai::OpenAiModel};
+use personal_agent::{AccessToken, Application, notebook::Notebook, router};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
-use yielded_agent::{ModelConfig, openai::OpenAiModel};
-use yielded_personal_agent::{AccessToken, Application, notebook::Notebook, router};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "Usage: yielded-personal-agent [--demo]\n\nPERSONAL_AGENT_TOKEN   Required, at least 32 characters; never printed\nPERSONAL_AGENT_DIR     Data directory (default: .personal-agent)\nPERSONAL_AGENT_BIND    Loopback address (default: 127.0.0.1:3000)\nOPENAI_API_KEY        Required unless --demo\nOPENAI_MODEL          Required unless --demo\n\n--demo uses a deterministic local notebook workflow without a model service."
+            "Usage: personal-agent [--demo]\n\nPERSONAL_AGENT_TOKEN   Required, at least 32 characters; never printed\nPERSONAL_AGENT_DIR     Data directory (default: .personal-agent)\nPERSONAL_AGENT_BIND    Loopback address (default: 127.0.0.1:3000)\nOPENAI_API_KEY        Required unless --demo\nOPENAI_MODEL          Required unless --demo\n\n--demo uses a deterministic local notebook workflow without a model service."
         );
         return Ok(());
     }

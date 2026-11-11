@@ -1,5 +1,13 @@
-// The README is the crate documentation, so its examples compile as doctests.
-#![doc = include_str!("../README.md")]
+// The README is the crate documentation, so its examples compile as doctests. They use the
+// default features; a build without them gets a summary in its place.
+#![cfg_attr(
+    all(feature = "sqlite", feature = "openai"),
+    doc = include_str!("../README.md")
+)]
+#![cfg_attr(
+    not(all(feature = "sqlite", feature = "openai")),
+    doc = "A resumable agent engine. Build with the `sqlite` and `openai` features for the full crate documentation."
+)]
 // docs.rs labels each item with the feature that enables it.
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
@@ -54,26 +62,26 @@ pub use types::{
 /// Helpers the crate uses internally stay unreachable from outside it.
 ///
 /// ```compile_fail,E0432
-/// use yielded_agent::now_ms;
+/// use agent_rs::now_ms;
 /// ```
 ///
 /// ```compile_fail,E0432
-/// use yielded_agent::STATE_VERSION;
+/// use agent_rs::STATE_VERSION;
 /// ```
 ///
 /// ```compile_fail,E0432
-/// use yielded_agent::select_context;
+/// use agent_rs::select_context;
 /// ```
 ///
 /// ```compile_fail,E0432
 /// // Answer a wait with `RunState::resolve`.
-/// use yielded_agent::resolve;
+/// use agent_rs::resolve;
 /// ```
 ///
 /// ```compile_fail,E0603
 /// // Modules other than the optional features' are private; their items are exported at the
 /// // root.
-/// use yielded_agent::types::RunState;
+/// use agent_rs::types::RunState;
 /// ```
 #[cfg(doctest)]
 struct PrivateHelpers;

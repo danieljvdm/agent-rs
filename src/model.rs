@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 /// [`ModelRequest::config`]:
 ///
 /// ```
-/// # use yielded_agent::ModelConfig;
+/// # use agent_rs::ModelConfig;
 /// let config = ModelConfig::new("gpt-4.1-mini").with_temperature(0.0);
 /// ```
 ///

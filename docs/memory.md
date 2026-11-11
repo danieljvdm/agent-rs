@@ -9,11 +9,11 @@ This first slice provides deterministic lead-sentence summaries and retrieval ov
 ```rust
 use std::sync::Arc;
 use serde_json::json;
-use yielded_agent::memory::{
+use agent_rs::memory::{
     ExtractiveSummarizer, InMemorySourceStore, MemoryPolicy, SourceStore, SourceTrust,
     Summarizer, index_summary,
 };
-use yielded_agent::{Agent, Conversation, ModelResponse, Result, ScriptedModel};
+use agent_rs::{Agent, Conversation, ModelResponse, Result, ScriptedModel};
 
 # async fn example() -> Result<()> {
 let store = Arc::new(InMemorySourceStore::default());

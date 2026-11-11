@@ -1,11 +1,11 @@
-# Optional deployment targets (YIE-254)
+# Optional deployment targets
 
 The first consumer is the resident Rust personal-workflow service demonstrated by
 `durable_workflow`: accept a request, wait for approval/input/time, and retain the
 obligation when the process moves to another machine. The first implementation
 slice is a PostgreSQL checkpoint store behind the existing bounded resident host.
-SQLite remains the default local store. This does not expand the original YIE-245
-Rust-only MVP into a distributed runtime.
+SQLite remains the default local store. This does not expand the
+Rust-only runtime into a distributed one.
 
 | Target | Consumer and supported behavior | Independent slice |
 | --- | --- | --- |

@@ -1,5 +1,6 @@
 //! Attached subagents: delegation results, budgets, waits, cancellation, and the tool window's
 //! invariants as they apply to child work.
+use agent_rs::*;
 use async_trait::async_trait;
 use futures::stream;
 use serde_json::{Value, json};
@@ -10,7 +11,6 @@ use std::sync::{
 use std::time::Duration;
 use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
-use yielded_agent::*;
 
 fn child_limits() -> Limits {
     Limits::default()
@@ -839,8 +839,8 @@ async fn tools_and_children_share_the_window_and_a_sequential_call_waits_for_bot
 #[cfg(feature = "sqlite")]
 mod durable {
     use super::*;
+    use agent_rs::sqlite::SqliteStore;
     use std::sync::atomic::AtomicBool;
-    use yielded_agent::sqlite::SqliteStore;
 
     fn options() -> HostOptions {
         HostOptions::default()
@@ -1363,7 +1363,7 @@ async fn a_childs_context_policy_is_scoped_to_its_derived_conversation() {
 #[cfg(feature = "memory")]
 #[tokio::test]
 async fn a_childs_memory_policy_reads_its_own_scope_and_not_its_parents() {
-    use yielded_agent::memory::{
+    use agent_rs::memory::{
         ExtractiveSummarizer, InMemorySourceStore, MemoryPolicy, SourceStore, SourceTrust,
         Summarizer, index_summary,
     };

@@ -11,11 +11,11 @@
 //! ```no_run
 //! use tokio::process::Command;
 //! use tokio_util::sync::CancellationToken;
-//! use yielded_agent::mcp::{McpClient, McpOptions, ServerIdentity, ToolPolicy};
-//! use yielded_agent::{Agent, Model, RetryPolicy};
+//! use agent_rs::mcp::{McpClient, McpOptions, ServerIdentity, ToolPolicy};
+//! use agent_rs::{Agent, Model, RetryPolicy};
 //! # use std::sync::Arc;
 //!
-//! # async fn example(model: Arc<dyn Model>) -> yielded_agent::Result<()> {
+//! # async fn example(model: Arc<dyn Model>) -> agent_rs::Result<()> {
 //! let mut command = Command::new("node");
 //! command.arg("/opt/mcp/server-filesystem/dist/index.js").arg("/data/workspace");
 //! let client = McpClient::connect(

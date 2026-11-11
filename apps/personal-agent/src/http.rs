@@ -1,4 +1,5 @@
 use crate::{Application, PageRequest, ResolveRequest, Submission};
+use agent_rs::{Error, Result};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Query, Request, State, rejection::JsonRejection},
@@ -12,7 +13,6 @@ use serde_json::json;
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
-use yielded_agent::{Error, Result};
 
 /// One local owner's bearer credential. Never serialized, logged, or persisted.
 #[derive(Clone)]

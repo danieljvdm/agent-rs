@@ -1,12 +1,12 @@
 //! The `memory` feature: summaries, retrieval, the source-store contract, and `MemoryPolicy`
 //! enforcing the limits the engine leaves to policies.
 #![cfg(feature = "memory")]
+use agent_rs::memory::*;
+use agent_rs::*;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
-use yielded_agent::memory::*;
-use yielded_agent::*;
 
 fn source(id: &str, text: &str, trust: SourceTrust) -> MemorySource {
     MemorySource {
@@ -179,7 +179,7 @@ async fn in_process_store_invalidates_edits_deletions_trust_changes_and_stale_wr
 #[tokio::test]
 async fn sqlite_store_enforces_the_same_atomic_source_contract() {
     let dir = tempfile::tempdir().unwrap();
-    let store = yielded_agent::sqlite::SqliteStore::open(dir.path().join("memory.sqlite"))
+    let store = agent_rs::sqlite::SqliteStore::open(dir.path().join("memory.sqlite"))
         .await
         .unwrap();
     store_contract(&store).await;
@@ -743,7 +743,7 @@ fn policy_configuration_is_checked_and_bound() {
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn sqlite_memory_reopens_and_refuses_unknown_storage_versions() {
-    use yielded_agent::sqlite::SqliteStore;
+    use agent_rs::sqlite::SqliteStore;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("memory.sqlite");
     let store = SqliteStore::open(&path).await.unwrap();
@@ -791,7 +791,7 @@ async fn sqlite_memory_reopens_and_refuses_unknown_storage_versions() {
 #[cfg(feature = "sqlite")]
 #[tokio::test]
 async fn sqlite_memory_tables_are_created_on_first_use_only() {
-    use yielded_agent::sqlite::SqliteStore;
+    use agent_rs::sqlite::SqliteStore;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("memory.sqlite");
     let tables = || {

@@ -474,7 +474,7 @@ impl GoogleCalendar {
     /// checked as `create_reminder` checks its receipt. Fails with [`Error::Tool`] rather than
     /// returning a partial or unchecked list.
     pub async fn reminders(&self, cancel: &CancellationToken) -> Result<Vec<ReminderReceipt>> {
-        let filter = format!("yieldedScope={}", self.scope_id);
+        let filter = format!("agentRsScope={}", self.scope_id);
         let events = self
             .list(
                 &self.scope.reminder_calendar_id,
@@ -486,10 +486,10 @@ impl GoogleCalendar {
         let mut receipts = Vec::new();
         for event in events {
             let private = &event["extendedProperties"]["private"];
-            let key = field(private, "yieldedKey")?;
+            let key = field(private, "agentRsKey")?;
             let args = CreateReminderArgs {
                 title: field(&event, "summary")?.into(),
-                at: field(private, "yieldedAt")?.into(),
+                at: field(private, "agentRsAt")?.into(),
             };
             receipts.push(self.match_receipt(&event, &args, key)?);
         }
@@ -522,8 +522,8 @@ impl GoogleCalendar {
             "visibility": "private", "transparency": "transparent",
             "reminders": {"useDefault": false, "overrides": [{"method": "popup", "minutes": 0}]},
             "extendedProperties": {"private": {
-                "yieldedScope": self.scope_id, "yieldedContract": CONTRACT,
-                "yieldedKey": key, "yieldedAt": args.at
+                "agentRsScope": self.scope_id, "agentRsContract": CONTRACT,
+                "agentRsKey": key, "agentRsAt": args.at
             }}
         }))
     }

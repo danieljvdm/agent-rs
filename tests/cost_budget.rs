@@ -147,12 +147,12 @@ const HEADROOM_PERCENT: u64 = 2;
 
 // ---------------------------------------------------------------------------------------------
 
+use agent_rs::*;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
-use yielded_agent::*;
 
 #[derive(Clone, Copy, Debug)]
 struct Budget {
@@ -658,7 +658,7 @@ mod openai_wire;
 mod openai {
     use super::*;
     use crate::openai_wire::Api as Wire;
-    use yielded_agent::openai::cost_probe::{self, Api};
+    use agent_rs::openai::cost_probe::{self, Api};
 
     const ANSWER_BYTES: usize = 1024;
 
@@ -822,8 +822,8 @@ async fn sliding_window_starts_the_next_call_when_a_slot_frees() {
 #[cfg(feature = "sqlite")]
 mod sqlite {
     use super::*;
+    use agent_rs::sqlite::SqliteStore;
     use std::path::Path;
-    use yielded_agent::sqlite::SqliteStore;
 
     const CONVERSATION: &str = "conversation";
     const SEED_BYTES: usize = 32 * 1024;
@@ -1246,8 +1246,8 @@ async fn steering_allocation_budget() {
 #[cfg(feature = "sqlite")]
 mod steering {
     use super::*;
+    use agent_rs::sqlite::SqliteStore;
     use std::sync::OnceLock;
-    use yielded_agent::sqlite::SqliteStore;
 
     /// 64 bytes, so the per-instruction budget is per a fixed size.
     const INSTRUCTION: &str = "Use metric units for every measurement in the answer, please. OK";
@@ -1400,8 +1400,8 @@ mod steering {
 #[cfg(feature = "memory")]
 mod memory {
     use super::*;
+    use agent_rs::memory::*;
     use tokio_util::sync::CancellationToken;
-    use yielded_agent::memory::*;
 
     // ------------------------------------------------------------------------------------------
     // Budget table: today's measured values.
@@ -1524,7 +1524,7 @@ mod memory {
     #[cfg(feature = "sqlite")]
     #[tokio::test]
     async fn sqlite_transactions_per_memory_call() {
-        use yielded_agent::sqlite::SqliteStore;
+        use agent_rs::sqlite::SqliteStore;
         let directory = tempfile::tempdir().unwrap();
         let store = SqliteStore::open(directory.path().join("memory.sqlite"))
             .await
@@ -1579,10 +1579,10 @@ mod memory {
 #[cfg(feature = "mcp")]
 mod mcp {
     use super::*;
+    use agent_rs::mcp::{McpClient, McpOptions, McpTool, ServerIdentity, ToolPolicy};
     use std::path::Path;
     use tokio::process::Command;
     use tokio_util::sync::CancellationToken;
-    use yielded_agent::mcp::{McpClient, McpOptions, McpTool, ServerIdentity, ToolPolicy};
 
     // ------------------------------------------------------------------------------------------
     // Budget table: today's measured values.

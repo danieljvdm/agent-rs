@@ -1,9 +1,9 @@
 //! The automation contract, asserted identically against every `AutomationStore`. Firing times
 //! are explicit, so no test waits for a real interval.
+use agent_rs::*;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
-use yielded_agent::*;
 
 #[cfg(feature = "sqlite")]
 #[path = "../examples/support/recurring_workflow.rs"]

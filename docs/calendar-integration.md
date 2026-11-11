@@ -1,11 +1,11 @@
 # Calendar-to-reminder integration
 
-Enable the `google-calendar` feature for `yielded_agent::google_calendar`, an adapter module
+Enable the `google-calendar` feature for `agent_rs::google_calendar`, an adapter module
 beside `sqlite` and `openai`. It is off by default. It adds two typed tools owned by the
 application: `read_calendar` reads the timed meetings of one day from Google Calendar, and
 `create_reminder` creates a private, transparent one-minute event with a popup at the requested
 time. This is a Calendar reminder, not a Google Tasks item. Email and other task services are
-later YIE-246 slices, to be chosen from actual usage. The adapter uses only the engine's
+later work, to be chosen from actual usage. The adapter uses only the engine's
 extension points (`Tool`, `Authorizer`, `Resolution::Reconcile`); with the feature unused,
 nothing in the engine, the stores or the default build changes.
 
@@ -19,8 +19,8 @@ become meeting inputs.
 
 ```rust,ignore
 use std::sync::Arc;
-use yielded_agent::{Agent, Resolution};
-use yielded_agent::google_calendar::{CalendarScope, GoogleCalendar};
+use agent_rs::{Agent, Resolution};
+use agent_rs::google_calendar::{CalendarScope, GoogleCalendar};
 
 let calendar = GoogleCalendar::new(
     access_token,

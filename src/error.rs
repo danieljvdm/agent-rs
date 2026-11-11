@@ -40,7 +40,7 @@ type Cause = Box<dyn StdError + Send + Sync>;
 /// or any error, which it keeps as the cause:
 ///
 /// ```
-/// # use yielded_agent::Error;
+/// # use agent_rs::Error;
 /// let read = std::fs::read("checkpoint.json").map_err(Error::storage);
 /// let exhausted = Error::provider("script exhausted");
 /// ```

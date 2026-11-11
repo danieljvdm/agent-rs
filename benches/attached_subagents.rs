@@ -2,13 +2,13 @@
 //! through a resident SQLite host. Scripts and children are deterministic, and every iteration
 //! verifies the typed result, each child's settlement and the exact work counts, so skipping
 //! work fails the benchmark. See `docs/benchmarks.md`.
+use agent_rs::{sqlite::SqliteStore, *};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use serde_json::{Value, json};
 use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use yielded_agent::{sqlite::SqliteStore, *};
 
 fn configured() -> Criterion {
     let quick = std::env::var_os("AGENT_BENCH_QUICK").is_some();

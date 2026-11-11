@@ -5,7 +5,7 @@ and the engine-only build are unchanged.
 
 ```toml
 [dependencies]
-yielded-agent = { path = "../agent-rs", default-features = false, features = ["postgres"] }
+agent-rs = { path = "../agent-rs", default-features = false, features = ["postgres"] }
 ```
 
 The first consumer is the Rust personal-workflow service: durable acceptance and
@@ -15,7 +15,7 @@ it unchanged. The application supplies its connection settings and TLS connector
 
 ```rust,ignore
 use std::sync::Arc;
-use yielded_agent::{Host, HostOptions, postgres::{PostgresOptions, PostgresStore}};
+use agent_rs::{Host, HostOptions, postgres::{PostgresOptions, PostgresStore}};
 
 // `config`: an explicit tokio_postgres::Config; `tls`: the application's verified connector.
 // The schema belongs to this adapter and is created on first connect.
@@ -168,7 +168,7 @@ scripts/test-postgres.sh
 This creates a temporary database on a private Unix socket and removes it on exit. It runs the
 shared durability contract (`tests/storage_conformance.rs`) against every store, the
 PostgreSQL-only tests (`tests/postgres.rs`), and the PostgreSQL workflow example.
-Alternatively set `YIELDED_TEST_POSTGRES_URL` to an **isolated scratch database**; each test
+Alternatively set `AGENT_RS_TEST_POSTGRES_URL` to an **isolated scratch database**; each test
 and example creates its own schema and leaves it for inspection. Never point the tests at
 personal or production data.
 

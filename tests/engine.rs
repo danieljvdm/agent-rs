@@ -1,3 +1,4 @@
+use agent_rs::*;
 use async_trait::async_trait;
 use futures::stream;
 use serde_json::{Value, json};
@@ -7,7 +8,6 @@ use std::sync::{
 };
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-use yielded_agent::*;
 
 fn spec(name: &str) -> ToolSpec {
     ToolSpec::new(name, "1")
