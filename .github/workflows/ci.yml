@@ -24,3 +24,7 @@ jobs:
       - run: cargo bench --bench attached_subagents --locked -- --test
       - run: cargo bench --features mcp --bench mcp --locked -- --test
       - run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py
+      # The personal-agent application, a workspace member the root-package steps above skip.
+      - run: cargo fmt -p yielded-personal-agent --check
+      - run: cargo clippy -p yielded-personal-agent --all-targets --locked -- -D warnings
+      - run: cargo test -p yielded-personal-agent --locked

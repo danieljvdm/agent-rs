@@ -1,0 +1,28 @@
+[package]
+name = "yielded-personal-agent"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+publish = false
+description = "A local personal-agent application with a durable decision inbox"
+license = "MIT"
+
+[dependencies]
+yielded-agent = { path = "../.." }
+async-trait = "0.1.92"
+axum = "0.8.8"
+futures = "0.3.32"
+rusqlite = { version = "0.37", features = ["bundled"] }
+schemars = "1.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0"
+subtle = "2.6"
+# The library leaves the runtime to its dependents; this server runs on a multi-threaded one.
+tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal"] }
+tokio-util = "0.7"
+uuid = { version = "1.20", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+# Drives the router in-process, so the HTTP tests need no socket.
+tower = { version = "0.5", features = ["util"] }

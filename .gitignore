@@ -6,3 +6,6 @@
 # Generated benchmark and eval output; see docs/benchmark-results.md for recorded conclusions.
 /benchmark-results/
 /eval-results/
+# Personal-agent application data and browser-smoke sessions.
+/.personal-agent/
+/.playwright-cli/
