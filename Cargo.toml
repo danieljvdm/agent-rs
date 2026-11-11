@@ -38,3 +38,7 @@ required-features = ["sqlite"]
 [[bench]]
 name = "agent_loop"
 harness = false
+[[bench]]
+name = "model_adapters"
+harness = false
+required-features = ["openai"]

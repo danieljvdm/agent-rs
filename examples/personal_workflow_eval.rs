@@ -8,6 +8,7 @@ mod personal_workflow;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use personal_workflow::*;
     let mut mode = Mode::Scripted;
+    let mut api = ProviderApi::ChatCompletions;
     let mut model = DEFAULT_MODEL.to_owned();
     let mut trials = 1;
     let mut output = None;
@@ -21,6 +22,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     _ => return Err("mode must be scripted or live".into()),
                 }
             }
+            "--api" => {
+                api = match args.next().as_deref() {
+                    Some("chat-completions") => ProviderApi::ChatCompletions,
+                    Some("responses") => ProviderApi::Responses,
+                    _ => return Err("api must be chat-completions or responses".into()),
+                }
+            }
             "--model" => model = args.next().ok_or("missing model")?,
             "--trials" => trials = args.next().ok_or("missing trial count")?.parse()?,
             "--out" => {
@@ -30,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--help" => {
                 println!(
-                    "personal_workflow_eval --mode scripted|live --model {DEFAULT_MODEL} --trials 1 --out NEW_DIRECTORY"
+                    "personal_workflow_eval --mode scripted|live --api chat-completions|responses --model {DEFAULT_MODEL} --trials 1 --out NEW_DIRECTORY"
                 );
                 return Ok(());
             }
@@ -39,6 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let report = run_suite(SuiteOptions {
         mode,
+        api,
         model,
         trials,
         output: output.ok_or("--out NEW_DIRECTORY is required")?,

@@ -12,6 +12,7 @@ async fn personal_agent_reads_asks_restarts_and_obeys_approval() {
             1,
             &directory.path().join(&scenario.name),
             Mode::Scripted,
+            ProviderApi::ChatCompletions,
             DEFAULT_MODEL,
             None,
         )
@@ -37,6 +38,7 @@ async fn workflow_grader_rejects_wrong_schedules_and_invented_success() {
             1,
             &directory.path().join(name),
             Mode::Scripted,
+            ProviderApi::ChatCompletions,
             DEFAULT_MODEL,
             Some(fault),
         )
@@ -60,6 +62,7 @@ async fn workflow_grader_rejects_a_failed_calendar_read_even_when_the_guess_is_c
         1,
         &directory.path().join("failed_read_guess"),
         Mode::Scripted,
+        ProviderApi::ChatCompletions,
         DEFAULT_MODEL,
         Some(ScriptedFault::FailedReadGuess),
     )

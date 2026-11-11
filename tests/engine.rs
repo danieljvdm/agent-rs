@@ -665,6 +665,220 @@ async fn model_cleanup_failure_preserves_received_evidence_and_tokens() {
 }
 
 #[tokio::test]
+async fn usage_snapshots_survive_invalid_streams_and_are_not_double_charged() {
+    let usage = || ModelEvent::Usage(TokenUsage::new(9, 4));
+    let response = || {
+        ModelEvent::Response(
+            ModelResponse::final_output(json!("done")).with_usage(TokenUsage::new(9, 4)),
+        )
+    };
+    for (events, completed) in [
+        // The response repeats the snapshot's totals.
+        (vec![usage(), usage(), response()], true),
+        (
+            vec![ModelEvent::Usage(TokenUsage::new(3, 0)), response()],
+            true,
+        ),
+        // A stream that ends without a response, or sends data after it.
+        (vec![usage()], false),
+        (
+            vec![response(), ModelEvent::TextDelta("trailing".into())],
+            false,
+        ),
+        // A decreasing snapshot fails the turn, keeping the highest counts.
+        (
+            vec![usage(), ModelEvent::Usage(TokenUsage::new(8, 3))],
+            false,
+        ),
+        (
+            vec![
+                ModelEvent::Usage(TokenUsage::new(9, 5)),
+                ModelEvent::Response(
+                    ModelResponse::final_output(json!("done")).with_usage(TokenUsage::new(9, 4)),
+                ),
+            ],
+            false,
+        ),
+    ] {
+        let decreased = matches!(&events[0], ModelEvent::Usage(u) if u.output == 5);
+        let agent = agent(
+            Arc::new(ScriptedModel::with_events(vec![events])),
+            vec![],
+            Limits::default(),
+        );
+        let mut state = state(&agent);
+        agent
+            .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+            .await
+            .unwrap();
+        let expected = if decreased { (9, 5) } else { (9, 4) };
+        assert_eq!(
+            (state.usage.input_tokens, state.usage.output_tokens),
+            expected
+        );
+        assert_eq!(
+            matches!(state.phase, Phase::Settled(Settlement::Completed(_))),
+            completed,
+            "{:?}",
+            state.phase
+        );
+    }
+}
+
+/// Reports usage, then ends the attempt as `end` says.
+struct UsageThen {
+    end: UsageEnd,
+    trigger: CancellationToken,
+    requests: Mutex<Vec<(u32, u64)>>,
+    cleanups: AtomicUsize,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum UsageEnd {
+    /// Fires `trigger` (shutdown or cancellation), then never finishes.
+    Trigger,
+    /// Never finishes, so the operation times out.
+    Hang,
+    /// Completes, then its cleanup fails.
+    CleanupFails,
+}
+impl UsageThen {
+    fn new(end: UsageEnd) -> Arc<Self> {
+        Arc::new(Self {
+            end,
+            trigger: CancellationToken::new(),
+            requests: Mutex::new(vec![]),
+            cleanups: AtomicUsize::new(0),
+        })
+    }
+}
+#[async_trait]
+impl Model for UsageThen {
+    async fn stream(&self, request: ModelRequest, _: CancellationToken) -> Result<ModelStream> {
+        use futures::StreamExt;
+        self.requests
+            .lock()
+            .unwrap()
+            .push((request.turn, request.remaining_tokens));
+        if request.turn > 1 {
+            return Ok(Box::pin(stream::iter([Ok(ModelEvent::Response(
+                ModelResponse::final_output(json!("done")).with_usage(TokenUsage::new(2, 3)),
+            ))])));
+        }
+        let usage = stream::iter([Ok(ModelEvent::Usage(TokenUsage::new(9, 4)))]);
+        Ok(match self.end {
+            UsageEnd::Trigger => {
+                let trigger = self.trigger.clone();
+                Box::pin(usage.chain(stream::once(async move {
+                    trigger.cancel();
+                    std::future::pending().await
+                })))
+            }
+            UsageEnd::Hang => Box::pin(usage.chain(stream::pending())),
+            UsageEnd::CleanupFails => {
+                Box::pin(usage.chain(stream::iter([Ok(ModelEvent::Response(
+                    ModelResponse::final_output(json!("done")).with_usage(TokenUsage::new(9, 4)),
+                ))])))
+            }
+        })
+    }
+    async fn cleanup(&self, _: RunId) -> Result<()> {
+        self.cleanups.fetch_add(1, Ordering::SeqCst);
+        if self.end == UsageEnd::CleanupFails {
+            return Err(Error::provider("cleanup failed"));
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn reported_usage_survives_interruption_recovery_and_caps_the_next_attempt() {
+    let model = UsageThen::new(UsageEnd::Trigger);
+    let agent = agent(
+        model.clone(),
+        vec![],
+        Limits::default()
+            .with_max_model_calls(2)
+            .with_max_tokens(100),
+    );
+    let mut state = state(&agent);
+    let control = RunControl::default().with_shutdown(model.trigger.clone());
+    assert!(matches!(
+        agent.drive(&mut state, &MemoryCheckpoint, control).await,
+        Err(Error::Interrupted)
+    ));
+    assert_eq!(state.phase, Phase::Ready);
+    assert_eq!(
+        (
+            state.usage.model_calls,
+            state.usage.input_tokens,
+            state.usage.output_tokens
+        ),
+        (1, 9, 4)
+    );
+    // The interruption checkpoint carries the charge through recovery.
+    let mut restored: RunState =
+        serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    agent
+        .drive(&mut restored, &MemoryCheckpoint, RunControl::default())
+        .await
+        .unwrap();
+    assert!(matches!(
+        restored.phase,
+        Phase::Settled(Settlement::Completed(_))
+    ));
+    assert_eq!(
+        (
+            restored.usage.model_calls,
+            restored.usage.input_tokens,
+            restored.usage.output_tokens
+        ),
+        (2, 11, 7)
+    );
+    assert_eq!(*model.requests.lock().unwrap(), [(1, 100), (2, 87)]);
+    assert_eq!(model.cleanups.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn reported_usage_survives_cancellation_timeout_and_cleanup_failure() {
+    for end in [UsageEnd::Trigger, UsageEnd::Hang, UsageEnd::CleanupFails] {
+        let model = UsageThen::new(end);
+        let agent = agent(
+            model.clone(),
+            vec![],
+            Limits::default().with_operation_timeout(Duration::from_millis(20)),
+        );
+        let mut state = state(&agent);
+        let control = RunControl::default().with_cancel(model.trigger.clone());
+        agent
+            .drive(&mut state, &MemoryCheckpoint, control)
+            .await
+            .unwrap();
+        match end {
+            UsageEnd::Trigger => assert_eq!(state.phase, Phase::Settled(Settlement::Cancelled)),
+            UsageEnd::Hang => assert!(
+                matches!(&state.phase, Phase::Settled(Settlement::Failed(reason)) if reason.contains("timed out")),
+                "{:?}",
+                state.phase
+            ),
+            UsageEnd::CleanupFails => {
+                assert!(
+                    matches!(&state.phase, Phase::Settled(Settlement::Failed(reason)) if reason.contains("cleanup failed")),
+                    "{:?}",
+                    state.phase
+                );
+                assert!(state.pending_response.is_some());
+            }
+        }
+        assert_eq!(
+            (state.usage.input_tokens, state.usage.output_tokens),
+            (9, 4),
+            "{end:?}"
+        );
+        assert_eq!(model.cleanups.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
 async fn convenience_api_retains_wait_and_can_resume_without_duplicate_history() {
     let tool = typed_tool::<u32, Value, _, _>(spec("question"), |_, _| async {
         Ok(ToolOutput::Wait(WaitRequest::Input {

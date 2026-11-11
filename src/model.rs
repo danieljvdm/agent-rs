@@ -109,6 +109,14 @@ pub enum ModelEvent {
     /// Text streamed as it arrives, passed on as [`ProgressKind::TextDelta`](crate::ProgressKind)
     /// and never retained.
     TextDelta(String),
+    /// Cumulative tokens this attempt has consumed so far, as the provider reports them.
+    ///
+    /// Snapshots must not decrease, and [`ModelResponse::usage`] repeats the final totals rather
+    /// than adding to them. The engine charges the highest snapshot even when the turn is then
+    /// rejected, interrupted, timed out or its cleanup fails, so a provider that reports usage
+    /// before its output is complete should emit it. Tokens a provider never reports cannot be
+    /// charged.
+    Usage(crate::TokenUsage),
     /// The turn's complete response, which must be the stream's last event.
     Response(ModelResponse),
 }
@@ -116,16 +124,29 @@ pub enum ModelEvent {
 pub type ModelStream = Pin<Box<dyn Stream<Item = Result<ModelEvent>> + Send>>;
 /// A model provider.
 ///
-/// Implementations must bound transport buffers and release run-owned work in cleanup.
+/// Implementations must bound transport buffers and release run-owned work in cleanup. One call
+/// of [`stream`](Self::stream) is one attempt that the engine reserves and charges: do not retry
+/// or fall back to another provider inside it.
 ///
 /// Report failures with [`Error::provider`], which keeps the underlying error as its cause. The
 /// engine reports any other kind of error from `stream`, its events or `cleanup` as
 /// [`Error::Provider`] with the original as its cause, and it fails the run.
 #[async_trait]
 pub trait Model: Send + Sync {
-    /// Starts one turn. The stream may yield text deltas, then must yield exactly one
-    /// [`ModelEvent::Response`] and end; anything after the response, a stream that ends without
-    /// one, or one that exceeds [`ModelRequest::max_response_bytes`] fails the run. The whole
+    /// A stable, non-secret identity of the adapter and the route it calls, such as its API and
+    /// endpoint, made part of the agent's [`binding`](crate::Agent::binding) when the agent is
+    /// built. A stored run then resumes only through the same route, while rotating a credential
+    /// keeps it compatible. It must not change for the life of the model; build a new agent to
+    /// change the route. A wrapper must return its inner model's binding or one that includes it.
+    ///
+    /// The default, `null`, contributes nothing: the application must then change the agent's ID
+    /// whenever the model's implementation or route changes.
+    fn binding(&self) -> Value {
+        Value::Null
+    }
+    /// Starts one turn. The stream may yield text deltas and usage snapshots, then must yield
+    /// exactly one [`ModelEvent::Response`] and end; anything after the response, a stream that
+    /// ends without one, a decreasing usage snapshot, or one that exceeds [`ModelRequest::max_response_bytes`] fails the run. The whole
     /// turn runs within [`Limits::operation_timeout_ms`], and `cancel` fires when it ends,
     /// however it ended, for work handed to other tasks.
     async fn stream(&self, request: ModelRequest, cancel: CancellationToken)

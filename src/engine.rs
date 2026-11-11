@@ -330,6 +330,10 @@ impl Definition {
         if let Some((policy, max_bytes)) = &self.context_policy {
             binding["context_policy"] = json!({"binding":policy.binding(),"max_bytes":max_bytes});
         }
+        let adapter = self.model.binding();
+        if !adapter.is_null() {
+            binding["model_adapter"] = adapter;
+        }
         binding
     }
     /// The tool an operation recorded, provided this definition has it under the same contract.
@@ -698,6 +702,8 @@ impl Definition {
         commit(checkpoint, state, control).await?;
         let started = Instant::now();
         let operation_cancel = CancellationToken::new();
+        // The attempt's reported usage, outside the operation so it is charged however that ends.
+        let mut usage = crate::TokenUsage::default();
         let outcome = {
             let future = async {
                 // Assemble context after the dispatch checkpoint and inside the operation's
@@ -740,6 +746,7 @@ impl Definition {
                         ));
                     }
                     match event.map_err(provider_error)? {
+                        ModelEvent::Usage(reported) => record_usage(&mut usage, &reported)?,
                         ModelEvent::TextDelta(text) => {
                             bytes = bytes.saturating_add(text.len());
                             if bytes > state.limits.max_response_bytes {
@@ -748,6 +755,7 @@ impl Definition {
                             emit(state, control, ProgressKind::TextDelta(text));
                         }
                         ModelEvent::Response(value) => {
+                            record_usage(&mut usage, &value.usage)?;
                             if encoded_len(&value) > state.limits.max_response_bytes {
                                 return Err(Error::provider("response exceeds byte limit"));
                             }
@@ -776,6 +784,10 @@ impl Definition {
         .await;
         refund(state, reservation, started.elapsed());
         state.phase = Phase::Ready;
+        // Reported tokens are charged even when the turn is then rejected, interrupted, timed out
+        // or its cleanup fails. The response repeats the totals; it is not a second charge.
+        state.usage.input_tokens = state.usage.input_tokens.saturating_add(usage.input);
+        state.usage.output_tokens = state.usage.output_tokens.saturating_add(usage.output);
         let response_result = match outcome {
             WorkOutcome::Done(result) => result,
             WorkOutcome::Interrupted => {
@@ -785,14 +797,6 @@ impl Definition {
             WorkOutcome::TimedOut => Err(Error::provider("model operation timed out")),
         };
         if let Ok(response) = &response_result {
-            state.usage.input_tokens = state
-                .usage
-                .input_tokens
-                .saturating_add(response.usage.input);
-            state.usage.output_tokens = state
-                .usage
-                .output_tokens
-                .saturating_add(response.usage.output);
             // Retain the complete response even when cleanup or validation rejects it.
             state.pending_response = Some(response.clone());
         }
@@ -1504,6 +1508,17 @@ fn truncate(value: &str, max: usize) -> String {
         end -= 1;
     }
     value[..end].to_owned()
+}
+/// Raises an attempt's usage to a cumulative snapshot. A decrease fails the turn after keeping
+/// the higher of each count, so nothing already reported goes uncharged.
+fn record_usage(usage: &mut crate::TokenUsage, reported: &crate::TokenUsage) -> Result<()> {
+    let decreased = reported.input < usage.input || reported.output < usage.output;
+    usage.input = usage.input.max(reported.input);
+    usage.output = usage.output.max(reported.output);
+    if decreased {
+        return Err(Error::provider("model usage snapshot decreased"));
+    }
+    Ok(())
 }
 /// A model's error, as the provider failure it is to the run, keeping it as the cause. One that
 /// already is a provider failure is kept as it is.

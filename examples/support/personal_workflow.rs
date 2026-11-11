@@ -39,6 +39,13 @@ pub enum Mode {
     Scripted,
     Live,
 }
+/// Application-owned routing: selecting an API never substitutes a model name.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderApi {
+    ChatCompletions,
+    Responses,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Scenario {
     pub name: String,
@@ -179,6 +186,7 @@ pub struct AttemptReport {
 pub struct SuiteReport {
     pub fixture: String,
     pub mode: Mode,
+    pub api: Option<ProviderApi>,
     pub model: String,
     pub git_revision: Option<String>,
     pub source_blob: Option<String>,
@@ -189,6 +197,7 @@ pub struct SuiteReport {
 }
 pub struct SuiteOptions {
     pub mode: Mode,
+    pub api: ProviderApi,
     pub model: String,
     pub trials: usize,
     pub output: PathBuf,
@@ -507,6 +516,9 @@ struct ObservedModel {
 }
 #[async_trait]
 impl Model for ObservedModel {
+    fn binding(&self) -> Value {
+        self.inner.binding()
+    }
     async fn stream(
         &self,
         request: ModelRequest,
@@ -908,6 +920,7 @@ pub async fn run_case(
     trial: usize,
     directory: &Path,
     mode: Mode,
+    api: ProviderApi,
     model_name: &str,
     fault: Option<ScriptedFault>,
 ) -> Result<AttemptReport> {
@@ -920,14 +933,20 @@ pub async fn run_case(
         Mode::Live => {
             #[cfg(feature = "openai")]
             {
-                Arc::new(yielded_agent::openai::OpenAiModel::new(
-                    std::env::var("OPENAI_API_KEY").map_err(|_| {
-                        Error::config("OPENAI_API_KEY is required for live evaluation")
-                    })?,
-                )?)
+                let key = std::env::var("OPENAI_API_KEY")
+                    .map_err(|_| Error::config("OPENAI_API_KEY is required for live evaluation"))?;
+                match api {
+                    ProviderApi::ChatCompletions => {
+                        Arc::new(yielded_agent::openai::OpenAiModel::new(key)?)
+                    }
+                    ProviderApi::Responses => {
+                        Arc::new(yielded_agent::openai::OpenAiResponsesModel::new(key)?)
+                    }
+                }
             }
             #[cfg(not(feature = "openai"))]
             {
+                let _ = api;
                 return Err(Error::config("live evaluation requires the openai feature"));
             }
         }
@@ -1056,6 +1075,7 @@ pub async fn run_suite(options: SuiteOptions) -> Result<SuiteReport> {
     let mut report = SuiteReport {
         fixture: FIXTURE_VERSION.into(),
         mode: options.mode,
+        api: (options.mode == Mode::Live).then_some(options.api),
         model: if options.mode == Mode::Live {
             options.model.clone()
         } else {
@@ -1079,6 +1099,7 @@ pub async fn run_suite(options: SuiteOptions) -> Result<SuiteReport> {
                 trial,
                 &path,
                 options.mode,
+                options.api,
                 &options.model,
                 None,
             )
