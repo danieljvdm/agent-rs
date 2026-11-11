@@ -49,8 +49,9 @@ const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(430, 52_026);
 /// `Agent::drive` of a final response streamed as 64 text deltas of 16 bytes, observed through
 /// an attached progress channel that a receiver drains concurrently. Includes the scripted
 /// model's copy of each delta, so the engine itself must add no allocation per delta. Bytes
-/// include the channel's two 32-slot blocks of 40-byte `ProgressEvent`s, a per-channel cost.
-const ALLOC_STREAM_64_DELTAS_OBSERVED: Budget = Budget::new(97, 10_850);
+/// include the channel's two 32-slot blocks of 64-byte `ProgressEvent`s, a per-channel cost;
+/// naming a child's parent (`parent_run_id`) took the event from 40 bytes to 64.
+const ALLOC_STREAM_64_DELTAS_OBSERVED: Budget = Budget::new(97, 12_386);
 /// `Agent::run` of a final-only response for an agent with typed input and output, in an empty
 /// conversation: includes validating the input and the output against their types.
 const ALLOC_RUN_TYPED_EMPTY_CONVERSATION: Budget = Budget::new(57, 7_926);

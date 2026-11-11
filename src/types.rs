@@ -679,14 +679,16 @@ pub enum Resolution {
 /// A transient, best-effort progress notification attributed to the run that produced it.
 ///
 /// Every event names its run, so one channel can carry events from many concurrent runs, as a
-/// `Host` does. Events are never persisted and a full channel drops them; durable status and
-/// history remain authoritative. Fields may be added (for example, linkage to a parent run),
-/// so match with `..`.
+/// `Host` does, and a child's events also name its parent. Events are never persisted and a full
+/// channel drops them; durable status and history remain authoritative. Fields may be added, so
+/// match with `..`.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ProgressEvent {
     /// The run that produced the event.
     pub run_id: RunId,
+    /// For an event of a child run, the parent run that owns the child; `None` for a run's own.
+    pub parent_run_id: Option<RunId>,
     /// What happened.
     pub kind: ProgressKind,
 }

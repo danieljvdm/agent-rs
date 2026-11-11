@@ -1678,6 +1678,7 @@ fn emit(state: &RunState, control: &RunControl, kind: ProgressKind) {
     if let Some(sender) = &control.events {
         let _ = sender.try_send(ProgressEvent {
             run_id: state.id,
+            parent_run_id: None,
             kind,
         });
     }
