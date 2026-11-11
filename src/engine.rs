@@ -1,4 +1,5 @@
 use crate::context::{assemble, encoded_len, suffix_start};
+use crate::steering::Boundary;
 use crate::types::{STATE_VERSION, now_ms};
 use crate::{
     AllowAll, Authorizer, ContextPolicy, Error, ErrorDetail, Execution, HistoryEntry, Limits,
@@ -520,6 +521,24 @@ where
 /// run with [`Error::Incompatible`], and any other failure with [`Error::Storage`]. The engine
 /// reports any other kind of error as `Storage`, with the original as its cause, so a failed
 /// commit never fails the run: see [`Error::fails_run`].
+///
+/// # What a commit may change
+///
+/// A successful commit advances `state.revision` and changes nothing else in the caller's state,
+/// with two exceptions. Only a [`SteeringStore`](crate::SteeringStore) makes them, only while the
+/// run has queued instructions, and each is part of the same atomic, fenced write:
+///
+/// - **Dispatch.** A commit of a state in [`Phase::ModelInFlight`], which is the commit of a model
+///   call's intent, appends every queued instruction to `state.history` as a
+///   [`HistoryEntry::Steering`], in acceptance order, and persists them as applied. The engine
+///   assembles the turn's context after this commit, so the model request includes them.
+/// - **Completion.** A commit of [`Settlement::Completed`] persists [`Phase::Ready`] instead and
+///   sets `state.phase` to `Ready`: the completed exchange stays in history, and the run goes on
+///   to another model turn, which applies the instructions. Other settlements are final, and
+///   instructions still queued then are never applied.
+///
+/// The engine checks every commit against this list and reports any other change as
+/// [`Error::Storage`].
 #[async_trait]
 pub trait Checkpoint: Send + Sync {
     /// Persists `state` as the run's new checkpoint and advances `state.revision`.
@@ -1609,6 +1628,8 @@ async fn commit(
     state: &mut RunState,
     control: &RunControl,
 ) -> Result<()> {
+    let (phase, history_len) = (std::mem::discriminant(&state.phase), state.history.len());
+    let steering = Boundary::of(state);
     checkpoint
         .commit(state)
         .await
@@ -1617,6 +1638,29 @@ async fn commit(
             // Whatever else a checkpoint reports, the commit failed and the run is unchanged.
             error => Error::storage(error),
         })?;
+    // The one place the engine takes in what a commit changed, as `Checkpoint` lists it. Appended
+    // steering needs nothing more: context is assembled after the dispatch commit. A reopened
+    // settlement is handled by `settle`, which returns into the drive loop.
+    let allowed = match steering {
+        _ if state.history.len() < history_len => false,
+        Boundary::Apply => {
+            std::mem::discriminant(&state.phase) == phase
+                && state.history[history_len..]
+                    .iter()
+                    .all(|entry| matches!(entry, HistoryEntry::Steering { .. }))
+        }
+        Boundary::Reopen if matches!(state.phase, Phase::Ready) => {
+            state.history.len() == history_len
+        }
+        Boundary::Reopen | Boundary::None => {
+            std::mem::discriminant(&state.phase) == phase && state.history.len() == history_len
+        }
+    };
+    if !allowed {
+        return Err(Error::storage(
+            "checkpoint changed the run beyond what its contract allows",
+        ));
+    }
     emit(
         state,
         control,
@@ -1635,7 +1679,10 @@ async fn settle(
     uncertain_dispatched(state, "execution settled without a recorded tool outcome");
     state.phase = Phase::Settled(settlement);
     commit(checkpoint, state, control).await?;
-    emit(state, control, ProgressKind::Settled);
+    // A completion that queued steering reopened is not a settlement; the drive loop goes on.
+    if state.is_terminal() {
+        emit(state, control, ProgressKind::Settled);
+    }
     Ok(())
 }
 enum WorkOutcome<T> {

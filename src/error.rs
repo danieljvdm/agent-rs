@@ -25,7 +25,8 @@ type Cause = Box<dyn StdError + Send + Sync>;
 ///   [`Agent::drive`](crate::Agent::drive) returns these and the run stays resumable.
 /// - **A store refused a request:** [`IdempotencyConflict`](Self::IdempotencyConflict),
 ///   [`ConversationBusy`](Self::ConversationBusy), [`StoreBusy`](Self::StoreBusy),
-///   [`NotFound`](Self::NotFound) and [`NotWaiting`](Self::NotWaiting).
+///   [`NotFound`](Self::NotFound), [`NotWaiting`](Self::NotWaiting) and
+///   [`RunNotActive`](Self::RunNotActive).
 /// - **An in-memory run ended without an output:** [`Waiting`](Self::Waiting),
 ///   [`Stopped`](Self::Stopped), [`Failed`](Self::Failed) and [`Cancelled`](Self::Cancelled),
 ///   from [`Agent::run`](crate::Agent::run) and [`Agent::resume`](crate::Agent::resume).
@@ -93,6 +94,9 @@ pub enum Error {
     NotFound,
     /// The resolution does not match an outstanding approval, input wait or unknown outcome.
     NotWaiting,
+    /// A [`SteeringStore`](crate::SteeringStore) refused a new instruction because the run
+    /// settled, has a cancellation request or expired. Start another run instead.
+    RunNotActive,
     /// Execution was interrupted by shutdown before the run settled. It resumes from its last
     /// checkpoint.
     Interrupted,
@@ -180,6 +184,7 @@ impl Error {
             | Self::StoreBusy
             | Self::NotFound
             | Self::NotWaiting
+            | Self::RunNotActive
             | Self::Waiting
             | Self::Stopped(_)
             | Self::Failed(_)
@@ -225,6 +230,7 @@ impl fmt::Display for Error {
             }
             Self::NotFound => f.write_str("run not found"),
             Self::NotWaiting => f.write_str("operation is not waiting for this resolution"),
+            Self::RunNotActive => f.write_str("run no longer accepts steering"),
             Self::Interrupted => f.write_str("execution interrupted"),
             Self::Waiting => {
                 f.write_str("run is waiting; resolve Conversation::last_run and call Agent::resume")
@@ -255,6 +261,7 @@ impl StdError for Error {
             | Self::Stale
             | Self::NotFound
             | Self::NotWaiting
+            | Self::RunNotActive
             | Self::Interrupted
             | Self::Waiting
             | Self::Stopped(_)

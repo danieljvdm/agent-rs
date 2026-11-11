@@ -11,6 +11,7 @@ mod model;
 pub mod openai;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
+mod steering;
 mod store;
 mod tool;
 mod types;
@@ -20,6 +21,7 @@ pub use engine::{Agent, AgentBuilder, Checkpoint, Conversation, MemoryCheckpoint
 pub use error::{Error, ErrorDetail, Result};
 pub use host::{Host, HostOptions};
 pub use model::{Model, ModelConfig, ModelEvent, ModelRequest, ModelStream, ScriptedModel};
+pub use steering::{SteeringId, SteeringInput, SteeringReceipt, SteeringStatus, SteeringStore};
 pub use store::{
     CheckpointPosition, DurableStore, HostSlot, MemoryStore, RunUpdate, StoreLease, UpdateEffect,
 };

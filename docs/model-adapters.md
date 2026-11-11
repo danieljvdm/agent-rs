@@ -44,6 +44,8 @@ the provider's strict subset; the engine's typed validation stays authoritative.
 Derived context from a `ContextPolicy` is rendered exactly as for Chat
 Completions: after the instructions, a developer notice that it is untrusted
 reference data, then the items as one user-role JSON document, ahead of history.
+[Steering](steering.md) instructions are rendered the same way in both APIs
+too: a user message with the instruction as written, in its place in history.
 
 The parser requires `response.completed`, final usage, completed output items,
 and agreement between streamed deltas and the final text and arguments. It

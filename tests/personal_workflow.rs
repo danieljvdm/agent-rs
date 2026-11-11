@@ -55,6 +55,40 @@ async fn workflow_grader_rejects_wrong_schedules_and_invented_success() {
 }
 
 #[tokio::test]
+async fn workflow_grader_rejects_a_reminder_that_ignores_active_steering() {
+    let directory = tempfile::tempdir().unwrap();
+    let scenario = scenarios()
+        .into_iter()
+        .find(|scenario| scenario.steering_title.is_some())
+        .unwrap();
+    let attempt = run_case(
+        scenario,
+        1,
+        &directory.path().join("ignored_steering"),
+        Mode::Scripted,
+        ProviderApi::ChatCompletions,
+        DEFAULT_MODEL,
+        Some(ScriptedFault::IgnoreSteering),
+    )
+    .await
+    .unwrap();
+    assert!(attempt.error.is_none(), "{:?}", attempt.error);
+    assert!(!attempt.passed);
+    assert!(
+        attempt
+            .checks
+            .iter()
+            .any(|check| check.name == "steering_in_proposal_context" && check.passed)
+    );
+    assert!(
+        attempt
+            .checks
+            .iter()
+            .any(|check| check.name == "correct_schedule" && !check.passed)
+    );
+}
+
+#[tokio::test]
 async fn workflow_grader_rejects_a_failed_calendar_read_even_when_the_guess_is_correct() {
     let directory = tempfile::tempdir().unwrap();
     let attempt = run_case(

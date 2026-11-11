@@ -28,6 +28,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 criterion = { version = "0.6", features = ["async_tokio"] }
 dhat = "0.3.3"
 tempfile = "3"
+# Statement tracing for SQLite cost guards; `trace` adds no dependencies.
+rusqlite = { version = "0.37", features = ["bundled", "trace"] }
 libc = "0.2"
 # Tests, benches and examples run on multi-threaded runtimes. Paused virtual time makes
 # scheduling costs deterministic in tests.
@@ -42,3 +44,7 @@ harness = false
 name = "model_adapters"
 harness = false
 required-features = ["openai"]
+[[bench]]
+name = "steering_schedule"
+harness = false
+required-features = ["sqlite"]
