@@ -63,7 +63,7 @@ const ALLOC_RUN_EMPTY_CONVERSATION: Budget = Budget::new(32, 2_148);
 /// context and one into the model request.
 const ALLOC_RUN_1024_PRIOR_ENTRIES: Budget = Budget::new(6_177, 1_737_272);
 /// `Agent::run` of four rounds of one tool each in an empty conversation.
-const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(430, 52_026);
+const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(430, 50_618);
 /// `Agent::drive` of a final response streamed as 64 text deltas of 16 bytes, observed through
 /// an attached progress channel that a receiver drains concurrently. Includes the scripted
 /// model's copy of each delta, so the engine itself must add no allocation per delta. Bytes
