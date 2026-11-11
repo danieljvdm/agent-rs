@@ -508,6 +508,50 @@ async fn a_blocked_child_stops_new_dispatch_and_resolving_it_resumes_the_batch()
     assert_eq!(state.usage.tool_calls, 2 + 2);
 }
 
+#[tokio::test]
+async fn a_delegation_that_requires_approval_admits_its_child_only_once_approved() {
+    for approve in [false, true] {
+        let model = Arc::new(ScriptedModel::new(vec![ModelResponse::final_output(
+            json!("ok"),
+        )]));
+        let child = child_agent(model.clone());
+        let agent = Agent::builder(
+            "parent",
+            Arc::new(ScriptedModel::new(vec![
+                ModelResponse::tools(vec![call(0)]),
+                ModelResponse::final_output(json!("done")),
+            ])),
+        )
+        .input::<String>()
+        .output::<String>()
+        .subagents(
+            1,
+            [Subagent::new("delegate", "Ask first.", child).with_requires_approval(true)],
+        )
+        .build()
+        .unwrap();
+        let mut conversation = Conversation::default();
+        assert!(matches!(
+            agent.run(&mut conversation, "go").await,
+            Err(Error::Waiting)
+        ));
+        let run = conversation.last_run.as_mut().unwrap();
+        assert_eq!(run.operations[0].status, OperationStatus::Approval);
+        assert!(run.children.is_empty());
+        run.resolve("child-0", Resolution::Approve(approve))
+            .unwrap();
+        let output = agent
+            .resume(&mut conversation, RunControl::default())
+            .await
+            .unwrap();
+        assert_eq!(output, "done");
+        let state = conversation.last_run.as_ref().unwrap();
+        assert_eq!(state.children.len(), usize::from(approve));
+        assert_eq!(results(state)[0].is_error, !approve);
+        assert_eq!(model.calls(), usize::from(approve));
+    }
+}
+
 #[test]
 fn build_checks_names_parallelism_and_nesting() {
     let model = || -> Arc<dyn Model> { Arc::new(ScriptedModel::new(vec![])) };
