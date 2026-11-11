@@ -1194,3 +1194,278 @@ mod durable {
             .as_millis() as u64
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Delegation beside the layers below it: the commit contract, reported usage, memory scope and
+// model adapter bindings.
+// ---------------------------------------------------------------------------------------------
+
+/// Commits like `MemoryCheckpoint`, but appends an instruction to a child's history, which no
+/// commit may do.
+struct SteersAChild;
+#[async_trait]
+impl Checkpoint for SteersAChild {
+    async fn commit(&self, state: &mut RunState) -> Result<()> {
+        state.revision += 1;
+        if let Some(child) = state.children.first_mut() {
+            child.state.history.push(HistoryEntry::Steering {
+                id: SteeringId::new_v4(),
+                instruction: "injected".into(),
+            });
+        }
+        Ok(())
+    }
+}
+#[tokio::test]
+async fn a_commit_that_changes_a_child_is_rejected() {
+    let model = Arc::new(ScriptedModel::new(vec![ModelResponse::final_output(
+        json!("ok"),
+    )]));
+    let agent = parent(child_agent(model.clone()), 1, 1, Limits::default());
+    let mut state = new_run(&agent);
+    let error = agent
+        .drive(&mut state, &SteersAChild, RunControl::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::Storage(_)), "{error:?}");
+    assert!(!state.is_terminal());
+    assert_eq!(model.calls(), 0, "the child never started");
+}
+
+/// Reports usage on its first call and then triggers `shutdown` while the call hangs; answers the
+/// second call.
+struct UsageThenShutdown {
+    calls: AtomicUsize,
+    shutdown: CancellationToken,
+}
+#[async_trait]
+impl Model for UsageThenShutdown {
+    async fn stream(&self, _: ModelRequest, _: CancellationToken) -> Result<ModelStream> {
+        use futures::StreamExt;
+        if self.calls.fetch_add(1, Ordering::SeqCst) > 0 {
+            let response =
+                ModelResponse::final_output(json!("child done")).with_usage(TokenUsage::new(2, 3));
+            return Ok(Box::pin(stream::iter([Ok(ModelEvent::Response(response))])));
+        }
+        let shutdown = self.shutdown.clone();
+        let usage = stream::iter([Ok(ModelEvent::Usage(TokenUsage::new(9, 4)))]);
+        Ok(Box::pin(usage.chain(stream::once(async move {
+            shutdown.cancel();
+            std::future::pending().await
+        }))))
+    }
+}
+fn tokens(usage: &Usage) -> (u64, u64) {
+    (usage.input_tokens, usage.output_tokens)
+}
+
+#[tokio::test]
+async fn a_childs_reported_usage_is_charged_once_even_when_its_turn_is_rejected_or_interrupted() {
+    // Rejected: the child's stream reports usage and ends without a response, failing the child.
+    let rejected = ScriptedModel::with_events(vec![vec![ModelEvent::Usage(TokenUsage::new(9, 4))]]);
+    let agent = parent(child_agent(Arc::new(rejected)), 1, 1, Limits::default());
+    let mut state = new_run(&agent);
+    agent
+        .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        state.phase,
+        Phase::Settled(Settlement::Completed(json!("done")))
+    );
+    assert!(matches!(
+        outcome(&results(&state)[0]),
+        ChildOutcome::Failed(_)
+    ));
+    assert_eq!(tokens(&state.children[0].state.usage), (9, 4));
+    assert_eq!(tokens(&state.child_usage), (9, 4));
+    assert_eq!(tokens(&state.usage), (9, 4));
+
+    // Interrupted: the charge is committed with the child's interrupted turn, inside the
+    // allocation its parent still reserves, and replaces that allocation once at settlement.
+    let control = RunControl::default();
+    let model = Arc::new(UsageThenShutdown {
+        calls: AtomicUsize::new(0),
+        shutdown: control.shutdown.clone(),
+    });
+    let agent = parent(child_agent(model.clone()), 1, 1, Limits::default());
+    let mut state = new_run(&agent);
+    let result = agent.drive(&mut state, &MemoryCheckpoint, control).await;
+    assert!(matches!(result, Err(Error::Interrupted)), "{result:?}");
+    let child = &state.children[0].state;
+    assert_eq!(child.phase, Phase::Ready);
+    assert_eq!(tokens(&child.usage), (9, 4));
+    let reserved = (0, child_limits().max_tokens);
+    assert_eq!(tokens(&state.child_usage), reserved);
+    assert_eq!(tokens(&state.usage), reserved);
+    agent
+        .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        state.phase,
+        Phase::Settled(Settlement::Completed(json!("done")))
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(tokens(&state.children[0].state.usage), (11, 7));
+    assert_eq!(tokens(&state.child_usage), (11, 7));
+    assert_eq!(tokens(&state.usage), (11, 7));
+    assert_eq!(state.child_usage.model_calls, 2);
+    assert_eq!(state.usage.model_calls, 2 + 2);
+}
+
+/// Records the conversation each turn's preparation is scoped to.
+#[derive(Default)]
+struct Scopes(Mutex<Vec<(RunId, String)>>);
+#[async_trait]
+impl ContextPolicy for Scopes {
+    fn binding(&self) -> Value {
+        json!("scopes-v1")
+    }
+    async fn prepare(
+        &self,
+        request: ContextRequest<'_>,
+        _: CancellationToken,
+    ) -> Result<Vec<Value>> {
+        let scope = (request.run_id, request.conversation_id.to_owned());
+        self.0.lock().unwrap().push(scope);
+        Ok(vec![])
+    }
+}
+
+#[tokio::test]
+async fn a_childs_context_policy_is_scoped_to_its_derived_conversation() {
+    let scopes = Arc::new(Scopes::default());
+    let model = Arc::new(ScriptedModel::new(vec![
+        ModelResponse::final_output(json!("a")),
+        ModelResponse::final_output(json!("b")),
+    ]));
+    let child = child_builder("scoped-child", model)
+        .context_policy(scopes.clone(), 256)
+        .build()
+        .unwrap();
+    let agent = parent(child, 2, 1, Limits::default());
+    let mut conversation = Conversation::new("trip-1");
+    assert_eq!(agent.run(&mut conversation, "go").await.unwrap(), "done");
+    let root = conversation.last_run.as_ref().unwrap();
+    assert_eq!(root.conversation_id, "trip-1");
+    let expected: Vec<_> = (root.children.iter())
+        .map(|child| {
+            let scope = format!("child:{}:{}", root.id, child.call_id);
+            assert_eq!(child.state.conversation_id, scope);
+            (child.state.id, scope)
+        })
+        .collect();
+    assert_eq!(expected.len(), 2);
+    assert_eq!(*scopes.0.lock().unwrap(), expected);
+}
+
+#[cfg(feature = "memory")]
+#[tokio::test]
+async fn a_childs_memory_policy_reads_its_own_scope_and_not_its_parents() {
+    use yielded_agent::memory::{
+        ExtractiveSummarizer, InMemorySourceStore, MemoryPolicy, SourceStore, SourceTrust,
+        Summarizer, index_summary,
+    };
+    /// Records each request's derived context.
+    struct Derived(ScriptedModel, Mutex<Vec<Vec<Value>>>);
+    #[async_trait]
+    impl Model for Derived {
+        async fn stream(
+            &self,
+            request: ModelRequest,
+            cancel: CancellationToken,
+        ) -> Result<ModelStream> {
+            self.1.lock().unwrap().push(request.derived_context.clone());
+            self.0.stream(request, cancel).await
+        }
+    }
+    let sources = Arc::new(InMemorySourceStore::default());
+    let summarizer = ExtractiveSummarizer::new(2, 256).unwrap();
+    let policy = MemoryPolicy::new(sources.clone(), 32)
+        .unwrap()
+        .with_summaries(summarizer.producer())
+        .unwrap();
+    let model = Arc::new(Derived(
+        ScriptedModel::new(vec![ModelResponse::final_output(json!("ok"))]),
+        Mutex::default(),
+    ));
+    let child = child_builder("remembering-child", model.clone())
+        .context_policy(Arc::new(policy), 1024)
+        .build()
+        .unwrap();
+    let agent = parent(child, 1, 1, Limits::default());
+    let mut state = agent.new_run("trip-1", json!("go"), &[], None).unwrap();
+    let scope = format!("child:{}:child-0", state.id);
+    for (conversation, text) in [
+        ("trip-1", "Prefer the train."),
+        (&*scope, "Leave after nine."),
+    ] {
+        let source = sources
+            .upsert_source(conversation, "notes", text, SourceTrust::Approved)
+            .await
+            .unwrap();
+        index_summary(sources.as_ref(), "summary", &[source], &summarizer)
+            .await
+            .unwrap();
+    }
+    agent
+        .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+        .await
+        .unwrap();
+    assert_eq!(state.children[0].state.conversation_id, scope);
+    let seen = model.1.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    let derived = serde_json::to_string(&seen[0]).unwrap();
+    assert!(derived.contains("Leave after nine."), "{derived}");
+    assert!(!derived.contains("Prefer the train."), "{derived}");
+}
+
+/// Names an adapter in its binding, as the OpenAI adapters do.
+struct Routed(ScriptedModel);
+#[async_trait]
+impl Model for Routed {
+    fn binding(&self) -> Value {
+        json!({"api": "responses", "endpoint": "https://example.test/v1/responses"})
+    }
+    async fn stream(
+        &self,
+        request: ModelRequest,
+        cancel: CancellationToken,
+    ) -> Result<ModelStream> {
+        self.0.stream(request, cancel).await
+    }
+}
+
+#[tokio::test]
+async fn a_parents_binding_carries_each_childs_adapter_and_context_policy() {
+    let routed = || -> Arc<dyn Model> { Arc::new(Routed(ScriptedModel::new(vec![]))) };
+    let child = child_builder("routed-child", routed())
+        .context_policy(Arc::new(Scopes::default()), 256)
+        .build()
+        .unwrap();
+    let agent = parent(child.clone(), 1, 1, Limits::default());
+    let binding = agent.binding();
+    // The parent's own model has no adapter identity, so it adds no key of its own.
+    assert!(binding.get("model_adapter").is_none());
+    assert!(binding.get("context_policy").is_none());
+    let nested = &binding["subagents"]["agents"][0];
+    assert_eq!(nested["name"], json!("delegate"));
+    assert_eq!(&nested["agent"], child.binding());
+    assert!(nested["agent"].get("model_adapter").is_some());
+    assert!(nested["agent"].get("context_policy").is_some());
+    // A run accepted with a routed child cannot be driven by a parent whose child is not.
+    let unrouted = child_builder("routed-child", Arc::new(ScriptedModel::new(vec![])))
+        .context_policy(Arc::new(Scopes::default()), 256)
+        .build()
+        .unwrap();
+    let unrouted = parent(unrouted, 1, 1, Limits::default());
+    let mut state = new_run(&agent);
+    assert!(matches!(
+        unrouted
+            .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+            .await,
+        Err(Error::Incompatible(_))
+    ));
+    assert_eq!(state.usage.model_calls, 0);
+}
