@@ -19,6 +19,23 @@ pub struct ContextRequest<'a> {
     /// The derived-context cap given to `AgentBuilder::context_policy`.
     pub max_bytes: usize,
 }
+impl<'a> ContextRequest<'a> {
+    /// A request for calling a policy outside the engine: in its own tests, or from a policy that
+    /// composes others. The engine builds the request for every turn it runs.
+    pub fn new(
+        run_id: RunId,
+        conversation_id: &'a str,
+        input: &'a Value,
+        max_bytes: usize,
+    ) -> Self {
+        Self {
+            run_id,
+            conversation_id,
+            input,
+            max_bytes,
+        }
+    }
+}
 
 /// Optional policy for what reaches the model on each turn, set with
 /// [`AgentBuilder::context_policy`](crate::AgentBuilder::context_policy). Without one the engine

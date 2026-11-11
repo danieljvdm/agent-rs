@@ -32,6 +32,14 @@ use yielded_agent::openai::{OpenAiModel, OpenAiResponsesModel};
 use yielded_agent::openai::cost_probe::{Api, decode, request_body};
 #[cfg(feature = "sqlite")]
 use yielded_agent::sqlite::{SqliteStore, StoreMetrics};
+// Optional memory, behind its feature.
+#[cfg(feature = "memory")]
+use yielded_agent::memory::{
+    DERIVED_CONTEXT_VERSION, DerivedContext, DerivedKind, Embedder, Embedding,
+    ExtractiveSummarizer, InMemorySourceStore, MemoryPolicy, MemoryRecord, MemorySource, Retriever,
+    SemanticRetriever, SourceRef, SourceStore, SourceTrust, Summarizer, index_source,
+    index_summary,
+};
 
 /// The root can be glob-imported beside the standard library: its `Result` defaults its error
 /// type, so a two-parameter `Result` still means the standard one.

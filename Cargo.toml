@@ -9,6 +9,7 @@ license = "MIT"
 default = ["sqlite", "openai"]
 sqlite = ["dep:rusqlite"]
 openai = ["dep:reqwest"]
+memory = []
 allocation-metrics = []
 [dependencies]
 async-trait = "0.1.92"
