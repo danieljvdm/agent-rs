@@ -1,5 +1,7 @@
 // The README is the crate documentation, so its examples compile as doctests.
 #![doc = include_str!("../README.md")]
+// docs.rs labels each item with the feature that enables it.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 mod automation;

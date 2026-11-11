@@ -38,7 +38,7 @@ assert_eq!(answer, "Ready");
 # Ok(()) }
 ```
 
-The scripted model makes this example runnable without credentials; it does not evaluate answer quality. The [long-conversation consumer](../examples/support/memory_workflow.rs) observes actual model requests, checks retained facts, and supports the live OpenAI provider.
+The scripted model makes this example runnable without credentials; it does not evaluate answer quality. The [long-conversation consumer](https://github.com/danieljvdm/agent-rs/blob/main/examples/support/memory_workflow.rs) observes actual model requests, checks retained facts, and supports the live OpenAI provider.
 
 A source's scope is the conversation ID it belongs to, and `MemoryPolicy` reads only the run's own conversation. `Conversation::default()` has a fresh, unique ID; use `Conversation::new(id)` when memory outlives the process, and keep the ID with the retained history. `Agent::run` and `Agent::resume` refuse a retained run whose conversation ID differs from the conversation's. Durable `accept` already takes an explicit conversation ID. Choose IDs unique across your authorization boundaries. A child of an [attached subagent](attached-subagents.md) runs in its own conversation, `child:{root}:{call}`, so a `MemoryPolicy` on the child agent reads that scope and not its parent's.
 
@@ -100,7 +100,7 @@ scripts/rust.sh run --locked --release --features memory --example memory_workfl
 scripts/eval-memory.sh --trials 3 --history-turns 256 --out eval-results/memory-live-local
 ```
 
-The live wrapper uses the same path-selected Yielded Infisical identity and project and environment as `eval-personal.sh`. All history and source data are synthetic, and the only external calls are model requests through the OpenAI Chat Completions adapter, `OpenAiModel`. The default live model and settings match the personal workflow evaluation: `gpt-4.1-2025-04-14` at temperature 0.
+The live wrapper loads credentials from the same Infisical project as `eval-personal.sh`. All history and source data are synthetic, and the only external calls are model requests through the OpenAI Chat Completions adapter, `OpenAiModel`. The default live model and settings match the personal workflow evaluation: `gpt-4.1-2025-04-14` at temperature 0.
 
 Each case copies the same closed SQLite template for the history-only, summary and retrieval policies. All use a 2048-byte context cap and identical queries; the memory policies get at most 1024 derived bytes within that cap. Order rotates across trials. `--background-records N` adds N unrelated indexed documents before the queries.
 

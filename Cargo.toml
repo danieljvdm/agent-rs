@@ -5,6 +5,25 @@ edition = "2024"
 rust-version = "1.89"
 description = "A resumable agent engine with an optional SQLite durable host"
 license = "MIT"
+repository = "https://github.com/danieljvdm/agent-rs"
+readme = "README.md"
+keywords = ["agent", "llm", "ai", "durable", "tool-calling"]
+categories = ["asynchronous"]
+# What crates.io receives: the library, its examples, and the two documents the library embeds as
+# rustdoc. Tests, benches, scripts and CI stay in the repository, and so do the two examples that
+# are benchmark tooling built on `benches/support`.
+include = [
+    "/src/**",
+    "/examples/**",
+    "!/examples/benchmark_metrics.rs",
+    "!/examples/profile_recovery.rs",
+    "/docs/memory.md",
+    "/README.md",
+    "/LICENSE",
+]
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 [workspace]
 members = ["apps/personal-agent"]
 [features]
@@ -16,6 +35,8 @@ memory = []
 mcp = ["dep:rmcp", "dep:jsonschema", "dep:rustix", "tokio/process", "tokio/io-util", "tokio-util/codec"]
 google-calendar = ["dep:reqwest", "dep:chrono", "dep:sha2"]
 postgres = ["dep:tokio-postgres"]
+# Used only by the repository's `examples/benchmark_metrics.rs` to count allocations; it changes
+# nothing in the library.
 allocation-metrics = []
 [dependencies]
 async-trait = "0.1.92"
