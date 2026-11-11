@@ -134,6 +134,7 @@ async fn serve(agent: Agent) -> agent_rs::Result<()> {
 | Feature | Default | Adds |
 | --- | --- | --- |
 | `sqlite` | yes | `sqlite::SqliteStore`, a durable store in one file (SQLite is bundled) |
+| `sqlcipher` | | Builds SQLite as SQLCipher, so `SqliteStore::open_with` can encrypt the file with a key you supply |
 | `openai` | yes | `openai::OpenAiModel` (Chat Completions) and `openai::OpenAiResponsesModel` (Responses) |
 | `postgres` | | `postgres::PostgresStore` |
 | `memory` | | `memory::MemoryPolicy`: summaries and retrieval over earlier conversation |

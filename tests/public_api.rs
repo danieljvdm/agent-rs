@@ -48,7 +48,7 @@ use agent_rs::postgres::{
     Config, NoTls, PostgresOptions, PostgresStore, StoreMetrics as PostgresStoreMetrics,
 };
 #[cfg(feature = "sqlite")]
-use agent_rs::sqlite::{SqliteStore, StoreMetrics};
+use agent_rs::sqlite::{SqliteKey, SqliteOptions, SqliteStore, StoreMetrics};
 // Optional memory, behind its feature.
 #[cfg(feature = "memory")]
 use agent_rs::memory::{

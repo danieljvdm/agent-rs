@@ -59,6 +59,43 @@ pub struct StoreMetrics {
     /// Rows inserted or updated by those transactions.
     pub writes: u64,
 }
+/// A 256-bit key for an encrypted database file.
+///
+/// The key is used as given, with no key derivation applied to it, so it must come from a
+/// cryptographic random source or from a key-derivation function of the caller's. The store
+/// holds it only while opening; where it is kept between runs is up to the caller.
+#[derive(Clone)]
+pub struct SqliteKey([u8; 32]);
+impl SqliteKey {
+    /// A key of these 32 bytes.
+    pub fn new(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+}
+impl std::fmt::Debug for SqliteKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SqliteKey(..)")
+    }
+}
+/// How [`SqliteStore::open_with`] opens its database.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct SqliteOptions {
+    /// Encrypts the database file and its write-ahead log with this key, through
+    /// [SQLCipher](https://www.zetetic.net/sqlcipher/). Defaults to `None`: a plain SQLite file.
+    ///
+    /// A key needs a SQLite built with SQLCipher, which the `sqlcipher` feature provides.
+    /// Without one, opening fails rather than leave the file unencrypted. A file keeps the key
+    /// it was created with: one created without a key cannot be opened with one.
+    pub key: Option<SqliteKey>,
+}
+impl SqliteOptions {
+    /// Sets [`key`](Self::key).
+    pub fn with_key(mut self, key: SqliteKey) -> Self {
+        self.key = Some(key);
+        self
+    }
+}
 #[derive(Default)]
 struct Counters {
     transactions: AtomicU64,
@@ -222,8 +259,45 @@ fn run_id(text: &str) -> Result<RunId> {
     RunId::parse_str(text).map_err(Error::storage)
 }
 
+/// Keys the connection, which must not have read the file yet.
+fn apply_key(connection: &Connection, key: &SqliteKey) -> Result<()> {
+    // Plain SQLite ignores `PRAGMA key`, which would leave the file unencrypted without any
+    // error. Only SQLCipher answers `cipher_version`.
+    let cipher: Option<String> = connection
+        .query_row("PRAGMA cipher_version", [], |row| row.get(0))
+        .optional()
+        .map_err(Error::storage)?;
+    if cipher.is_none() {
+        return Err(Error::config(
+            "a database key was given, but SQLite was built without encryption; enable the `sqlcipher` feature",
+        ));
+    }
+    // SQLCipher's raw-key form: the 32 bytes are the key, with no passphrase derivation.
+    let mut literal = String::with_capacity(67);
+    literal.push_str("x'");
+    for byte in key.0 {
+        literal.push_str(&format!("{byte:02x}"));
+    }
+    literal.push('\'');
+    // The error is replaced, not wrapped, so that nothing derived from the key leaves here.
+    connection
+        .pragma_update(None, "key", &literal)
+        .map_err(|_| Error::storage("SQLite refused the database key"))
+}
+/// The first read of a file opened with a key. SQLite cannot tell a wrong key from a file that
+/// is not a database, so with a key in hand the key is what the caller has to fix.
+fn first_keyed_read(error: rusqlite::Error) -> Error {
+    if error.sqlite_error_code() == Some(rusqlite::ErrorCode::NotADatabase) {
+        Error::Config(crate::ErrorDetail::caused_by(
+            "the database key does not open this file, which was created with another key or without one",
+            error,
+        ))
+    } else {
+        Error::storage(error)
+    }
+}
 impl Database {
-    fn open(path: &Path, counters: Arc<Counters>) -> Result<Self> {
+    fn open(path: &Path, options: &SqliteOptions, counters: Arc<Counters>) -> Result<Self> {
         if path.as_os_str().is_empty() || path == Path::new(":memory:") {
             return Err(Error::config("a file-backed database path is required"));
         }
@@ -263,9 +337,16 @@ impl Database {
             TryLockError::Error(error) => Error::storage(error),
         })?;
         let connection = Connection::open(canonical).map_err(Error::storage)?;
+        if let Some(key) = &options.key {
+            apply_key(&connection, key)?;
+        }
         connection
             .pragma_update(None, "journal_mode", "WAL")
-            .map_err(Error::storage)?;
+            .map_err(if options.key.is_some() {
+                first_keyed_read
+            } else {
+                Error::storage
+            })?;
         connection
             .pragma_update(None, "synchronous", "FULL")
             .map_err(Error::storage)?;
@@ -656,8 +737,17 @@ impl SqliteStore {
     /// Opens or creates the database file at `path` and takes its process lock, a `.lock` file
     /// beside it. Fails with [`Error::StoreBusy`] while another store holds the lock, with
     /// [`Error::Config`] for an in-memory or hard-linked path, with [`Error::Incompatible`] for
-    /// another schema version, and with [`Error::Storage`] otherwise.
+    /// another schema version, and with [`Error::Storage`] otherwise, which includes a file
+    /// that is not a database or is encrypted.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with(path, SqliteOptions::default()).await
+    }
+    /// [`open`](Self::open) with `options`, such as a key that encrypts the file.
+    ///
+    /// Beyond the failures of `open`, fails with [`Error::Config`] when a key is given to a
+    /// SQLite built without encryption, and when the key does not open the file: it was created
+    /// with another key, or without one.
+    pub async fn open_with(path: impl AsRef<Path>, options: SqliteOptions) -> Result<Self> {
         let path: PathBuf = path.as_ref().to_owned();
         let counters = Arc::new(Counters::default());
         let worker_counters = counters.clone();
@@ -665,19 +755,21 @@ impl SqliteStore {
         let (ready_tx, ready_rx) = oneshot::channel();
         let thread = thread::Builder::new()
             .name("agent-rs-sqlite".into())
-            .spawn(move || match Database::open(&path, worker_counters) {
-                Ok(mut database) => {
-                    if ready_tx.send(Ok(())).is_err() {
-                        return;
+            .spawn(
+                move || match Database::open(&path, &options, worker_counters) {
+                    Ok(mut database) => {
+                        if ready_tx.send(Ok(())).is_err() {
+                            return;
+                        }
+                        while let Some(job) = receiver.blocking_recv() {
+                            job(&mut database);
+                        }
                     }
-                    while let Some(job) = receiver.blocking_recv() {
-                        job(&mut database);
+                    Err(error) => {
+                        let _ = ready_tx.send(Err(error));
                     }
-                }
-                Err(error) => {
-                    let _ = ready_tx.send(Err(error));
-                }
-            })
+                },
+            )
             .map_err(Error::storage)?;
         match ready_rx.await.map_err(Error::storage)? {
             Ok(()) => Ok(Self {
