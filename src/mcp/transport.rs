@@ -355,7 +355,7 @@ pub(super) fn start(
         core: core.clone(),
     };
     let (ready, receiver) = oneshot::channel();
-    let job = tokio::spawn(async move {
+    let job = crate::telemetry::spawn(async move {
         let info = ClientConfig::new(
             ClientCapabilities::default(),
             Implementation::new("agent-rs", env!("CARGO_PKG_VERSION")),

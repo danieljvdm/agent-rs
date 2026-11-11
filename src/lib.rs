@@ -33,6 +33,7 @@ pub mod postgres;
 pub mod sqlite;
 mod steering;
 mod store;
+mod telemetry;
 mod tool;
 mod types;
 

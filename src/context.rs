@@ -258,6 +258,7 @@ fn fit_derived(items: &mut Vec<Value>, cap: usize, room: usize) -> usize {
 
 /// History and derived context for one model turn. Without a policy this is the default context:
 /// a bounded suffix of complete exchanges that always holds the current input.
+#[tracing::instrument(name = "assemble_context", level = "debug", skip_all)]
 pub(crate) async fn assemble(
     state: &RunState,
     policy: Option<&(Arc<dyn ContextPolicy>, usize)>,

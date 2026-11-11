@@ -59,6 +59,7 @@ use tokio::{
 };
 use tokio_postgres::{Client, Row, Socket, Statement, tls::MakeTlsConnect, types::ToSql};
 pub use tokio_postgres::{Config, NoTls};
+use tracing::{Instrument, instrument::WithSubscriber};
 
 /// The layout version in `store_metadata`. Versions 1 to 3 were pre-release layouts (1 and 2
 /// kept whole states in an `active` table; 3 had no `children` table); they are refused as
@@ -1307,7 +1308,7 @@ impl PostgresStore {
             .await
             .map_err(|_| Error::storage("PostgreSQL connection timed out"))?
             .map_err(Error::storage)?;
-        let mut connection = ConnectionTask(tokio::spawn(connection));
+        let mut connection = ConnectionTask(crate::telemetry::spawn(connection));
         let counters = Arc::new(Counters::default());
         let opened = timeout(deadline, Database::open(client, schema, counters.clone()))
             .await
@@ -1324,7 +1325,7 @@ impl PostgresStore {
         };
         let (sender, receiver) = mpsc::channel(QUEUE);
         let failure = Failure::default();
-        let worker = tokio::spawn(work(
+        let worker = crate::telemetry::spawn(work(
             database,
             connection,
             receiver,
@@ -1395,11 +1396,25 @@ impl PostgresStore {
             .clone()
             .ok_or_else(|| self.unavailable())?;
         let (tx, rx) = oneshot::channel();
-        let job: Job = Box::new(move |database| {
-            Box::pin(async move {
-                let _ = tx.send(action(database).await);
+        let job: Job = if crate::telemetry::is_disabled() {
+            Box::new(move |database| {
+                Box::pin(async move {
+                    let _ = tx.send(action(database).await);
+                })
             })
-        });
+        } else {
+            let span = tracing::Span::current();
+            let dispatch = tracing::dispatcher::get_default(Clone::clone);
+            Box::new(move |database| {
+                Box::pin(
+                    async move {
+                        let _ = tx.send(action(database).await);
+                    }
+                    .instrument(span)
+                    .with_subscriber(dispatch),
+                )
+            })
+        };
         // The job runs even if this caller stops waiting: dropping a future never rolls back
         // or skips work the store has queued.
         sender.send(job).await.map_err(|_| self.unavailable())?;

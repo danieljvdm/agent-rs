@@ -800,10 +800,23 @@ impl SqliteStore {
             .clone()
             .ok_or_else(|| Error::storage("store is closed"))?;
         let (tx, rx) = oneshot::channel();
-        sender
-            .send(Box::new(move |database| {
+        let job: Job = if crate::telemetry::is_disabled() {
+            Box::new(move |database| {
                 let _ = tx.send(action(database));
-            }))
+            })
+        } else {
+            let span = tracing::Span::current();
+            let dispatch = tracing::dispatcher::get_default(Clone::clone);
+            Box::new(move |database| {
+                tracing::dispatcher::with_default(&dispatch, || {
+                    span.in_scope(|| {
+                        let _ = tx.send(action(database));
+                    });
+                });
+            })
+        };
+        sender
+            .send(job)
             .await
             .map_err(|_| Error::storage("store is closed"))?;
         rx.await.map_err(Error::storage)?
