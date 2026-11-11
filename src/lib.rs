@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+mod children;
 mod context;
 mod engine;
 mod error;
@@ -18,8 +19,11 @@ mod store;
 mod tool;
 mod types;
 
+pub use children::{AttachedChild, ChildOutcome, ChildResult, ParentRun};
 pub use context::{ContextPolicy, ContextRequest};
-pub use engine::{Agent, AgentBuilder, Checkpoint, Conversation, MemoryCheckpoint, RunControl};
+pub use engine::{
+    Agent, AgentBuilder, Checkpoint, Conversation, MemoryCheckpoint, RunControl, Subagent,
+};
 pub use error::{Error, ErrorDetail, Result};
 pub use host::{Host, HostOptions};
 pub use model::{Model, ModelConfig, ModelEvent, ModelRequest, ModelStream, ScriptedModel};

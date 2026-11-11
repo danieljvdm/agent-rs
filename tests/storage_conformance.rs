@@ -675,8 +675,145 @@ async fn shutdown_and_recovery(fixture: &impl Fixture) {
     fixture.close(store).await;
 }
 
+/// Children are stored with their root: admitted, changed and resolved only through its
+/// checkpoint and updates, with their own retained operations and history.
+async fn children_commit_with_their_root(fixture: &impl Fixture) {
+    let store = fixture.open().await;
+    let ask = typed_tool::<Value, Value, _, _>(spec("ask", RetryPolicy::ReadOnly), |_, _| async {
+        Ok(ToolOutput::Wait(WaitRequest::Input {
+            prompt: "which?".into(),
+        }))
+    });
+    let child = Agent::builder(
+        "conformance-child-v1",
+        Arc::new(ScriptedModel::new(vec![
+            ModelResponse::tools(vec![ToolCall {
+                id: "ask".into(),
+                name: "ask".into(),
+                arguments: json!(null),
+            }]),
+            ModelResponse::final_output(json!("answered")),
+        ])),
+    )
+    .tool(ask)
+    .limits(
+        Limits::default()
+            .with_max_model_calls(2)
+            .with_max_tool_calls(1)
+            .with_active_budget(Duration::from_secs(10)),
+    )
+    .build()
+    .unwrap();
+    let agent = Agent::builder(
+        "conformance-parent-v1",
+        Arc::new(ScriptedModel::new(vec![
+            ModelResponse::tools(vec![ToolCall {
+                id: "delegate".into(),
+                name: "delegate".into(),
+                arguments: json!("task"),
+            }]),
+            ModelResponse::final_output(json!("done")),
+        ])),
+    )
+    .subagents(1, [Subagent::new("delegate", "Delegate", child)])
+    .build()
+    .unwrap();
+    let id = store
+        .accept(&agent, "parent", "key", json!("go"), None)
+        .await
+        .unwrap();
+    let mut state = store.claim(id).await.unwrap();
+    agent
+        .drive(&mut state, store.as_ref(), RunControl::default())
+        .await
+        .unwrap();
+    let as_json = |state: &RunState| serde_json::to_value(&state.children).unwrap();
+    assert_eq!(state.children.len(), 1);
+    assert_eq!(as_json(&store.status(id).await.unwrap()), as_json(&state));
+    let child = state.children[0].state.clone();
+    assert_eq!(child.wake_at(), None);
+    assert!(store.due(now_ms(), 10).await.unwrap().is_empty());
+    assert!(store.recovery_page(None, 10).await.unwrap().is_empty());
+    // A child is read through its root, never on its own.
+    assert!(matches!(store.status(child.id).await, Err(Error::NotFound)));
+    let operations = store.operations(child.id).await.unwrap();
+    assert!(matches!(
+        operations[..],
+        [Operation {
+            status: OperationStatus::Waiting(_),
+            ..
+        }]
+    ));
+    assert_eq!(
+        store.history(&child.conversation_id).await.unwrap().len(),
+        1
+    );
+    assert_eq!(store.history("parent").await.unwrap().len(), 1);
+
+    // A commit persists a changed child's progress, never its acceptance.
+    state.children[0].state.input = json!("rewritten");
+    state.children[0].state.usage.input_tokens = 7;
+    state.children[0].state.revision += 1;
+    store.commit(&mut state).await.unwrap();
+    let stored = store.status(id).await.unwrap();
+    assert_eq!(stored.children[0].state.input, json!("task"));
+    assert_eq!(stored.children[0].state.usage.input_tokens, 7);
+    assert_eq!(stored.children[0].state.revision, child.revision + 1);
+
+    let resolve = |child_id, call_id: &str| RunUpdate::ResolveChild {
+        child_id,
+        call_id: call_id.into(),
+        resolution: Resolution::Input(json!("this one")),
+    };
+    assert!(matches!(
+        store.update(id, resolve(RunId::new_v4(), "ask")).await,
+        Err(Error::NotFound)
+    ));
+    assert!(matches!(
+        store.update(id, resolve(child.id, "other")).await,
+        Err(Error::NotWaiting)
+    ));
+    let before = store.position(id).await.unwrap();
+    store.update(id, resolve(child.id, "ask")).await.unwrap();
+    // The update fences older executions and makes the run due.
+    assert_eq!(
+        store.position(id).await.unwrap().revision,
+        before.revision + 1
+    );
+    assert!(matches!(store.commit(&mut state).await, Err(Error::Stale)));
+    assert_eq!(store.due(now_ms(), 10).await.unwrap(), vec![id]);
+
+    let store = fixture.reopen(store).await;
+    let resolved = store.status(id).await.unwrap();
+    assert!(matches!(
+        resolved.children[0].state.operations[0].status,
+        OperationStatus::Complete(_)
+    ));
+    let mut host = start(&store, agent);
+    let done = wait_for(&host, id, RunState::is_terminal).await;
+    assert_eq!(
+        done.phase,
+        Phase::Settled(Settlement::Completed(json!("done")))
+    );
+    let settled = &done.children[0].state;
+    assert!(settled.is_terminal());
+    assert_eq!(as_json(&store.status(id).await.unwrap()), as_json(&done));
+    assert_eq!(
+        store.history(&child.conversation_id).await.unwrap().len(),
+        3
+    );
+    assert_eq!(store.operations(child.id).await.unwrap().len(), 1);
+    assert_eq!(done.child_usage, settled.usage);
+    host.shutdown().await.unwrap();
+    fixture.close(store).await;
+}
+
 macro_rules! conformance_tests {
     ($make:expr) => {
+        #[tokio::test]
+        async fn children_are_stored_with_their_root() {
+            children_commit_with_their_root(&$make).await;
+        }
         #[tokio::test]
         async fn acceptance_and_fencing() {
             admission_and_fencing(&$make).await;

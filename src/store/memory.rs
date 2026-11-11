@@ -3,9 +3,9 @@
 use super::{advance, check_acceptance};
 use crate::steering::{self, Boundary};
 use crate::{
-    Agent, Checkpoint, CheckpointPosition, DurableStore, Error, HistoryEntry, HostSlot, Operation,
-    Phase, Result, RunId, RunState, RunUpdate, SteeringInput, SteeringReceipt, SteeringStore,
-    StoreLease,
+    Agent, AttachedChild, Checkpoint, CheckpointPosition, DurableStore, Error, HistoryEntry,
+    HostSlot, Operation, Phase, Result, RunId, RunState, RunUpdate, SteeringInput, SteeringReceipt,
+    SteeringStore, StoreLease,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -25,6 +25,8 @@ struct Inner {
     unsettled: HashMap<String, RunId>,
     /// Conversation history with each entry's encoded size, for bounded prior context.
     conversations: HashMap<String, Vec<(HistoryEntry, usize)>>,
+    /// Every operation each child recorded, as `Run::operations` holds a run's own.
+    child_operations: HashMap<RunId, Vec<Operation>>,
 }
 struct Run {
     state: RunState,
@@ -52,6 +54,42 @@ fn sizes(entries: &[HistoryEntry]) -> Result<Vec<(HistoryEntry, usize)>> {
         .map(|entry| Ok((entry.clone(), encode(entry)?.len())))
         .collect()
 }
+/// The history each child whose revision advanced appended, by its index in `new`. A child
+/// unknown to `stored` was admitted, and all of its history is new.
+type ChildHistory = Vec<(usize, Vec<(HistoryEntry, usize)>)>;
+fn changed_children(stored: &[AttachedChild], new: &[AttachedChild]) -> Result<ChildHistory> {
+    let mut changed = Vec::new();
+    for (index, child) in new.iter().enumerate() {
+        let durable = match stored.get(index) {
+            None => 0,
+            Some(old) if old.state.id != child.state.id => {
+                return Err(Error::input("children are retained in admission order"));
+            }
+            Some(old) if old.state.revision == child.state.revision => continue,
+            Some(old) => old.state.history.len(),
+        };
+        let appended = (child.state.history.get(durable..))
+            .ok_or_else(|| Error::input("history is append-only"))?;
+        changed.push((index, sizes(appended)?));
+    }
+    Ok(changed)
+}
+/// Persists a child's progress and appends its history; its acceptance never changes.
+fn merge_child(stored: &mut Vec<AttachedChild>, index: usize, new: &AttachedChild) {
+    let Some(old) = stored.get_mut(index) else {
+        stored.push(new.clone());
+        return;
+    };
+    let (old, new) = (&mut old.state, &new.state);
+    let durable = old.history.len();
+    old.history.extend_from_slice(&new.history[durable..]);
+    old.revision = new.revision;
+    old.cancel_requested = new.cancel_requested;
+    old.phase = new.phase.clone();
+    old.usage = new.usage.clone();
+    old.pending_response = new.pending_response.clone();
+    old.operations = new.operations.clone();
+}
 
 impl MemoryStore {
     /// An empty store.
@@ -68,18 +106,27 @@ impl Inner {
     fn run(&mut self, id: RunId) -> Result<&mut Run> {
         self.runs.get_mut(&id).ok_or(Error::NotFound)
     }
-    /// After `run.state` changed: index its operations, discovery fields and new history.
-    fn persist(&mut self, id: RunId, history: Vec<(HistoryEntry, usize)>, wake_now: bool) {
+    /// After `run.state` changed: index its operations, discovery fields and new history, and
+    /// those of the children that changed.
+    fn persist(
+        &mut self,
+        id: RunId,
+        history: Vec<(HistoryEntry, usize)>,
+        wake_now: bool,
+        children: ChildHistory,
+    ) {
         let run = self.runs.get_mut(&id).expect("run exists");
-        for op in &run.state.operations {
-            match run
-                .operations
-                .iter_mut()
-                .find(|old| old.call.id == op.call.id)
-            {
-                Some(old) => *old = op.clone(),
-                None => run.operations.push(op.clone()),
-            }
+        retain(&mut run.operations, &run.state.operations);
+        for (index, history) in children {
+            let child = &run.state.children[index].state;
+            retain(
+                self.child_operations.entry(child.id).or_default(),
+                &child.operations,
+            );
+            self.conversations
+                .entry(child.conversation_id.clone())
+                .or_default()
+                .extend(history);
         }
         run.wake_at = if wake_now {
             Some(0)
@@ -97,6 +144,15 @@ impl Inner {
             .entry(run.state.conversation_id.clone())
             .or_default()
             .extend(history);
+    }
+}
+/// Retains every operation recorded, replacing earlier versions of the same call.
+fn retain(retained: &mut Vec<Operation>, operations: &[Operation]) {
+    for op in operations {
+        match retained.iter_mut().find(|old| old.call.id == op.call.id) {
+            Some(old) => *old = op.clone(),
+            None => retained.push(op.clone()),
+        }
     }
 }
 
@@ -117,6 +173,7 @@ impl Checkpoint for MemoryStore {
         }
         let revision = advance(state.revision, "revision")?;
         let mut appended = sizes(&state.history[stored.history.len()..])?;
+        let children = changed_children(&stored.children, &state.children)?;
         // The steering changes `Checkpoint` allows, after the last step that can fail.
         let boundary = Boundary::of(state);
         let mut queued = run.steering.iter_mut().filter(|s| s.applied.is_none());
@@ -143,7 +200,11 @@ impl Checkpoint for MemoryStore {
         stored.usage = state.usage.clone();
         stored.pending_response = state.pending_response.clone();
         stored.operations = state.operations.clone();
-        inner.persist(state.id, appended, false);
+        stored.child_usage = state.child_usage.clone();
+        for (index, _) in &children {
+            merge_child(&mut stored.children, *index, &state.children[*index]);
+        }
+        inner.persist(state.id, appended, false, children);
         state.revision = revision;
         Ok(())
     }
@@ -208,7 +269,7 @@ impl DurableStore for MemoryStore {
                 steering: Vec::new(),
             },
         );
-        inner.persist(id, history, false);
+        inner.persist(id, history, false, Vec::new());
         Ok(id)
     }
     async fn status(&self, id: RunId) -> Result<RunState> {
@@ -237,11 +298,12 @@ impl DurableStore for MemoryStore {
         }
         state.revision = advance(state.revision, "revision")?;
         let appended = sizes(&state.history[run.state.history.len()..])?;
+        let children = changed_children(&run.state.children, &state.children)?;
         if effect.clear_error {
             run.last_error = None;
         }
         run.state = state;
-        inner.persist(id, appended, effect.wake_now);
+        inner.persist(id, appended, effect.wake_now, children);
         Ok(())
     }
     async fn due(&self, now: u64, limit: usize) -> Result<Vec<RunId>> {
@@ -307,12 +369,12 @@ impl DurableStore for MemoryStore {
             .collect())
     }
     async fn operations(&self, id: RunId) -> Result<Vec<Operation>> {
-        Ok(self
-            .lock()?
-            .runs
-            .get(&id)
-            .map(|run| run.operations.clone())
-            .unwrap_or_default())
+        let inner = self.lock()?;
+        let retained = match inner.runs.get(&id) {
+            Some(run) => Some(&run.operations),
+            None => inner.child_operations.get(&id),
+        };
+        Ok(retained.cloned().unwrap_or_default())
     }
 }
 

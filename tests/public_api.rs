@@ -9,6 +9,8 @@ use yielded_agent::{
     Conversation, MemoryCheckpoint, Model, ModelConfig, ModelEvent, ModelRequest, ModelStream,
     RunControl, ScriptedModel, Tool, ToolContext, ToolOutput, typed_tool,
 };
+// Attached subagents and the children they record.
+use yielded_agent::{AttachedChild, ChildOutcome, ChildResult, ParentRun, Subagent};
 // Errors.
 use yielded_agent::{Error, ErrorDetail, Result};
 // Run state and the data it records.

@@ -124,7 +124,12 @@ pub(crate) enum Boundary {
     Reopen,
 }
 impl Boundary {
+    /// Steering targets a root run: a child's commits reach its root's checkpoint as commits of
+    /// the root, never as the child's own, so for a child this is always `None`.
     pub(crate) fn of(state: &RunState) -> Self {
+        if state.parent.is_some() {
+            return Self::None;
+        }
         match state.phase {
             Phase::ModelInFlight => Self::Apply,
             Phase::Settled(Settlement::Completed(_)) => Self::Reopen,

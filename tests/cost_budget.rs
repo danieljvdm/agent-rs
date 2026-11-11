@@ -33,6 +33,24 @@ const SQLITE_CONTEXT_COPIES_CLAIM_TO_SETTLEMENT: u64 = 0;
 /// Record bytes written by the same four-round run with no retained context (with headroom).
 const SQLITE_RECORD_BYTES_FOUR_TOOL_ROUNDS: u64 = 26_787;
 
+// A parent that delegates once to a subagent and then answers, from `accept` to settlement.
+/// SQLite transactions (exact) when the child answers at once: claim, parent model intent and
+/// outcome, window reservation, the child's admission, the child's model intent, its settlement
+/// with the parent's result, return to the model, parent model intent, settlement. A child's
+/// commits are its parent's.
+const SQLITE_TRANSACTIONS_DELEGATE_ONCE: u64 = 10;
+/// Transactions (exact) each tool round of the child adds: the six of a run's own tool round.
+const SQLITE_TRANSACTIONS_PER_CHILD_TOOL_ROUND: u64 = 6;
+/// Record bytes (with headroom) when the child answers at once. Includes the child's acceptance,
+/// written once, with its binding.
+const SQLITE_RECORD_BYTES_DELEGATE_ONCE: u64 = 15_511;
+/// Record bytes (with headroom) each tool round of the child adds, the same for its first and its
+/// eighth round: a commit writes the child it changed, its new history and operations, and the
+/// parent's progress row, never every child's whole state. (Children nested in the parent's
+/// progress row would rewrite 14 KB of child state for the first round, rising to 21 KB by the
+/// eighth, per child.)
+const SQLITE_RECORD_BYTES_PER_CHILD_TOOL_ROUND: u64 = 11_600;
+
 // Tool scheduling under paused Tokio time (exact virtual milliseconds).
 /// Five parallel calls sleeping 300/10/10/10/300 ms with `max_parallel_tools = 4`. The sliding
 /// window starts the fifth call when the first 10 ms call frees its slot.
@@ -929,6 +947,107 @@ mod sqlite {
             "{name}: added bytes are not whole context copies: {remainder}"
         );
         copies
+    }
+
+    /// Accepts, claims and drives a parent that delegates once to a child doing `child_rounds`
+    /// rounds of one tool. Returns (transactions for claim plus drive, record bytes from accept).
+    async fn delegating_run(child_rounds: usize) -> (u64, u64) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("delegation.sqlite");
+        let store = SqliteStore::open(&path).await.unwrap();
+        let meter = RecordMeter::install(&path);
+        let child = Agent::builder(
+            "cost-child",
+            Arc::new(ScriptedModel::new(responses(child_rounds, 1))),
+        )
+        .instructions("Answer with the scripted result.")
+        .tools(tools())
+        .limits(
+            Limits::default()
+                .with_max_model_calls(16)
+                .with_max_tool_calls(16)
+                .with_max_tokens(10_000)
+                .with_active_budget(Duration::from_secs(120)),
+        )
+        .build()
+        .unwrap();
+        let agent = Agent::builder(
+            "cost-parent",
+            Arc::new(ScriptedModel::new(vec![
+                ModelResponse::tools(vec![ToolCall {
+                    id: "delegate".into(),
+                    name: "delegate".into(),
+                    arguments: json!("go"),
+                }]),
+                ModelResponse::final_output(json!("done")),
+            ])),
+        )
+        .instructions("Delegate, then answer.")
+        .subagents(1, [Subagent::new("delegate", "Do the task.", child)])
+        .build()
+        .unwrap();
+        let id = store
+            .accept(&agent, CONVERSATION, "measured", json!("go"), None)
+            .await
+            .unwrap();
+        let transactions_before = store.metrics().transactions;
+        let mut state = store.claim(id).await.unwrap();
+        agent
+            .drive(&mut state, &store, RunControl::default())
+            .await
+            .unwrap();
+        let transactions = store.metrics().transactions - transactions_before;
+        let bytes = meter.bytes();
+        assert_eq!(
+            state.phase,
+            Phase::Settled(Settlement::Completed(json!("done")))
+        );
+        let child = &state.children[0].state;
+        assert_eq!(child.usage.tool_calls as usize, child_rounds);
+        assert_eq!(state.usage.tool_calls as usize, 1 + child_rounds);
+        // Every refund is durable, not only applied in memory.
+        assert_eq!(store.status(id).await.unwrap().usage, state.usage);
+        drop(meter);
+        store.close().await.unwrap();
+        (transactions, bytes)
+    }
+
+    #[tokio::test]
+    async fn sqlite_cost_of_delegation_grows_with_what_the_child_does() {
+        let mut bytes = Vec::new();
+        for rounds in [0, 1, 4, 8] {
+            let (transactions, written) = delegating_run(rounds).await;
+            eprintln!(
+                "sqlite_delegation_child_rounds_{rounds}: {transactions} transactions, {written} record bytes"
+            );
+            assert_eq!(
+                transactions,
+                SQLITE_TRANSACTIONS_DELEGATE_ONCE
+                    + rounds as u64 * SQLITE_TRANSACTIONS_PER_CHILD_TOOL_ROUND,
+                "{rounds} child rounds"
+            );
+            bytes.push(written);
+        }
+        eprintln!(
+            "sqlite_record_bytes_delegate_once: {} (budget {SQLITE_RECORD_BYTES_DELEGATE_ONCE})",
+            bytes[0]
+        );
+        assert!(bytes[0] <= with_headroom(SQLITE_RECORD_BYTES_DELEGATE_ONCE));
+        // Every child round costs about the same, however many came before it.
+        for (from, to, (before, after)) in [
+            (0, 1, (bytes[0], bytes[1])),
+            (1, 4, (bytes[1], bytes[2])),
+            (4, 8, (bytes[2], bytes[3])),
+        ] {
+            let per_round = (after - before) / (to - from);
+            eprintln!(
+                "sqlite_record_bytes_per_child_tool_round ({from} to {to}): {per_round} (budget {SQLITE_RECORD_BYTES_PER_CHILD_TOOL_ROUND})"
+            );
+            assert!(
+                per_round <= with_headroom(SQLITE_RECORD_BYTES_PER_CHILD_TOOL_ROUND),
+                "child rounds {from} to {to}: {per_round} bytes per round"
+            );
+        }
     }
 
     #[tokio::test]

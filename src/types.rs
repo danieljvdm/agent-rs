@@ -1,4 +1,4 @@
-use crate::{Error, Result, context::encoded_len};
+use crate::{AttachedChild, Error, ParentRun, Result, context::encoded_len};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -152,6 +152,11 @@ pub struct Usage {
     /// this includes the time reserved for it and its cleanup; what it does not use is returned
     /// when it finishes.
     pub active_ms: u64,
+}
+impl Usage {
+    pub(crate) fn is_zero(&self) -> bool {
+        *self == Self::default()
+    }
 }
 /// Tokens one model response consumed, as the provider reports them. The engine adds them to
 /// the run's [`Usage`] and checks them against [`Limits::max_tokens`].
@@ -409,6 +414,13 @@ pub enum OperationStatus {
         /// Why the outcome is unknown, for the application.
         reason: String,
     },
+    /// A delegation whose child was admitted: the child's input, identity and budget allocation
+    /// are committed in [`RunState::children`], and its outcome becomes this call's result when
+    /// it settles. See [`Subagent`](crate::Subagent).
+    Child {
+        /// The child's [`RunState::id`].
+        run_id: RunId,
+    },
 }
 /// One tool call of a run's current batch, with what the engine knows about it.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -550,6 +562,18 @@ pub struct RunState {
     /// The current batch's calls, in call order. Cleared when the batch's exchange is added to
     /// `history`; kept when the run settles, so uncertain outcomes stay visible.
     pub operations: Vec<Operation>,
+    /// For a child run, the run and delegation call that own it; `None` for a run accepted on
+    /// its own. Fixed at admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<ParentRun>,
+    /// Children admitted by this run's delegations, in admission order, retained after they
+    /// settle. A child commits only as part of this run's checkpoint.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<AttachedChild>,
+    /// The part of [`usage`](Self::usage) that belongs to children: an unsettled child's whole
+    /// allocation, replaced by what it actually used once it settles.
+    #[serde(default, skip_serializing_if = "Usage::is_zero")]
+    pub child_usage: Usage,
 }
 impl RunState {
     /// Whether the run has settled.
@@ -576,6 +600,8 @@ impl RunState {
                 Phase::Tools => {
                     let mut latest = 0;
                     let mut blocked = false;
+                    // With admitted children, the run wakes once the first of them can progress.
+                    let mut children: Option<Option<u64>> = None;
                     for op in &self.operations {
                         match &op.status {
                             OperationStatus::Approval
@@ -584,10 +610,22 @@ impl RunState {
                             OperationStatus::Waiting(WaitRequest::Until { unix_ms }) => {
                                 latest = latest.max(*unix_ms)
                             }
+                            OperationStatus::Child { run_id } => {
+                                let wake = self.child(*run_id).and_then(|c| c.state.wake_at());
+                                let earliest = children.flatten();
+                                children = Some(match (earliest, wake) {
+                                    (Some(a), Some(b)) => Some(a.min(b)),
+                                    (a, b) => a.or(b),
+                                });
+                            }
                             _ => (),
                         }
                     }
-                    if blocked { None } else { Some(latest) }
+                    match (blocked, children) {
+                        (true, _) => None,
+                        (false, Some(children)) => children.map(|at| at.max(latest)),
+                        (false, None) => Some(latest),
+                    }
                 }
                 Phase::Settled(_) => None,
             }
@@ -597,14 +635,19 @@ impl RunState {
             (a, b) => a.or(b),
         }
     }
-    /// Whether an unsettled run holds dispatched work without a recorded outcome. Startup
-    /// discovery drives such runs once even when a sibling wait keeps `wake_at` empty.
+    /// Whether an unsettled run, or one of its unsettled children, holds dispatched work without
+    /// a recorded outcome. Startup discovery drives such runs once even when a sibling wait keeps
+    /// `wake_at` empty.
     pub fn needs_recovery(&self) -> bool {
         !self.is_terminal()
-            && self
+            && (self
                 .operations
                 .iter()
                 .any(|op| matches!(op.status, OperationStatus::Dispatched))
+                || self
+                    .children
+                    .iter()
+                    .any(|child| child.state.needs_recovery()))
     }
     /// Answers the operation `call_id` is blocked on, in memory: an approval, an input wait, or
     /// the reconciliation of an unknown outcome. The caller commits the change, or calls
