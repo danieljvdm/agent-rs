@@ -29,6 +29,8 @@ members = ["apps/personal-agent"]
 [features]
 default = ["sqlite", "openai"]
 sqlite = ["dep:rusqlite"]
+# Builds SQLite as SQLCipher, so the SQLite store can encrypt its file with a caller-supplied key.
+sqlcipher = ["sqlite", "rusqlite/bundled-sqlcipher"]
 openai = ["dep:reqwest"]
 memory = []
 # Stdio MCP servers as tools. Process groups are signalled through rustix, without unsafe code.
