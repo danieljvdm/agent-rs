@@ -1,0 +1,59 @@
+# Release configuration for Knope (https://knope.tech). See docs/releasing.md.
+
+# Releases come from the change files in .changeset/, not from commit messages.
+[changes]
+ignore_conventional_commits = true
+
+[package]
+versioned_files = ["Cargo.toml", "Cargo.lock"]
+changelog = "CHANGELOG.md"
+
+# `knope document-change` writes a change file for the pull request you are working on.
+[[workflows]]
+name = "document-change"
+
+[[workflows.steps]]
+type = "CreateChangeFile"
+
+# Run by .github/workflows/release.yml on a push to main that has pending change files: bumps
+# the version, moves the change files into CHANGELOG.md, and opens or updates the release pull
+# request from the `release` branch.
+[[workflows]]
+name = "prepare-release"
+
+[[workflows.steps]]
+type = "Command"
+command = "git switch -c release"
+
+[[workflows.steps]]
+type = "PrepareRelease"
+
+[[workflows.steps]]
+type = "Command"
+command = "git commit -m \"chore: prepare release $version\""
+
+[[workflows.steps]]
+type = "Command"
+command = "git push --force --set-upstream origin release"
+
+[[workflows.steps]]
+type = "CreatePullRequest"
+base = "main"
+
+[workflows.steps.title]
+template = "chore: prepare release $version"
+
+[workflows.steps.body]
+template = "Merging this publishes agent-rs $version to crates.io and tags the release.\n\n$changelog"
+
+# Run by the same workflow once the release pull request is merged and the crate is published:
+# tags the commit and creates the GitHub release from the changelog entry.
+[[workflows]]
+name = "release"
+
+[[workflows.steps]]
+type = "Release"
+
+[github]
+owner = "danieljvdm"
+repo = "agent-rs"

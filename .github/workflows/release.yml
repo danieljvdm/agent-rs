@@ -1,0 +1,104 @@
+name: Release
+
+# Every push to main does one of two things, decided by `plan`:
+# - the version in Cargo.toml has no tag yet (the release pull request was just merged):
+#   publish the crate, then tag it and create the GitHub release;
+# - otherwise: open or update the release pull request from the pending change files.
+# See docs/releasing.md.
+on:
+  push:
+    branches: [main]
+
+# One release at a time, and never cancel one half-way through.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tagged: ${{ steps.plan.outputs.tagged }}
+      pending: ${{ steps.plan.outputs.pending }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 --locked \
+            | jq -r '.packages[] | select(.name == "agent-rs") | .version')
+          test -n "$version"
+          if git rev-parse --quiet --verify "refs/tags/v$version" > /dev/null; then tagged=true; else tagged=false; fi
+          if ls .changeset/*.md > /dev/null 2>&1; then pending=true; else pending=false; fi
+          echo "version=$version tagged=$tagged pending=$pending"
+          { echo "version=$version"; echo "tagged=$tagged"; echo "pending=$pending"; } >> "$GITHUB_OUTPUT"
+
+  release-pr:
+    needs: plan
+    if: needs.plan.outputs.tagged == 'true' && needs.plan.outputs.pending == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # A pull request opened with the default token does not start other workflows, so CI will
+      # not run on the release pull request unless RELEASE_TOKEN (a personal access token with
+      # write access to contents and pull requests) is set.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - uses: knope-dev/action@v2.1.2
+        with:
+          version: 0.23.2
+      - run: knope prepare-release --verbose
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+  publish:
+    needs: plan
+    if: needs.plan.outputs.tagged == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the tag and the GitHub release
+      id-token: write # trusted publishing: crates.io exchanges this job's identity for a token
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+      # Makes a re-run safe after a failure between publishing and tagging.
+      - id: registry
+        run: |
+          status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --user-agent "agent-rs-release-workflow" "https://crates.io/api/v1/crates/agent-rs/$VERSION")
+          echo "crates.io answered $status for agent-rs $VERSION"
+          case "$status" in
+            200) echo "published=true" >> "$GITHUB_OUTPUT" ;;
+            404) echo "published=false" >> "$GITHUB_OUTPUT" ;;
+            *) exit 1 ;;
+          esac
+      - id: auth
+        if: steps.registry.outputs.published == 'false'
+        uses: rust-lang/crates-io-auth-action@v1
+      - if: steps.registry.outputs.published == 'false'
+        run: cargo publish -p agent-rs --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+      - uses: knope-dev/action@v2.1.2
+        with:
+          version: 0.23.2
+      - run: knope release --verbose
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

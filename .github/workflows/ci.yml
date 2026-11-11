@@ -45,3 +45,17 @@ jobs:
       - run: cargo package -p agent-rs --locked
       # The verification build covers the library only; the packaged examples must compile too.
       - run: cd target/package/agent-rs-*/ && cargo check --all-features --examples
+  # knope.toml and any pending change files must be usable before they reach main, where the
+  # release workflow runs them for real.
+  release-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: knope-dev/action@v2.1.2
+        with:
+          version: 0.23.2
+      - run: knope --validate
+      - run: |
+          if ls .changeset/*.md > /dev/null 2>&1; then knope prepare-release --dry-run; fi

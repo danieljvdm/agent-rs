@@ -168,7 +168,7 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 cargo fmt --check
 ```
 
-`rust-toolchain.toml` pins the toolchain CI uses. [Benchmarks](https://github.com/danieljvdm/agent-rs/blob/main/docs/benchmarks.md) and [verification](https://github.com/danieljvdm/agent-rs/blob/main/docs/verification.md) describe how cost and behaviour are measured.
+`rust-toolchain.toml` pins the toolchain CI uses. [Benchmarks](https://github.com/danieljvdm/agent-rs/blob/main/docs/benchmarks.md) and [verification](https://github.com/danieljvdm/agent-rs/blob/main/docs/verification.md) describe how cost and behaviour are measured. [Releasing](https://github.com/danieljvdm/agent-rs/blob/main/docs/releasing.md) covers change files and how a version is published.
 
 ## License
 
