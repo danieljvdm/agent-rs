@@ -23,6 +23,11 @@ use std::{
 use tokio::{sync::mpsc, time::Instant};
 use tokio_util::sync::CancellationToken;
 
+mod subagent;
+use futures::future::Either;
+pub use subagent::Subagent;
+use subagent::{ChildWindow, Subagents};
+
 type Validator = fn(&Value) -> serde_json::Result<()>;
 /// Encodes a run's input. Input that already is a `Value` is moved, not copied.
 fn into_json<T: Serialize + 'static>(input: T) -> Result<Value> {
@@ -103,9 +108,12 @@ struct Definition {
     instructions: Arc<str>,
     model: Arc<dyn Model>,
     config: Arc<ModelConfig>,
-    /// Tools by name. `tool_specs` keeps their declaration order for the model.
+    /// Tools by name. `tool_specs` keeps their declaration order for the model, followed by the
+    /// delegation specs of any subagents.
     tools: HashMap<String, Arc<dyn Tool>>,
     tool_specs: Arc<[ToolSpec]>,
+    /// Child agents the model calls like tools, if any were configured.
+    subagents: Option<Subagents>,
     limits: Limits,
     input_schema: Value,
     output_schema: Arc<Value>,
@@ -144,6 +152,7 @@ impl Agent {
             limits: Limits::default(),
             authorizer: Arc::new(AllowAll),
             context_policy: None,
+            subagents: None,
             types: PhantomData,
         }
     }
@@ -205,6 +214,9 @@ impl<I, O> Agent<I, O> {
             history: vec![input_entry],
             pending_response: None,
             operations: vec![],
+            parent: None,
+            children: vec![],
+            child_usage: Usage::default(),
         })
     }
     /// The same agent with its types erased, to serve beside agents of other types or to
@@ -267,15 +279,11 @@ impl<I: Serialize + 'static, O: DeserializeOwned> Agent<I, O> {
     /// ```
     pub async fn run(&self, conversation: &mut Conversation, input: impl Into<I>) -> Result<O> {
         conversation.check_owns_last_run()?;
-        if conversation.last_run.as_ref().is_some_and(|run| {
-            !run.is_terminal()
-                || run.operations.iter().any(|operation| {
-                    matches!(
-                        operation.status,
-                        OperationStatus::Unknown { .. } | OperationStatus::Dispatched
-                    )
-                })
-        }) {
+        if conversation
+            .last_run
+            .as_ref()
+            .is_some_and(|run| !run.is_terminal() || run.has_uncertainty())
+        {
             return Err(Error::ConversationBusy);
         }
         let input = into_json(input.into())?;
@@ -337,14 +345,43 @@ impl Definition {
         if !adapter.is_null() {
             binding["model_adapter"] = adapter;
         }
+        if let Some(subagents) = &self.subagents {
+            binding["subagents"] = subagents.binding();
+        }
         binding
     }
-    /// The tool an operation recorded, provided this definition has it under the same contract.
-    fn recorded_tool(&self, op: &Operation) -> Result<&Arc<dyn Tool>> {
-        self.tools
-            .get(&op.call.name)
-            .filter(|tool| tool.spec() == &op.spec)
+    /// What the model's call of `name` runs: the one place an operation is classified.
+    fn work(&self, name: &str) -> Option<Work<'_>> {
+        match self.tools.get(name) {
+            Some(tool) => Some(Work::Tool(tool)),
+            None => self.subagents.as_ref()?.get(name).map(Work::Delegate),
+        }
+    }
+    /// What an operation recorded runs, provided this definition has it under the same contract.
+    fn recorded(&self, op: &Operation) -> Result<Work<'_>> {
+        self.work(&op.call.name)
+            .filter(|work| work.spec() == &op.spec)
             .ok_or_else(|| Error::incompatible(format!("tool contract differs: {}", op.call.name)))
+    }
+}
+/// What one operation runs: a tool, or a delegation to a child agent.
+#[derive(Clone, Copy)]
+enum Work<'a> {
+    Tool(&'a Arc<dyn Tool>),
+    Delegate(&'a Subagent),
+}
+impl Work<'_> {
+    fn spec(&self) -> &ToolSpec {
+        match self {
+            Self::Tool(tool) => tool.spec(),
+            Self::Delegate(subagent) => subagent.spec(),
+        }
+    }
+    fn validate(&self, arguments: &Value) -> Result<()> {
+        match self {
+            Self::Tool(tool) => tool.validate(arguments),
+            Self::Delegate(subagent) => subagent.validate(arguments),
+        }
     }
 }
 
@@ -364,6 +401,7 @@ pub struct AgentBuilder<I = Value, O = Value> {
     limits: Limits,
     authorizer: Arc<dyn Authorizer>,
     context_policy: Option<(Arc<dyn ContextPolicy>, usize)>,
+    subagents: Option<(usize, Vec<Subagent>)>,
     types: PhantomData<fn(I) -> O>,
 }
 impl<I, O> AgentBuilder<I, O> {
@@ -407,6 +445,17 @@ impl<I, O> AgentBuilder<I, O> {
         self.context_policy = Some((policy, max_derived_bytes));
         self
     }
+    /// Child agents the model can delegate to, each called like a tool; see [`Subagent`]. At
+    /// most `max_parallel` children run at once, 1..=1024, beside up to `max_parallel_tools`
+    /// tools. Replaces any subagents set before.
+    pub fn subagents(
+        mut self,
+        max_parallel: usize,
+        subagents: impl IntoIterator<Item = Subagent>,
+    ) -> Self {
+        self.subagents = Some((max_parallel, subagents.into_iter().collect()));
+        self
+    }
     /// Names the input type. The agent publishes its JSON schema and rejects input that does not
     /// deserialize as `T`.
     pub fn input<T>(self) -> AgentBuilder<T, O> {
@@ -427,6 +476,7 @@ impl<I, O> AgentBuilder<I, O> {
             limits: self.limits,
             authorizer: self.authorizer,
             context_policy: self.context_policy,
+            subagents: self.subagents,
             types: PhantomData,
         }
     }
@@ -438,8 +488,10 @@ where
 {
     /// Checks the definition and composes its binding. Fails with [`Error::Config`] for an ID
     /// outside 1..=256 bytes, a zero parallelism, byte limit or timeout, a duplicate, unbounded
-    /// or unversioned tool name, an idempotent tool without a retry contract, or a derived
-    /// context cap above `max_context_bytes`.
+    /// or unversioned tool name, an idempotent tool without a retry contract, a derived
+    /// context cap above `max_context_bytes`, or subagents whose parallelism is outside
+    /// 1..=1024, whose names are unbounded or shared with a tool or another subagent, or whose
+    /// agents have subagents of their own.
     pub fn build(self) -> Result<Agent<I, O>> {
         let Self {
             id,
@@ -450,6 +502,7 @@ where
             limits,
             authorizer,
             context_policy,
+            subagents,
             types: _,
         } = self;
         if id.is_empty() || id.len() > 256 {
@@ -490,13 +543,23 @@ where
                 "derived context cap must fit the context limit",
             ));
         }
+        let subagents = subagents
+            .map(|(max_parallel, subagents)| Subagents::new(max_parallel, subagents, &by_name))
+            .transpose()?
+            .flatten();
         let mut definition = Definition {
             id,
             instructions: instructions.into(),
             model,
             config: Arc::new(config),
-            tool_specs: tools.iter().map(|tool| tool.spec().clone()).collect(),
+            tool_specs: match &subagents {
+                None => tools.iter().map(|tool| tool.spec().clone()).collect(),
+                Some(subagents) => (tools.iter().map(|tool| tool.spec().clone()))
+                    .chain(subagents.specs())
+                    .collect(),
+            },
             tools: by_name,
+            subagents,
             limits,
             input_schema: serde_json::to_value(schema_for!(I)).expect("schema serialization"),
             output_schema: Arc::new(
@@ -538,6 +601,15 @@ where
 ///   sets `state.phase` to `Ready`: the completed exchange stays in history, and the run goes on
 ///   to another model turn, which applies the instructions. Other settlements are final, and
 ///   instructions still queued then are never applied.
+///
+/// Steering targets a root run, never a child of an [attached subagent](crate::Subagent). A
+/// child's progress, admission and settlement reach its root's checkpoint as commits of the root,
+/// in [`Phase::Tools`]: the engine applies each to the root's copy of the child before the root
+/// commits, so they are the caller's changes, not the commit's, and a commit never changes
+/// `state.children`. None of these commits is a dispatch, so queued instructions wait for the
+/// root's own next model turn; a root completes only once every child has settled, so a reopened
+/// completion never leaves a child unsettled; and no child's history ever receives an
+/// instruction. Child work adds no exception to the list above.
 ///
 /// The engine checks every commit against this list and reports any other change as
 /// [`Error::Storage`].
@@ -697,23 +769,9 @@ impl Definition {
         if state.is_terminal() {
             return Ok(());
         }
-        let mut recovered = false;
-        if matches!(state.phase, Phase::ModelInFlight) {
-            state.phase = Phase::Ready;
-            recovered = true;
-        }
-        for op in &mut state.operations {
-            if matches!(op.status, OperationStatus::Dispatched) {
-                self.recorded_tool(op)?;
-                if op.spec.retry == RetryPolicy::Never {
-                    op.status = OperationStatus::Unknown {
-                        reason: "execution ended after dispatch without a recorded outcome".into(),
-                    };
-                    recovered = true;
-                }
-                // Keep retryable uncertain work Dispatched until it really retries. This
-                // preserves the uncertainty if cancellation arrives during authorization.
-            }
+        let mut recovered = self.recover(state)?;
+        if !state.children.is_empty() {
+            recovered |= subagent::recover_children(self, state)?;
         }
         if recovered {
             commit(checkpoint, state, &control).await?;
@@ -767,6 +825,29 @@ impl Definition {
             }
         }
     }
+    /// Recovers work an earlier execution left in flight: a model call is made again, and a
+    /// dispatched call that must not repeat becomes `Unknown`. Returns whether anything changed.
+    fn recover(&self, state: &mut RunState) -> Result<bool> {
+        let mut recovered = false;
+        if matches!(state.phase, Phase::ModelInFlight) {
+            state.phase = Phase::Ready;
+            recovered = true;
+        }
+        for op in &mut state.operations {
+            if matches!(op.status, OperationStatus::Dispatched) {
+                self.recorded(op)?;
+                if op.spec.retry == RetryPolicy::Never {
+                    op.status = OperationStatus::Unknown {
+                        reason: "execution ended after dispatch without a recorded outcome".into(),
+                    };
+                    recovered = true;
+                }
+                // Keep retryable uncertain work Dispatched until it really retries. This
+                // preserves the uncertainty if cancellation arrives during authorization.
+            }
+        }
+        Ok(recovered)
+    }
     async fn model_turn(
         &self,
         state: &mut RunState,
@@ -796,7 +877,8 @@ impl Definition {
                     derived_context,
                     tools: self.tool_specs.clone(),
                     output_schema: self.output_schema.clone(),
-                    turn: state.usage.model_calls,
+                    // Children's model calls are in the run's usage but are not its turns.
+                    turn: (state.usage.model_calls).saturating_sub(state.child_usage.model_calls),
                     max_response_bytes: state.limits.max_response_bytes,
                     remaining_tokens: state.limits.max_tokens.saturating_sub(
                         state
@@ -925,7 +1007,11 @@ impl Definition {
             .tools
             .iter()
             .map(|call| {
-                let spec = self.tools[&call.name].spec().clone();
+                let spec = self
+                    .work(&call.name)
+                    .expect("validated call")
+                    .spec()
+                    .clone();
                 let status = if spec.requires_approval {
                     OperationStatus::Approval
                 } else {
@@ -971,10 +1057,10 @@ impl Definition {
                     "tool call IDs must be unique and 1..256 bytes",
                 ));
             }
-            let Some(tool) = self.tools.get(&call.name) else {
+            let Some(work) = self.work(&call.name) else {
                 return Err(Error::model_output(format!("unknown tool {}", call.name)));
             };
-            tool.validate(&call.arguments)?;
+            work.validate(&call.arguments)?;
         }
         Ok(())
     }
@@ -994,8 +1080,8 @@ impl Definition {
             return Ok(());
         }
         loop {
-            let runnable = state.operations.iter().filter(|op| is_runnable(op)).count();
-            if runnable == 0 {
+            let startable = Startable::of(state);
+            if startable.count == 0 {
                 break;
             }
             if control.cancel.is_cancelled() || control.shutdown.is_cancelled() {
@@ -1010,12 +1096,15 @@ impl Definition {
                 )
                 .await;
             }
-            // Every remaining call must fit the call budget before any of them starts.
-            let runnable = u32::try_from(runnable).unwrap_or(u32::MAX);
-            if let Some(reason) = exhausted(state, false, runnable) {
+            // Every remaining call must fit the call budget before any of them starts. Resuming
+            // children spends nothing more: each holds its own allocation.
+            if startable.charged > 0
+                && let Some(reason) = exhausted(state, false, startable.charged)
+            {
                 return settle(checkpoint, state, control, Settlement::Stopped(reason)).await;
             }
-            self.tool_window(state, checkpoint, control).await?;
+            self.tool_window(state, checkpoint, control, &startable)
+                .await?;
             if is_expired(state) {
                 return settle(
                     checkpoint,
@@ -1025,7 +1114,9 @@ impl Definition {
                 )
                 .await;
             }
-            if state.operations.iter().any(|op| stops_dispatch(&op.status)) {
+            if state.operations.iter().any(|op| stops_dispatch(&op.status))
+                || !state.children.is_empty() && Startable::of(state).resume_only
+            {
                 return Ok(());
             }
         }
@@ -1038,16 +1129,26 @@ impl Definition {
     /// Each commit records the outcomes finished since the previous one together with the
     /// `Dispatched` intent of the operations about to take their slots, so no operation runs
     /// before its intent is durable and no unstarted operation is committed as dispatched.
+    ///
+    /// A delegation takes a slot of its own, up to the subagents' `max_parallel`: its intent is
+    /// the child's admission, and its execution drives the child, whose commits this window makes
+    /// as commits of the run (see `subagent`). A window that only resumes children reserves
+    /// nothing: they charge their own work.
     async fn tool_window(
         &self,
         state: &mut RunState,
         checkpoint: &dyn Checkpoint,
         control: &RunControl,
+        startable: &Startable,
     ) -> Result<()> {
-        let (reservation, _) = reserve(state);
-        // Reserve before authorization too, so retries cannot replenish its active-work budget.
-        commit(checkpoint, state, control).await?;
+        let mut reservation = 0;
+        if startable.charged > 0 {
+            reservation = reserve(state).0;
+            // Reserve before authorization too, so retries cannot replenish its active-work budget.
+            commit(checkpoint, state, control).await?;
+        }
         let mut window = Window::new(reservation);
+        window.resume_only = startable.resume_only;
         let mut in_flight = FuturesUnordered::new();
         loop {
             let mut admitted = if window.open {
@@ -1063,7 +1164,7 @@ impl Definition {
                 window.refund(state);
             }
             if window.storage.is_none()
-                && (window.unsaved || !admitted.is_empty() || closing && window.interrupted)
+                && (window.unsaved || intends(&admitted) || closing && window.interrupted)
             {
                 if !admitted.is_empty() {
                     let count = admitted.len();
@@ -1084,24 +1185,40 @@ impl Definition {
             }
             for admission in admitted {
                 let op = &state.operations[admission.index];
+                let tool = match admission.start {
+                    Start::Tool(tool) => tool,
+                    Start::Child(child) => {
+                        let future =
+                            self.start_child(state, &mut window, control, admission.index, child);
+                        in_flight.push(Either::Right(future));
+                        window.running += 1;
+                        continue;
+                    }
+                };
                 let context = ToolContext {
                     run_id: state.id,
                     call_id: op.call.id.clone(),
                     idempotency_key: op.idempotency_key.clone(),
                     cancel: CancellationToken::new(),
                 };
-                in_flight.push(execute(
-                    admission,
+                in_flight.push(Either::Left(execute(
+                    admission.index,
+                    tool,
+                    admission.deadline,
                     op.call.arguments.clone(),
                     context,
                     control,
                     state.limits.cleanup_timeout_ms,
-                ));
+                )));
                 window.running += 1;
             }
             // A storage failure never drops other live children. Drain and clean all of them first.
-            if let Some(finished) = in_flight.next().await {
-                window.record(state, finished);
+            match window.next(&mut in_flight).await {
+                Some(Event::Finished(finished)) => window.record(state, finished),
+                Some(Event::Commit(request)) => {
+                    subagent::commit_child(state, checkpoint, control, &mut window, request).await
+                }
+                None => {}
             }
         }
         window.result()
@@ -1118,12 +1235,11 @@ impl Definition {
         in_flight: &mut FuturesUnordered<F>,
     ) -> Vec<Admitted> {
         let mut admitted = Vec::new();
-        while window.open
-            && !window.sequential
-            && window.running + admitted.len() < state.limits.max_parallel_tools
-        {
+        let slots =
+            state.limits.max_parallel_tools + self.subagents.as_ref().map_or(0, |s| s.max_parallel);
+        while window.open && !window.sequential && window.running + admitted.len() < slots {
             let Some(index) =
-                (window.next..state.operations.len()).find(|&i| is_runnable(&state.operations[i]))
+                (window.next..state.operations.len()).find(|&i| window.startable(state, i))
             else {
                 break;
             };
@@ -1132,7 +1248,7 @@ impl Definition {
                 break;
             }
             match self
-                .admit_one(state, control, window, in_flight, index)
+                .admit_one(state, control, window, in_flight, index, &admitted)
                 .await
             {
                 Admission::Start(admission) => {
@@ -1140,6 +1256,10 @@ impl Definition {
                     window.sequential = sequential;
                     admitted.push(admission);
                 }
+                // Every slot of its kind is taken; it starts when one frees.
+                Admission::Wait => break,
+                // A delegation was answered without a child; move on.
+                Admission::Skip => window.next = index + 1,
                 Admission::Full => {
                     window.open = false;
                 }
@@ -1158,6 +1278,7 @@ impl Definition {
         window: &mut Window,
         in_flight: &mut FuturesUnordered<F>,
         index: usize,
+        admitted: &[Admitted],
     ) -> Admission {
         if control.cancel.is_cancelled() || control.shutdown.is_cancelled() {
             window.interrupted = true;
@@ -1166,11 +1287,24 @@ impl Definition {
         if is_expired(state) {
             return Admission::Stop;
         }
-        let tool = match self.recorded_tool(&state.operations[index]) {
-            Ok(tool) => tool.clone(),
+        let work = match self.recorded(&state.operations[index]) {
+            Ok(work) => work,
             Err(error) => {
                 window.failure = Some(error);
                 return Admission::Stop;
+            }
+        };
+        let delegation = match work {
+            Work::Tool(_) if self.subagents.is_some() && !window.tool_slot(state, admitted) => {
+                return Admission::Wait;
+            }
+            Work::Tool(_) => None,
+            // A child that is resumed, waits for a slot or cannot be allocated is decided here.
+            Work::Delegate(subagent) => {
+                match subagent::prepare(self, state, window, index, subagent, admitted) {
+                    Ok(()) => Some(subagent),
+                    Err(admission) => return admission,
+                }
             }
         };
         let Some(deadline) = window.cover(state) else {
@@ -1221,6 +1355,12 @@ impl Definition {
         if !window.open {
             return Admission::Stop;
         }
+        if let Some(subagent) = delegation {
+            return subagent::admit(state, window, index, subagent, deadline);
+        }
+        let Work::Tool(tool) = work else {
+            unreachable!("a delegation was admitted above")
+        };
         // Measure the operation's own timeout from now, after its authorization.
         let Some(deadline) = window.cover(state) else {
             return Admission::Full;
@@ -1232,7 +1372,7 @@ impl Definition {
             index,
             previous,
             sequential: op.spec.execution == Execution::Sequential,
-            tool,
+            start: Start::Tool(tool.clone()),
             deadline,
         })
     }
@@ -1307,6 +1447,58 @@ fn stops_dispatch(status: &OperationStatus) -> bool {
         OperationStatus::Waiting(_) | OperationStatus::Unknown { .. }
     )
 }
+/// Whether a round of admissions records new intent to commit before anything starts. Resuming
+/// an admitted child changes nothing that is not already durable.
+fn intends(admitted: &[Admitted]) -> bool {
+    admitted
+        .iter()
+        .any(|admission| !matches!(admission.previous, OperationStatus::Child { .. }))
+}
+/// What the current batch can start, found in one pass over its operations.
+struct Startable {
+    /// Operations that can start now.
+    count: usize,
+    /// Of those, the ones that start a tool call or a delegation and count against
+    /// `max_tool_calls`; resuming an admitted child does not.
+    charged: u32,
+    /// A child is blocked on approval, input, reconciliation or a timer. Like a waiting call it
+    /// stops new dispatch, but children that can progress still resume.
+    resume_only: bool,
+}
+impl Startable {
+    fn of(state: &RunState) -> Self {
+        let mut charged = 0_usize;
+        let mut resumable = 0;
+        let mut blocked = false;
+        let mut now = None;
+        for op in &state.operations {
+            match op.status {
+                OperationStatus::Pending | OperationStatus::Dispatched => charged += 1,
+                OperationStatus::Child { run_id } => {
+                    if subagent::resumable(state, run_id, *now.get_or_insert_with(now_ms)) {
+                        resumable += 1;
+                    } else {
+                        blocked = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if blocked {
+            Self {
+                count: resumable,
+                charged: 0,
+                resume_only: true,
+            }
+        } else {
+            Self {
+                count: charged + resumable,
+                charged: u32::try_from(charged).unwrap_or(u32::MAX),
+                resume_only: false,
+            }
+        }
+    }
+}
 
 /// Whole milliseconds, rounded up, as active time is charged.
 fn ceil_ms(duration: Duration) -> u64 {
@@ -1326,6 +1518,8 @@ struct Window {
     sequential: bool,
     /// Further operations may still be admitted.
     open: bool,
+    /// A child is blocked, so only children that can progress may start; see [`Startable`].
+    resume_only: bool,
     /// Outcomes have been recorded since the last commit.
     unsaved: bool,
     interrupted: bool,
@@ -1333,6 +1527,8 @@ struct Window {
     /// returns, once the window drains.
     failure: Option<Error>,
     storage: Option<Error>,
+    /// Children running in this window, from the first one started.
+    children: Option<ChildWindow>,
 }
 impl Window {
     fn new(reserved_ms: u64) -> Self {
@@ -1343,10 +1539,20 @@ impl Window {
             running: 0,
             sequential: false,
             open: true,
+            resume_only: false,
             unsaved: false,
             interrupted: false,
             failure: None,
             storage: None,
+            children: None,
+        }
+    }
+    /// Whether the operation at `index` can start in this window.
+    fn startable(&self, state: &RunState, index: usize) -> bool {
+        let op = &state.operations[index];
+        match op.status {
+            OperationStatus::Child { run_id } => subagent::resumable(state, run_id, now_ms()),
+            _ => !self.resume_only && is_runnable(op),
         }
     }
     /// Extends the reservation so that an operation starting now can use its whole timeout and
@@ -1375,11 +1581,14 @@ impl Window {
         (deadline > now).then_some(deadline)
     }
     fn record(&mut self, state: &mut RunState, finished: Finished) {
-        let Finished {
-            index,
-            outcome,
-            cleanup,
-        } = finished;
+        let (index, outcome, cleanup) = match finished {
+            Finished::Tool {
+                index,
+                outcome,
+                cleanup,
+            } => (index, outcome, cleanup),
+            Finished::Child { index, result } => return self.record_child(state, index, result),
+        };
         if matches!(outcome, WorkOutcome::Interrupted) {
             self.interrupted = true;
         }
@@ -1396,7 +1605,14 @@ impl Window {
     }
     /// Undoes admissions whose intent was never committed. Those operations never started.
     fn revert(&mut self, state: &mut RunState, admitted: &mut Vec<Admitted>) {
-        for admission in admitted.drain(..) {
+        // In reverse, so each child admitted in this round is the last one when it is removed.
+        for admission in admitted.drain(..).rev() {
+            if let Start::Child(child) = admission.start {
+                if matches!(admission.previous, OperationStatus::Child { .. }) {
+                    continue;
+                }
+                subagent::unadmit(state, child);
+            }
             state.operations[admission.index].status = admission.previous;
             state.usage.tool_calls -= 1;
             if admission.sequential {
@@ -1405,8 +1621,14 @@ impl Window {
         }
     }
     /// Charges the wall-clock time the window was open and returns the rest of its reservation.
+    /// Time in which only children ran is theirs: each child charges its own work.
     fn refund(&self, state: &mut RunState) {
-        refund(state, self.reserved_ms, self.started.elapsed());
+        let idle = self.children.as_ref().map_or(Duration::ZERO, |c| c.idle);
+        refund(
+            state,
+            self.reserved_ms,
+            self.started.elapsed().saturating_sub(idle),
+        );
     }
     fn result(self) -> Result<()> {
         if let Some(error) = self.storage {
@@ -1417,47 +1639,79 @@ impl Window {
         }
         self.failure.map_or(Ok(()), Err)
     }
+    /// The next operation to finish or, while children run, the next child commit to make.
+    async fn next<F: Future<Output = Finished>>(
+        &mut self,
+        in_flight: &mut FuturesUnordered<F>,
+    ) -> Option<Event> {
+        let Some(children) = &mut self.children else {
+            return in_flight.next().await.map(Event::Finished);
+        };
+        // Children stop when the run cannot go on: cancelled if it fails, stopped otherwise.
+        if self.failure.as_ref().is_some_and(Error::fails_run) {
+            children.cancel.cancel();
+        } else if self.failure.is_some() || self.storage.is_some() {
+            children.shutdown.cancel();
+        }
+        children.next(in_flight, self.running).await
+    }
+}
+/// What a window waits for next.
+enum Event {
+    Finished(Finished),
+    Commit(subagent::ChildCommit),
 }
 /// An operation marked `Dispatched` in memory, waiting for its intent to be committed.
 struct Admitted {
     index: usize,
     previous: OperationStatus,
     sequential: bool,
-    tool: Arc<dyn Tool>,
+    start: Start,
     deadline: Instant,
+}
+/// What an admission starts once its intent is durable.
+enum Start {
+    Tool(Arc<dyn Tool>),
+    /// The child at this index of `RunState::children`: just admitted, or resumed when the
+    /// operation already was `Child`.
+    Child(usize),
 }
 enum Admission {
     Start(Admitted),
+    /// Every slot for this kind of operation is taken.
+    Wait,
+    /// The operation was answered without starting anything.
+    Skip,
     /// The active budget leaves no time for another operation in this window.
     Full,
     /// Nothing more may start; this round's admissions are undone.
     Stop,
 }
-struct Finished {
-    index: usize,
-    outcome: WorkOutcome<ToolOutput<Value>>,
-    cleanup: std::result::Result<Result<()>, tokio::time::error::Elapsed>,
+enum Finished {
+    Tool {
+        index: usize,
+        outcome: WorkOutcome<ToolOutput<Value>>,
+        cleanup: std::result::Result<Result<()>, tokio::time::error::Elapsed>,
+    },
+    /// A child's execution returned: it settled, it is blocked, or it was stopped.
+    Child { index: usize, result: Result<()> },
 }
 /// Executes one admitted operation, then always runs its cleanup.
 async fn execute(
-    admission: Admitted,
+    index: usize,
+    tool: Arc<dyn Tool>,
+    deadline: Instant,
     arguments: Value,
     context: ToolContext,
     control: &RunControl,
     cleanup_ms: u64,
 ) -> Finished {
-    let tool = admission.tool;
-    let outcome = run_work(
-        tool.execute(arguments, context.clone()),
-        admission.deadline,
-        control,
-    )
-    .await;
+    let outcome = run_work(tool.execute(arguments, context.clone()), deadline, control).await;
     context.cancel.cancel();
     let cleanup =
         tokio::time::timeout(Duration::from_millis(cleanup_ms), tool.cleanup(context)).await;
-    Finished {
-        index: admission.index,
+    Finished::Tool {
+        index,
         outcome,
         cleanup,
     }
@@ -1678,6 +1932,7 @@ fn emit(state: &RunState, control: &RunControl, kind: ProgressKind) {
     if let Some(sender) = &control.events {
         let _ = sender.try_send(ProgressEvent {
             run_id: state.id,
+            parent_run_id: state.parent.as_ref().map(|parent| parent.run_id),
             kind,
         });
     }
@@ -1688,6 +1943,7 @@ async fn commit(
     control: &RunControl,
 ) -> Result<()> {
     let (phase, history_len) = (std::mem::discriminant(&state.phase), state.history.len());
+    let children = children_len(state);
     let steering = Boundary::of(state);
     checkpoint
         .commit(state)
@@ -1701,7 +1957,7 @@ async fn commit(
     // steering needs nothing more: context is assembled after the dispatch commit. A reopened
     // settlement is handled by `settle`, which returns into the drive loop.
     let allowed = match steering {
-        _ if state.history.len() < history_len => false,
+        _ if state.history.len() < history_len || children_len(state) != children => false,
         Boundary::Apply => {
             std::mem::discriminant(&state.phase) == phase
                 && state.history[history_len..]
@@ -1729,6 +1985,12 @@ async fn commit(
     );
     Ok(())
 }
+/// How many children a run holds and how much history they hold together: no commit changes
+/// either, since a child's commits are applied to its root by the engine before the root commits.
+fn children_len(state: &RunState) -> (usize, usize) {
+    let history = (state.children.iter()).map(|child| child.state.history.len());
+    (state.children.len(), history.sum())
+}
 async fn settle(
     checkpoint: &dyn Checkpoint,
     state: &mut RunState,
@@ -1736,6 +1998,14 @@ async fn settle(
     settlement: Settlement,
 ) -> Result<()> {
     uncertain_dispatched(state, "execution settled without a recorded tool outcome");
+    // A run completes only after its tool batch, so every child has settled and a completion
+    // that steering reopens has cancelled nothing.
+    debug_assert!(
+        !matches!(settlement, Settlement::Completed(_))
+            || state.children.iter().all(|child| child.state.is_terminal())
+    );
+    // A settled run owns no unsettled children; their work stopped with the last window.
+    crate::children::cancel_unsettled(state);
     state.phase = Phase::Settled(settlement);
     commit(checkpoint, state, control).await?;
     // A completion that queued steering reopened is not a settlement; the drive loop goes on.

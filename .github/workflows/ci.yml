@@ -20,4 +20,5 @@ jobs:
       - run: cargo bench --bench agent_loop --locked -- --test
       - run: cargo bench --bench model_adapters --locked -- --test
       - run: cargo bench --bench steering_schedule --locked -- --test
+      - run: cargo bench --bench attached_subagents --locked -- --test
       - run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py

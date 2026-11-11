@@ -2,6 +2,8 @@
 
 The engine owns a serializable `RunState`, with phases `Ready`, `ModelInFlight`, `Tools`, and `Settled`. The durable host drives that same engine over any `DurableStore` (`src/store.rs`), which extends the engine's atomic `Checkpoint` boundary with acceptance, claiming, application updates, and discovery. `MemoryStore` is the in-process reference implementation; SQLite is an optional file-backed adapter. `tests/storage_conformance.rs` runs the same contract against both. Futures are never serialized.
 
+[Attached subagents](attached-subagents.md) commit inside their parent's checkpoint and fence. A child's admission commits with its input, identity, allocation and the parent's dependency on it; its settlement commits with the parent's result for the delegation and the reconciliation of its budget. Children are never discovered or claimed on their own.
+
 ## Commit protocol
 
 1. Acceptance atomically stores the immutable acceptance (input, binding, limits, expiry, and bounded prior context), initial history, idempotency mapping, and the run's first checkpoint. The caller receives a RunId only after commit. Idempotency keys are scoped to conversations; conflicting payloads are rejected, including changed binding or expiry. Only one run may be unsettled per conversation.
@@ -61,4 +63,4 @@ Status and history are authoritative after reconnect. Progress events and text d
 
 ## Deliberate differences from Yielded Agent
 
-This implementation takes its behavioral reference from `yielded-dev/agent` at `549daa3c7aa65dfbaeded9dccc6dd342f1706bd7`, without TypeScript API or data-format compatibility. It uses one public RunId, one active run per conversation, ordinary tools and typed final output, straightforward budgets, and constructors/traits at real boundaries. It supports queued steering at model boundaries and omits in-flight preemption, input joining, multiple completion protocols, detached observation modes, ambient service graphs, distributed ownership, advanced compaction, subagents, and MCP.
+This implementation takes its behavioral reference from `yielded-dev/agent` at `549daa3c7aa65dfbaeded9dccc6dd342f1706bd7`, without TypeScript API or data-format compatibility. It uses one public RunId per run or child, one active run per conversation, ordinary tools and typed final output, straightforward budgets, and constructors/traits at real boundaries. It supports queued steering at model boundaries and omits in-flight preemption, input joining, multiple completion protocols, detached observation modes, ambient service graphs, distributed ownership, advanced compaction, nested or detached subagents, and MCP.

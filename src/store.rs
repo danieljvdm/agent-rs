@@ -79,6 +79,16 @@ pub enum RunUpdate {
     },
     /// Clear a recorded host error so the run is discovered again.
     Retry,
+    /// Resolve one outstanding approval, input wait, or unknown outcome of a child, as for
+    /// [`RunState::resolve_child`]. The run's revision advances, fencing any older execution.
+    ResolveChild {
+        /// The child's [`RunState::id`].
+        child_id: RunId,
+        /// The [`ToolCall::id`](crate::ToolCall::id) of the child's waiting call.
+        call_id: String,
+        /// The answer, as for [`RunState::resolve`].
+        resolution: Resolution,
+    },
 }
 /// What a store must persist after [`RunUpdate::apply`] changed a run.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -115,6 +125,14 @@ impl RunUpdate {
                 state.resolve(&call_id, resolution)?;
                 Ok(changed)
             }
+            Self::ResolveChild {
+                child_id,
+                call_id,
+                resolution,
+            } => {
+                state.resolve_child(child_id, &call_id, resolution)?;
+                Ok(changed)
+            }
             Self::Retry if state.is_terminal() => Err(Error::Stale),
             Self::Retry => Ok(UpdateEffect {
                 clear_error: true,
@@ -140,6 +158,12 @@ impl RunUpdate {
 ///   binding, input, limits, expiry and bounded prior context. Later writes never change
 ///   them; a commit persists only progress (phase, usage, cancellation, pending response,
 ///   operations) and appends history. History is append-only.
+/// - **Children.** A run's [`children`](RunState::children) commit with it, in the same
+///   write. A commit adds each newly admitted child, with its acceptance fixed as a run's is,
+///   and persists the progress and new history of each child whose revision advanced; a child
+///   whose revision is unchanged is unchanged. Children are read through their run: a child's
+///   ID is not a run of the store, but `operations` retains a child's operations and `history`
+///   its conversation, as for a run.
 /// - **Fencing.** A commit succeeds only if the stored run is unsettled and its generation
 ///   and revision equal the caller's; otherwise it fails with [`Error::Stale`] and writes
 ///   nothing. Success advances the revision by one. `claim` advances both generation and
@@ -192,7 +216,8 @@ pub trait DurableStore: Checkpoint {
     async fn last_error(&self, id: RunId) -> Result<Option<String>>;
     /// The conversation's retained history in commit order, across all its runs.
     async fn history(&self, conversation: &str) -> Result<Vec<HistoryEntry>>;
-    /// Every operation the run has recorded, across batches, in first-recorded order.
+    /// Every operation the run, or the child with this ID, has recorded, across batches, in
+    /// first-recorded order.
     async fn operations(&self, id: RunId) -> Result<Vec<Operation>>;
 
     /// Persist a cancellation request with [`RunUpdate::Cancel`].

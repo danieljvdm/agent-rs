@@ -14,6 +14,8 @@
 //!   that applied it. A queued instruction is not history yet: the model dispatch commit appends
 //!   it to `history` at the run's next ordinals, in the same transaction that marks it applied.
 //!   The table is created additively in `steering_queue`, within schema version 2.
+//! - `children` holds one progress row per child a run's delegations admitted; see `children`.
+mod children;
 use crate::steering::Boundary;
 use crate::store;
 use crate::types::STATE_VERSION;
@@ -76,9 +78,13 @@ pub struct SqliteStore {
     /// Only a hint for which entries to encode: the worker checks it against the stored
     /// length, and a missing hint encodes the run's whole history.
     history_hints: Mutex<HashMap<RunId, usize>>,
+    /// The same for children: the revision and history length stored for each, so a commit
+    /// encodes only the children it changed. A missing hint encodes the whole child.
+    child_hints: Mutex<children::Hints>,
 }
 
-/// The part of a `RunState` a commit may change, other than appending history.
+/// The part of a `RunState` a commit may change, other than appending history. A run that has
+/// admitted children also records their usage and how many there are.
 #[derive(Serialize)]
 struct ProgressRef<'a> {
     cancel_requested: bool,
@@ -86,6 +92,13 @@ struct ProgressRef<'a> {
     usage: &'a Usage,
     pending_response: &'a Option<ModelResponse>,
     operations: &'a [Operation],
+    #[serde(skip_serializing_if = "is_zero")]
+    children: usize,
+    #[serde(skip_serializing_if = "Usage::is_zero")]
+    child_usage: &'a Usage,
+}
+fn is_zero(count: &usize) -> bool {
+    *count == 0
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -95,6 +108,23 @@ struct Progress {
     usage: Usage,
     pending_response: Option<ModelResponse>,
     operations: Vec<Operation>,
+    #[serde(default)]
+    children: usize,
+    #[serde(default)]
+    child_usage: Usage,
+}
+impl<'a> ProgressRef<'a> {
+    fn of(state: &'a RunState) -> Self {
+        Self {
+            cancel_requested: state.cancel_requested,
+            phase: &state.phase,
+            usage: &state.usage,
+            pending_response: &state.pending_response,
+            operations: &state.operations,
+            children: state.children.len(),
+            child_usage: &state.child_usage,
+        }
+    }
 }
 
 /// Everything one write persists, encoded from a borrow of the caller's state.
@@ -113,6 +143,8 @@ struct Delta {
     operations: Vec<(String, String)>,
     /// What queued steering does to this write, as `Checkpoint` allows.
     steering: Boundary,
+    /// The children this write changed; empty unless the run has children.
+    children: Vec<children::ChildDelta>,
 }
 impl Delta {
     fn encode(
@@ -126,13 +158,7 @@ impl Delta {
             id: state.id.to_string(),
             conversation: state.conversation_id.clone(),
             revision,
-            progress: encode(&ProgressRef {
-                cancel_requested: state.cancel_requested,
-                phase: &state.phase,
-                usage: &state.usage,
-                pending_response: &state.pending_response,
-                operations: &state.operations,
-            })?,
+            progress: encode(&ProgressRef::of(state))?,
             settled: state.is_terminal(),
             wake_at: if wake_now {
                 Some(0)
@@ -152,6 +178,7 @@ impl Delta {
                 .map(|op| Ok((op.call.id.clone(), encode(op)?)))
                 .collect::<Result<_>>()?,
             steering,
+            children: Vec::new(),
         })
     }
 }
@@ -174,6 +201,8 @@ enum Written {
     /// A completed settlement found steering queued: nothing was written, and the caller
     /// commits `Ready` instead.
     Reopen,
+    /// A child's stored progress does not match the hints it was encoded from.
+    NeedChildren,
 }
 
 fn encode(value: &impl Serialize) -> Result<String> {
@@ -275,6 +304,10 @@ impl Database {
             CREATE TABLE IF NOT EXISTS operations (
                 run_id TEXT NOT NULL REFERENCES runs(id), call_id TEXT NOT NULL, operation TEXT NOT NULL,
                 PRIMARY KEY(run_id, call_id));
+            CREATE TABLE IF NOT EXISTS children (
+                child_id TEXT PRIMARY KEY REFERENCES runs(id), root_id TEXT NOT NULL REFERENCES runs(id),
+                ordinal INTEGER NOT NULL, call_id TEXT NOT NULL, revision INTEGER NOT NULL,
+                history_len INTEGER NOT NULL, progress TEXT NOT NULL, UNIQUE(root_id, ordinal));
             PRAGMA user_version=2; COMMIT;",
             )
             .map_err(Error::storage)?;
@@ -328,27 +361,9 @@ fn load(connection: &Connection, id: RunId) -> Result<RunState> {
             "checkpoint state version {version}"
         )));
     }
-    let history_len = usize::try_from(history_len).map_err(Error::storage)?;
-    let history = {
-        let mut stmt = connection
-            .prepare_cached(
-                "SELECT entry FROM history WHERE run_id=?1 AND ordinal<?2 ORDER BY ordinal",
-            )
-            .map_err(Error::storage)?;
-        let rows = stmt
-            .query_map(params![key, history_len as i64], |r| r.get::<_, String>(0))
-            .map_err(Error::storage)?;
-        rows.map(|row| decode(&row.map_err(Error::storage)?))
-            .collect::<Result<Vec<HistoryEntry>>>()?
-    };
-    if history.len() != history_len {
-        return Err(Error::storage(format!(
-            "run {id} records {history_len} history entries but {} are stored",
-            history.len()
-        )));
-    }
+    let history = load_history(connection, id, history_len)?;
     let progress: Progress = decode(&progress)?;
-    Ok(RunState {
+    let mut state = RunState {
         version: STATE_VERSION,
         id,
         conversation_id,
@@ -368,7 +383,34 @@ fn load(connection: &Connection, id: RunId) -> Result<RunState> {
         history,
         pending_response: progress.pending_response,
         operations: progress.operations,
-    })
+        parent: None,
+        children: Vec::new(),
+        child_usage: progress.child_usage,
+    };
+    if progress.children > 0 {
+        state.children = children::load(connection, &state, progress.children)?;
+    }
+    Ok(state)
+}
+/// The first `len` history entries of run `id`, in order.
+fn load_history(connection: &Connection, id: RunId, len: i64) -> Result<Vec<HistoryEntry>> {
+    let history_len = usize::try_from(len).map_err(Error::storage)?;
+    let mut stmt = connection
+        .prepare_cached("SELECT entry FROM history WHERE run_id=?1 AND ordinal<?2 ORDER BY ordinal")
+        .map_err(Error::storage)?;
+    let rows = stmt
+        .query_map(params![id.to_string(), len], |r| r.get::<_, String>(0))
+        .map_err(Error::storage)?;
+    let history = rows
+        .map(|row| decode(&row.map_err(Error::storage)?))
+        .collect::<Result<Vec<HistoryEntry>>>()?;
+    if history.len() != history_len {
+        return Err(Error::storage(format!(
+            "run {id} records {history_len} history entries but {} are stored",
+            history.len()
+        )));
+    }
+    Ok(history)
 }
 fn insert_history(
     tx: &Transaction<'_>,
@@ -487,6 +529,12 @@ fn write_delta(
     let mut writes = 1
         + insert_history(tx, &delta.id, &delta.conversation, stored, new)?
         + upsert_operations(tx, &delta.id, &delta.operations)?;
+    if !delta.children.is_empty() {
+        match children::write(tx, &delta.id, &delta.children)? {
+            Some(children) => writes += children,
+            None => return Ok(Written::NeedChildren),
+        }
+    }
     let (applied_writes, applied) = steering_queue::apply(tx, delta, queued)?;
     writes += applied_writes;
     Ok(Written::Done { writes, applied })
@@ -635,6 +683,7 @@ impl SqliteStore {
                 counters,
                 slot: HostSlot::default(),
                 history_hints: Mutex::new(HashMap::new()),
+                child_hints: Mutex::new(HashMap::new()),
             }),
             Err(error) => {
                 let _ = thread.join();
@@ -702,6 +751,26 @@ impl SqliteStore {
             .and_then(|hints| hints.get(&state.id).copied())
             .filter(|length| *length <= state.history.len())
             .unwrap_or(0)
+    }
+    /// Records what is now stored for each of the run's children, or forgets them.
+    fn hint_children(&self, state: &RunState, stored: bool) {
+        if let Ok(mut hints) = self.child_hints.lock() {
+            for child in &state.children {
+                let child = &child.state;
+                if stored && !state.is_terminal() {
+                    hints.insert(child.id, (child.revision, child.history.len()));
+                } else {
+                    hints.remove(&child.id);
+                }
+            }
+        }
+    }
+    fn encode_children(&self, state: &RunState) -> Result<Vec<children::ChildDelta>> {
+        let hints = self
+            .child_hints
+            .lock()
+            .map_err(|_| Error::storage("hint lock poisoned"))?;
+        children::changed(state, |id| hints.get(&id).copied())
     }
 }
 #[async_trait]
@@ -799,6 +868,9 @@ impl DurableStore for SqliteStore {
             })
             .await?;
         self.hint(id, Some(state.history.len()));
+        if !state.children.is_empty() {
+            self.hint_children(&state, true);
+        }
         Ok(state)
     }
     async fn update(&self, id: RunId, update: RunUpdate) -> Result<()> {
@@ -807,20 +879,25 @@ impl DurableStore for SqliteStore {
             let mut state = load(&tx, id)?;
             let fence = Fence::Update(CheckpointPosition::from(&state));
             let durable = state.history.len();
+            let stored = children::stored(&state);
             let effect = update.apply(&mut state)?;
             if !effect.changed {
                 return Ok(());
             }
             let revision = store::advance(state.revision, "revision")?;
             // Updates never apply steering: only an execution's commits may (see `Checkpoint`).
-            let delta = Delta::encode(&state, revision, durable, effect.wake_now, Boundary::None)?;
+            let mut delta =
+                Delta::encode(&state, revision, durable, effect.wake_now, Boundary::None)?;
+            if !state.children.is_empty() {
+                delta.children = children::changed(&state, |id| stored.get(&id).copied())?;
+            }
             match write_delta(&tx, &delta, fence, effect.clear_error)? {
                 Written::Done { writes, .. } => {
                     tx.commit().map_err(Error::storage)?;
                     db.count(writes);
                     Ok(())
                 }
-                Written::NeedHistoryFrom(_) | Written::Reopen => {
+                Written::NeedHistoryFrom(_) | Written::Reopen | Written::NeedChildren => {
                     Err(Error::storage("run history changed during update"))
                 }
             }
@@ -942,8 +1019,12 @@ impl Checkpoint for SqliteStore {
         let revision = store::advance(state.revision, "revision")?;
         let mut from = self.hinted(state);
         let mut settled = None;
+        let mut retried_children = false;
         let result = loop {
-            let delta = Delta::encode(state, revision, from, false, Boundary::of(state))?;
+            let mut delta = Delta::encode(state, revision, from, false, Boundary::of(state))?;
+            if !state.children.is_empty() {
+                delta.children = self.encode_children(state)?;
+            }
             let written = self
                 .call(move |db| {
                     let tx = db.connection.transaction().map_err(Error::storage)?;
@@ -968,8 +1049,19 @@ impl Checkpoint for SqliteStore {
                 Ok(Written::Reopen) => {
                     settled = Some(std::mem::replace(&mut state.phase, Phase::Ready));
                 }
+                // A child's hint was wrong; resend every child whole.
+                Ok(Written::NeedChildren) if !retried_children => {
+                    retried_children = true;
+                    self.hint_children(state, false);
+                }
+                Ok(Written::NeedChildren) => {
+                    break Err(Error::storage("checkpoint children changed during commit"));
+                }
                 Err(error) => {
                     self.hint(state.id, None);
+                    if !state.children.is_empty() {
+                        self.hint_children(state, false);
+                    }
                     break Err(error);
                 }
             }
@@ -984,6 +1076,9 @@ impl Checkpoint for SqliteStore {
         state.revision = revision;
         let settled = state.is_terminal();
         self.hint(state.id, (!settled).then_some(state.history.len()));
+        if !state.children.is_empty() {
+            self.hint_children(state, true);
+        }
         Ok(())
     }
 }

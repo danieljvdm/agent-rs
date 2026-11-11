@@ -3,7 +3,7 @@
 use crate::types::now_ms;
 use crate::{
     Agent, Checkpoint, CheckpointPosition, DurableStore, Error, ErrorDetail, ProgressEvent,
-    Resolution, Result, RunControl, RunId, RunState,
+    Resolution, Result, RunControl, RunId, RunState, RunUpdate,
 };
 use async_trait::async_trait;
 use std::{
@@ -230,6 +230,25 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
     /// not wait for this kind of answer.
     pub async fn resolve(&self, id: RunId, call_id: &str, resolution: Resolution) -> Result<()> {
         self.store.resolve(id, call_id, resolution).await?;
+        self.notify.notify_one();
+        Ok(())
+    }
+    /// Answers the wait of call `call_id` of the child `child_id` of run `id`, durably and under
+    /// the run's fence, as [`RunState::resolve_child`] does in memory, and wakes the host to
+    /// drive the run again. Siblings stay as they are.
+    pub async fn resolve_child(
+        &self,
+        id: RunId,
+        child_id: RunId,
+        call_id: &str,
+        resolution: Resolution,
+    ) -> Result<()> {
+        let update = RunUpdate::ResolveChild {
+            child_id,
+            call_id: call_id.to_owned(),
+            resolution,
+        };
+        self.store.update(id, update).await?;
         self.notify.notify_one();
         Ok(())
     }

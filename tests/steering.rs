@@ -1,5 +1,6 @@
-//! The steering contract, asserted identically against every `SteeringStore`. A new adapter adds
-//! a `Fixture` and one `steering_tests!` invocation.
+//! The steering contract, asserted identically against every `SteeringStore`, including runs
+//! that delegate to attached subagents. A new adapter adds a `Fixture` and one `steering_tests!`
+//! invocation.
 use async_trait::async_trait;
 use futures::stream;
 use serde_json::{Value, json};
@@ -915,6 +916,177 @@ async fn steering_count_limit_preserves_retries(fixture: &impl Fixture) {
     fixture.close(store).await;
 }
 
+/// A root that delegates to a child; both call `model`. The child asks a question if its model
+/// calls `ask`.
+fn delegating(model: Arc<ControlledModel>) -> Agent {
+    let ask =
+        typed_tool::<Value, Value, _, _>(spec("ask", false, RetryPolicy::ReadOnly), |_, _| async {
+            Ok(ToolOutput::Wait(WaitRequest::Input {
+                prompt: "Which day?".into(),
+            }))
+        });
+    let child = Agent::builder("steering-child", model.clone())
+        .instructions("Do the delegated task.")
+        .tool(ask)
+        .limits(
+            Limits::default()
+                .with_max_model_calls(4)
+                .with_max_tool_calls(2)
+                .with_max_tokens(1_000)
+                .with_active_budget(Duration::from_secs(60)),
+        )
+        .input::<String>()
+        .output::<String>()
+        .build()
+        .unwrap();
+    Agent::builder("steering-root", model)
+        .instructions("Delegate, then follow the user's instructions.")
+        .subagents(1, [Subagent::new("delegate", "Do one task.", child)])
+        .build()
+        .unwrap()
+}
+fn delegation() -> ToolCall {
+    ToolCall {
+        id: "delegation".into(),
+        name: "delegate".into(),
+        arguments: json!("task"),
+    }
+}
+
+async fn steering_targets_the_root_while_its_children_work_or_wait(fixture: &impl Fixture) {
+    let store = fixture.open().await;
+    let (model, mut attempts) = model();
+    let root = delegating(model);
+    let mut host = start(&store, root.clone());
+    let id = host
+        .submit("c", "run", json!("original"), None)
+        .await
+        .unwrap();
+    next(&mut attempts)
+        .await
+        .respond
+        .send(Ok(ModelResponse::tools(vec![delegation()])))
+        .unwrap();
+    // The child's model call is in flight: its dispatch was a commit of the root, in `Tools`.
+    let turn = next(&mut attempts).await;
+    let child = turn.request.run_id;
+    assert_ne!(child, id);
+    // A child is not a run of the store, so it has no steering of its own.
+    assert!(matches!(
+        host.steer(child, "x", "Steer the child.").await,
+        Err(Error::NotFound)
+    ));
+    assert!(matches!(host.steering(child).await, Err(Error::NotFound)));
+    host.steer(id, "a", "Prefer trains.").await.unwrap();
+    turn.respond
+        .send(Ok(ModelResponse::tools(vec![call("question", "ask")])))
+        .unwrap();
+    wait_for(&host, id, |state| {
+        state.children.first().is_some_and(|child| {
+            matches!(
+                child.state.operations.first().map(|op| &op.status),
+                Some(OperationStatus::Waiting(WaitRequest::Input { .. }))
+            )
+        })
+    })
+    .await;
+    // Blocked: the root is in `Tools`, not due, and everything stays queued.
+    host.steer(id, "b", "Use local time.").await.unwrap();
+    host.shutdown().await.unwrap();
+    let waiting = store.status(id).await.unwrap();
+    assert_eq!(waiting.phase, Phase::Tools);
+    assert!(store.due(now_ms(), 10).await.unwrap().is_empty());
+    assert!(instructions(&waiting.history).is_empty());
+    assert!(instructions(&waiting.children[0].state.history).is_empty());
+    assert!((store.steering(id).await.unwrap().iter()).all(|s| s.status == SteeringStatus::Queued));
+
+    let store = fixture.reopen(store).await;
+    let mut host = start(&store, root);
+    host.resolve_child(id, child, "question", Resolution::Input(json!("Monday")))
+        .await
+        .unwrap();
+    let turn = next(&mut attempts).await;
+    assert_eq!(turn.request.run_id, child);
+    assert!(instructions(&turn.request.history).is_empty());
+    complete(turn, json!("child done"));
+    // The root's next dispatch applies both, after the delegation's exchange.
+    let turn = next(&mut attempts).await;
+    assert_eq!(turn.request.run_id, id);
+    assert_eq!(
+        instructions(&turn.request.history),
+        ["Prefer trains.", "Use local time."]
+    );
+    assert!(matches!(
+        &turn.request.history[1],
+        HistoryEntry::Exchange { results, .. } if !results[0].is_error
+    ));
+    complete(turn, json!("done"));
+    let done = wait_for(&host, id, RunState::is_terminal).await;
+    assert_eq!(
+        done.phase,
+        Phase::Settled(Settlement::Completed(json!("done")))
+    );
+    let applied: Vec<_> = (host.steering(id).await.unwrap().into_iter())
+        .map(|s| s.status)
+        .collect();
+    assert!(matches!(applied[0], SteeringStatus::Applied { .. }));
+    assert_eq!(applied[0], applied[1]);
+    // No child history, in the run or in the store, ever holds an instruction.
+    let retained = &done.child(child).unwrap().state;
+    assert!(instructions(&retained.history).is_empty());
+    let conversation = store.history(&retained.conversation_id).await.unwrap();
+    assert!(instructions(&conversation).is_empty());
+    assert_eq!(
+        instructions(&store.history("c").await.unwrap()),
+        ["Prefer trains.", "Use local time."]
+    );
+    host.shutdown().await.unwrap();
+    fixture.close(store).await;
+}
+
+async fn a_completion_reopened_by_steering_keeps_its_settled_children(fixture: &impl Fixture) {
+    let store = fixture.open().await;
+    let (model, mut attempts) = model();
+    let mut host = start(&store, delegating(model));
+    let id = host
+        .submit("c", "run", json!("original"), None)
+        .await
+        .unwrap();
+    next(&mut attempts)
+        .await
+        .respond
+        .send(Ok(ModelResponse::tools(vec![delegation()])))
+        .unwrap();
+    complete(next(&mut attempts).await, json!("child done"));
+    let turn = next(&mut attempts).await;
+    assert_eq!(turn.request.run_id, id);
+    host.steer(id, "a", "Answer again.").await.unwrap();
+    complete(turn, json!("first"));
+    // The completion reopened. Every child had settled before it, and none runs again.
+    let turn = next(&mut attempts).await;
+    assert_eq!(turn.request.run_id, id);
+    assert_eq!(instructions(&turn.request.history), ["Answer again."]);
+    let reopened = host.status(id).await.unwrap();
+    assert_eq!(reopened.children.len(), 1);
+    let settled = reopened.children[0].state.clone();
+    assert_eq!(
+        settled.phase,
+        Phase::Settled(Settlement::Completed(json!("child done")))
+    );
+    complete(turn, json!("second"));
+    let done = wait_for(&host, id, RunState::is_terminal).await;
+    assert_eq!(
+        done.phase,
+        Phase::Settled(Settlement::Completed(json!("second")))
+    );
+    assert_eq!(done.children.len(), 1);
+    assert_eq!(done.children[0].state.revision, settled.revision);
+    assert_eq!(done.child_usage, reopened.child_usage);
+    assert!(attempts.try_recv().is_err());
+    host.shutdown().await.unwrap();
+    fixture.close(store).await;
+}
+
 macro_rules! steering_tests {
     ($make:expr) => {
         #[tokio::test]
@@ -972,6 +1144,14 @@ macro_rules! steering_tests {
         #[tokio::test]
         async fn steering_count_limit_preserves_retries() {
             super::steering_count_limit_preserves_retries(&$make).await;
+        }
+        #[tokio::test]
+        async fn steering_targets_the_root_while_its_children_work_or_wait() {
+            super::steering_targets_the_root_while_its_children_work_or_wait(&$make).await;
+        }
+        #[tokio::test]
+        async fn a_completion_reopened_by_steering_keeps_its_settled_children() {
+            super::a_completion_reopened_by_steering_keeps_its_settled_children(&$make).await;
         }
     };
 }

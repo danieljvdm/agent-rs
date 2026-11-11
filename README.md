@@ -61,6 +61,10 @@ The [personal-agent workflow eval](docs/personal-workflow-eval.md) exercises a m
 
 [Process recovery tests](docs/process-recovery.md) also terminate and relaunch real subprocesses at acceptance, dispatch, and outcome-commit boundaries. The opt-in restart soak keeps a persisted future deadline across repeated process deaths.
 
+## Attached subagents
+
+`AgentBuilder::subagents(max_parallel, [Subagent::new(name, description, child)])` lets the model delegate to child agents as if they were tools, with the child's input type as the arguments and a typed `ChildResult` as the result. A child runs inside its parent's run: its admission, every commit it makes, and its result are commits of the parent, its limits are an allocation reserved from the parent's budget, and a child's question surfaces on the parent until `Host::resolve_child` answers it. See [attached subagents](docs/attached-subagents.md); `cargo run --example delegated_workflow` delegates to two children and reopens SQLite while one of them waits.
+
 ## Providers and limits
 
 `ScriptedModel` is a deterministic in-process provider for tests and benchmarks. `openai::OpenAiModel` implements Chat Completions SSE and `openai::OpenAiResponsesModel` implements stateless Responses SSE, both for JSON output and application function tools. Each buffers and validates a complete response before tools start, accepts explicit credentials, and reports usage that the engine charges even when the response is then rejected. Neither loads credentials from the environment, retries HTTP requests, falls back to another API or substitutes a model name. Choose the adapter in code and the exact model through `ModelConfig`; the adapter's API and endpoint become part of the agent's durable binding. The [adapter contract](docs/model-adapters.md) covers supported capabilities, durable identity, usage and retries.
@@ -69,7 +73,7 @@ The [personal-agent workflow eval](docs/personal-workflow-eval.md) exercises a m
 
 The optional [`memory` feature](docs/memory.md) is one such policy: extractive summaries and semantic retrieval over caller-supplied local embeddings, from source-versioned stores (in process, or in the SQLite database). Source edits and deletions invalidate their derived records, and derived references stay separate from authoritative history and within the context cap. Memory is scoped to the conversation ID: `Conversation::new(id)` names one, and a default conversation gets a unique ID. It is unrelated to the root's `MemoryStore` and `MemoryCheckpoint`, which keep runs in process.
 
-Progress events are transient and best effort through a caller-supplied bounded Tokio channel; a full channel drops events and never blocks a run. Each `ProgressEvent` carries its `run_id` and a `ProgressKind` (model started, text delta, tools started, committed, settled), so one channel, such as `HostOptions::events`, can serve many concurrent runs. Events are neither persisted nor counted in run state, and both types are `#[non_exhaustive]`: new kinds and fields may be added. Reconnect using durable status/history, not token deltas. Standard `tracing` emits run spans without prompts or credentials.
+Progress events are transient and best effort through a caller-supplied bounded Tokio channel; a full channel drops events and never blocks a run. Each `ProgressEvent` carries its `run_id`, a child's `parent_run_id`, and a `ProgressKind` (model started, text delta, tools started, committed, settled), so one channel, such as `HostOptions::events`, can serve many concurrent runs. Events are neither persisted nor counted in run state, and both types are `#[non_exhaustive]`: new kinds and fields may be added. Reconnect using durable status/history, not token deltas. Standard `tracing` emits run spans without prompts or credentials.
 
 ## Development
 
@@ -91,4 +95,4 @@ The manual [performance workflow](.github/workflows/performance.yml) runs longer
 
 [Recovery profiling](docs/recovery-profiling.md) describes the allocation-stack capture and the focused recovery comparison suite.
 
-This is a Rust-only initial implementation. There are no distributed leases, Node bindings, Cloudflare adapter, in-flight preemption, active-run input joining, agent graphs, or placeholder subagent/MCP services.
+This is a Rust-only initial implementation. There are no distributed leases, Node bindings, Cloudflare adapter, in-flight preemption, active-run input joining, agent graphs, nested or detached subagents, or MCP services.

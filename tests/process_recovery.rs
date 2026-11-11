@@ -27,6 +27,7 @@ enum Scenario {
     IdempotentMutation,
     Waits,
     LongWait,
+    Delegation,
 }
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 enum CrashPoint {
@@ -37,6 +38,10 @@ enum CrashPoint {
     ToolIntent,
     BeforeOutcome,
     AfterOutcome,
+    BeforeChildAdmission,
+    AfterChildAdmission,
+    BeforeChildCompletion,
+    AfterChildCompletion,
 }
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 enum Action {
@@ -118,6 +123,7 @@ fn lines(directory: &Path, name: &str) -> Vec<String> {
 struct LoggedModel {
     inner: ScriptedModel,
     directory: PathBuf,
+    log_name: &'static str,
 }
 #[async_trait]
 impl Model for LoggedModel {
@@ -126,7 +132,7 @@ impl Model for LoggedModel {
         request: ModelRequest,
         cancel: CancellationToken,
     ) -> Result<ModelStream> {
-        let path = self.directory.join("model-attempts.log");
+        let path = self.directory.join(self.log_name);
         let turn = request.turn.to_string();
         tokio::task::spawn_blocking(move || append_synced(&path, &turn))
             .await
@@ -154,6 +160,7 @@ fn agent(config: &Config) -> Agent {
     let mut tools = Vec::<Arc<dyn Tool>>::new();
     let mut responses = Vec::new();
     match config.scenario {
+        Scenario::Delegation => return delegation_agent(config),
         Scenario::Final => (),
         Scenario::Mutation | Scenario::IdempotentMutation => {
             let idempotent = matches!(config.scenario, Scenario::IdempotentMutation);
@@ -243,6 +250,7 @@ fn agent(config: &Config) -> Agent {
         Arc::new(LoggedModel {
             inner: ScriptedModel::new(responses),
             directory: config.directory.clone(),
+            log_name: "model-attempts.log",
         }),
     )
     .instructions("Run the deterministic process recovery scenario.")
@@ -255,6 +263,75 @@ fn agent(config: &Config) -> Agent {
             .with_cleanup_timeout(Duration::from_millis(100))
             .with_active_budget(Duration::from_millis(30_000)),
     )
+    .build()
+    .unwrap()
+}
+/// A parent that delegates once to a child whose one tool call has an external effect.
+fn delegation_agent(config: &Config) -> Agent {
+    let directory = config.directory.clone();
+    let tool = typed_tool::<Value, Value, _, _>(
+        spec("mutate", RetryPolicy::Never, false),
+        move |_, context| {
+            let directory = directory.clone();
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let path = directory.join("child-effects.log");
+                    append_synced(&path, &context.idempotency_key)
+                })
+                .await
+                .map_err(storage)?
+                .map_err(storage)?;
+                Ok(ToolOutput::Complete(json!("child-receipt")))
+            }
+        },
+    );
+    let child = Agent::builder(
+        "attached-child-v1",
+        Arc::new(LoggedModel {
+            inner: ScriptedModel::new(vec![
+                call("mutate"),
+                ModelResponse::final_output(json!("child-done")),
+                ModelResponse::final_output(json!("child-done")),
+                ModelResponse::final_output(json!("child-done")),
+            ]),
+            directory: config.directory.clone(),
+            log_name: "child-attempts.log",
+        }),
+    )
+    .instructions("Perform the delegated mutation.")
+    .tool(tool)
+    .limits(
+        Limits::default()
+            .with_max_model_calls(4)
+            .with_max_tool_calls(2)
+            .with_max_tokens(100)
+            .with_operation_timeout(Duration::from_millis(1_000))
+            .with_cleanup_timeout(Duration::from_millis(100))
+            .with_active_budget(Duration::from_millis(10_000)),
+    )
+    .build()
+    .unwrap();
+    Agent::builder(
+        "delegating-parent-v1",
+        Arc::new(LoggedModel {
+            inner: ScriptedModel::new(vec![
+                call("delegate"),
+                ModelResponse::final_output(json!("done")),
+            ]),
+            directory: config.directory.clone(),
+            log_name: "model-attempts.log",
+        }),
+    )
+    .instructions("Delegate one task and await its result.")
+    .limits(
+        Limits::default()
+            .with_max_model_calls(8)
+            .with_max_tool_calls(8)
+            .with_operation_timeout(Duration::from_millis(1_000))
+            .with_cleanup_timeout(Duration::from_millis(100))
+            .with_active_budget(Duration::from_millis(30_000)),
+    )
+    .subagents(1, [Subagent::new("delegate", "Run the child task.", child)])
     .build()
     .unwrap()
 }
@@ -284,6 +361,15 @@ struct BoundaryCheckpoint<'a> {
 #[async_trait]
 impl Checkpoint for BoundaryCheckpoint<'_> {
     async fn commit(&self, state: &mut RunState) -> Result<()> {
+        // A child commits through its parent, so these are commits of the parent.
+        let child_admitted = !state.children.is_empty();
+        let child_complete =
+            (state.children.first()).is_some_and(|child| child.state.is_terminal());
+        if (matches!(self.config.crash, CrashPoint::BeforeChildAdmission) && child_admitted)
+            || (matches!(self.config.crash, CrashPoint::BeforeChildCompletion) && child_complete)
+        {
+            return park(self.config, self.store, state.id).await;
+        }
         let outcome = state.operations.iter().any(|operation| {
             operation.call.id == "mutate"
                 && matches!(operation.status, OperationStatus::Complete(_))
@@ -299,6 +385,8 @@ impl Checkpoint for BoundaryCheckpoint<'_> {
                 .iter()
                 .any(|operation| matches!(operation.status, OperationStatus::Dispatched)),
             CrashPoint::AfterOutcome => outcome,
+            CrashPoint::AfterChildAdmission => child_admitted,
+            CrashPoint::AfterChildCompletion => child_complete,
             _ => false,
         };
         if at_boundary {
@@ -535,6 +623,67 @@ fn assert_done(observation: &Observation) {
         Phase::Settled(Settlement::Completed(json!("done")))
     );
     assert!(observation.due.is_empty());
+}
+
+#[test]
+fn attached_child_admission_and_completion_survive_process_death() {
+    for boundary in [
+        CrashPoint::BeforeChildAdmission,
+        CrashPoint::AfterChildAdmission,
+        CrashPoint::BeforeChildCompletion,
+        CrashPoint::AfterChildCompletion,
+    ] {
+        let directory = TempDir::new().unwrap();
+        let mut config = Config::new(directory.path(), Scenario::Delegation);
+        config.crash = boundary;
+        let interrupted = step(config.clone());
+        let completed = step(config.resume(ReadyWhen::Terminal, Action::None));
+        assert_done(&completed);
+        assert_eq!(completed.state.children.len(), 1, "{boundary:?}");
+        let child = &completed.state.children[0];
+        assert_eq!(
+            child.result::<String>().unwrap().outcome,
+            ChildOutcome::Completed("child-done".into()),
+            "{boundary:?}"
+        );
+        assert_eq!(
+            lines(directory.path(), "child-effects.log").len(),
+            1,
+            "the child's effect happens once: {boundary:?}"
+        );
+        assert_eq!(
+            lines(directory.path(), "model-attempts.log"),
+            ["1", "2"],
+            "the parent never repeats its delegation turn: {boundary:?}"
+        );
+        if let Some(admitted) = interrupted.state.children.first() {
+            assert_eq!(
+                admitted.state.id, child.state.id,
+                "an admitted child keeps its identity: {boundary:?}"
+            );
+        }
+        // Only the child's final turn is repeated, when its settlement was not committed.
+        let attempts = lines(directory.path(), "child-attempts.log");
+        let repeated = matches!(boundary, CrashPoint::BeforeChildCompletion);
+        assert_eq!(attempts.len(), if repeated { 3 } else { 2 }, "{boundary:?}");
+        assert_eq!(completed.state.usage.model_calls, 2 + attempts.len() as u32);
+        assert_eq!(
+            completed.state.child_usage.model_calls,
+            attempts.len() as u32
+        );
+        if matches!(boundary, CrashPoint::AfterChildCompletion) {
+            assert_eq!(
+                interrupted.state.child_usage, completed.state.child_usage,
+                "settlement is reconciled once"
+            );
+        }
+        // A settled run is never driven again.
+        let again = step(config.resume(ReadyWhen::Terminal, Action::None));
+        assert_eq!(
+            serde_json::to_value(&completed.state).unwrap(),
+            serde_json::to_value(&again.state).unwrap()
+        );
+    }
 }
 
 #[test]
