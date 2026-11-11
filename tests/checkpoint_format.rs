@@ -69,6 +69,54 @@ async fn reopened_runs_preserve_every_field_exactly() {
     assert_eq!(state.input["nested"][5].as_u64(), Some(9007199254740993));
 }
 
+/// What a run writes is pinned byte for byte, so a feature it does not use cannot grow it.
+#[tokio::test]
+async fn a_plain_run_keeps_its_stored_encoding() {
+    let fixture = Fixture::new().await;
+    let progress: String = Connection::open(&fixture.path)
+        .unwrap()
+        .query_row(
+            "SELECT progress FROM checkpoints WHERE run_id=?1",
+            [fixture.expected.id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        progress,
+        r#"{"cancel_requested":false,"phase":"Ready","usage":{"model_calls":0,"tool_calls":0,"input_tokens":0,"output_tokens":0,"active_ms":0},"pending_response":null,"operations":[]}"#
+    );
+    let encoded = serde_json::to_value(&fixture.expected).unwrap();
+    let mut fields: Vec<&str> = encoded
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    fields.sort_unstable();
+    assert_eq!(
+        fields,
+        [
+            "agent_id",
+            "binding",
+            "cancel_requested",
+            "conversation_id",
+            "expires_at_ms",
+            "generation",
+            "history",
+            "id",
+            "input",
+            "limits",
+            "operations",
+            "pending_response",
+            "phase",
+            "prior_context",
+            "revision",
+            "usage",
+            "version",
+        ]
+    );
+}
+
 #[tokio::test]
 async fn other_schema_versions_and_newer_state_versions_are_incompatible() {
     for version in [1, 3] {
