@@ -61,6 +61,8 @@ The [personal-agent workflow eval](docs/personal-workflow-eval.md) exercises a m
 
 [Process recovery tests](docs/process-recovery.md) also terminate and relaunch real subprocesses at acceptance, dispatch, and outcome-commit boundaries. The opt-in restart soak keeps a persisted future deadline across repeated process deaths.
 
+[Interval automations](docs/automation.md) create new runs on a fixed schedule. A store implementing `AutomationStore` (`MemoryStore` and `SqliteStore` do) keeps each automation with the agent that fires it, and admits each occurrence's run atomically with its identity and the next due time; the application calls `Host::fire_automations` from its own poll loop and manages schedules through the store. Run `cargo run --example recurring_personal_agent` for a recurring inbox review across a restart. Calendar/cron schedules and authenticated event subscriptions are later YIE-252 slices.
+
 ## Attached subagents
 
 `AgentBuilder::subagents(max_parallel, [Subagent::new(name, description, child)])` lets the model delegate to child agents as if they were tools, with the child's input type as the arguments and a typed `ChildResult` as the result. A child runs inside its parent's run: its admission, every commit it makes, and its result are commits of the parent, its limits are an allocation reserved from the parent's budget, and a child's question surfaces on the parent until `Host::resolve_child` answers it. See [attached subagents](docs/attached-subagents.md); `cargo run --example delegated_workflow` delegates to two children and reopens SQLite while one of them waits.

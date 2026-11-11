@@ -26,6 +26,11 @@ use yielded_agent::{
 };
 // Steering of active runs, for stores that support it.
 use yielded_agent::{SteeringId, SteeringInput, SteeringReceipt, SteeringStatus, SteeringStore};
+// Interval automations, an extension of the storage contract.
+use yielded_agent::{
+    Automation, AutomationChange, AutomationOptions, AutomationState, AutomationStore,
+    FiringReport, IntervalAutomation, Occurrence, OccurrenceOutcome,
+};
 // Optional adapters, each behind its feature.
 #[cfg(feature = "openai")]
 use yielded_agent::openai::{OpenAiModel, OpenAiResponsesModel};

@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+mod automation;
 mod children;
 mod context;
 mod engine;
@@ -19,6 +20,10 @@ mod store;
 mod tool;
 mod types;
 
+pub use automation::{
+    Automation, AutomationChange, AutomationOptions, AutomationState, AutomationStore,
+    FiringReport, IntervalAutomation, Occurrence, OccurrenceOutcome,
+};
 pub use children::{AttachedChild, ChildOutcome, ChildResult, ParentRun};
 pub use context::{ContextPolicy, ContextRequest};
 pub use engine::{

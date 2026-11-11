@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use rusqlite::{OptionalExtension, Transaction, params};
 
 const MEMORY_SCHEMA_VERSION: i64 = 1;
-const MEMORY_SCHEMA: &str = "
+pub(super) const MEMORY_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS memory_meta (
         id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL);
     INSERT INTO memory_meta(id, version) VALUES(1, 1) ON CONFLICT(id) DO NOTHING;

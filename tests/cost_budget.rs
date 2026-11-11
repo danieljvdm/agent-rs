@@ -51,6 +51,21 @@ const SQLITE_RECORD_BYTES_DELEGATE_ONCE: u64 = 15_511;
 /// eighth, per child.)
 const SQLITE_RECORD_BYTES_PER_CHILD_TOOL_ROUND: u64 = 11_600;
 
+// SQLite cost of interval automations, from `fire_due` (exact unless stated). Every constant
+// above holds with the automation tables present: unused, they write nothing.
+/// A firing call when nothing is due, including on a store with no automations.
+const SQLITE_TRANSACTIONS_FIRING_NOTHING_DUE: u64 = 0;
+/// A firing call admitting 16 due automations: the whole call is one transaction.
+const SQLITE_TRANSACTIONS_FIRING_16_DUE: u64 = 1;
+/// Rows one admitted firing writes: the run's acceptance, checkpoint and input history entry
+/// (as `accept` writes them), its occurrence and its cursor.
+const SQLITE_WRITES_PER_ADMITTED_FIRING: u64 = 5;
+/// Rows one firing skipped by a busy conversation writes: its occurrence and its cursor.
+const SQLITE_WRITES_PER_SKIPPED_FIRING: u64 = 2;
+/// Record bytes 16 admitted firings write beyond accepting the same 16 runs directly: only
+/// occurrence and cursor rows, never the automation's definition or binding (with headroom).
+const SQLITE_AUTOMATION_RECORD_BYTES_16_FIRINGS: u64 = 1_575;
+
 // Tool scheduling under paused Tokio time (exact virtual milliseconds).
 /// Five parallel calls sleeping 300/10/10/10/300 ms with `max_parallel_tools = 4`. The sliding
 /// window starts the fifth call when the first 10 ms call frees its slot.
@@ -1101,6 +1116,102 @@ mod sqlite {
             );
             assert_eq!(copies, SQLITE_CONTEXT_COPIES_CLAIM_TO_SETTLEMENT);
         }
+    }
+
+    #[tokio::test]
+    async fn sqlite_automation_firing_costs() {
+        const FIRINGS: u64 = 16;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("automation.sqlite");
+        let store = SqliteStore::open(&path).await.unwrap();
+        // The four-tool agent, so a firing that rewrote the definition or binding would show.
+        let agent = agent(0, 0);
+        let agents = [agent.clone()];
+        let options = AutomationOptions::default();
+        let transactions = |store: &SqliteStore| store.metrics().transactions;
+        let writes = |store: &SqliteStore| store.metrics().writes;
+
+        let before = transactions(&store);
+        let report = store.fire_due(&agents, 1_000, options).await.unwrap();
+        assert!(report.occurrences.is_empty());
+        assert_eq!(
+            transactions(&store) - before,
+            SQLITE_TRANSACTIONS_FIRING_NOTHING_DUE,
+            "no automations"
+        );
+        // Ten throwaway runs, so every measured history sequence has the same digit count.
+        for n in 0..10 {
+            store
+                .accept(&agent, &format!("seed{n}"), "k", json!("go"), None)
+                .await
+                .unwrap();
+        }
+        for n in 0..FIRINGS {
+            let schedule = IntervalAutomation::new(format!("c{n:02}"), json!("go"), 1_000, 1_000);
+            store
+                .create_automation(&agent, &format!("a{n:02}"), schedule)
+                .await
+                .unwrap();
+        }
+        let before = transactions(&store);
+        store.fire_due(&agents, 999, options).await.unwrap();
+        assert_eq!(
+            transactions(&store) - before,
+            SQLITE_TRANSACTIONS_FIRING_NOTHING_DUE,
+            "nothing due yet"
+        );
+
+        let meter = RecordMeter::install(&path);
+        // The same runs accepted directly, with conversations and keys of equal length.
+        let key = "k".repeat("automation/a00/1/1000".len());
+        let start = meter.bytes();
+        for n in 0..FIRINGS {
+            store
+                .accept(&agent, &format!("d{n:02}"), &key, json!("go"), None)
+                .await
+                .unwrap();
+        }
+        let accepted_bytes = meter.bytes() - start;
+
+        let (start, before, written) = (meter.bytes(), transactions(&store), writes(&store));
+        let report = store.fire_due(&agents, 1_000, options).await.unwrap();
+        assert_eq!(report.occurrences.len() as u64, FIRINGS);
+        assert_eq!(
+            transactions(&store) - before,
+            SQLITE_TRANSACTIONS_FIRING_16_DUE
+        );
+        assert_eq!(
+            writes(&store) - written,
+            FIRINGS * SQLITE_WRITES_PER_ADMITTED_FIRING
+        );
+        let overhead = meter.bytes() - start - accepted_bytes;
+        eprintln!(
+            "sqlite_automation_record_bytes_16_firings: {overhead} (budget {SQLITE_AUTOMATION_RECORD_BYTES_16_FIRINGS})"
+        );
+        assert!(
+            overhead <= with_headroom(SQLITE_AUTOMATION_RECORD_BYTES_16_FIRINGS),
+            "automation record bytes exceed budget plus {HEADROOM_PERCENT}%"
+        );
+
+        // Every conversation is still busy: each firing is skipped, in one transaction.
+        let (before, written) = (transactions(&store), writes(&store));
+        let report = store.fire_due(&agents, 2_000, options).await.unwrap();
+        assert!(
+            report
+                .occurrences
+                .iter()
+                .all(|occurrence| occurrence.outcome == OccurrenceOutcome::SkippedOverlap)
+        );
+        assert_eq!(
+            transactions(&store) - before,
+            SQLITE_TRANSACTIONS_FIRING_16_DUE
+        );
+        assert_eq!(
+            writes(&store) - written,
+            FIRINGS * SQLITE_WRITES_PER_SKIPPED_FIRING
+        );
+        drop(meter);
+        store.close().await.unwrap();
     }
 }
 

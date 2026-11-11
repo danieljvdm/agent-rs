@@ -221,6 +221,14 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
         self.notify.notify_one();
         Ok(id)
     }
+    /// The registered agents and a wake of the scheduler, for store extensions that admit runs
+    /// on the host's behalf (automations). Wake after committing, as `accept` does.
+    pub(crate) fn agents(&self) -> impl Iterator<Item = &Agent> {
+        self.agents.values()
+    }
+    pub(crate) fn wake(&self) {
+        self.notify.notify_one();
+    }
     /// The run's authoritative state, settled or not; [`Error::NotFound`] for an unknown ID.
     pub async fn status(&self, id: RunId) -> Result<RunState> {
         self.store.status(id).await
