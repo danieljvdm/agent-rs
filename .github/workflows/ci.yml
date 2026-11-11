@@ -1,5 +1,6 @@
 name: Rust
-on: [push, pull_request]
+# `workflow_dispatch` lets release.yml start these checks on the release branch.
+on: [push, pull_request, workflow_dispatch]
 jobs:
   check:
     runs-on: ubuntu-latest

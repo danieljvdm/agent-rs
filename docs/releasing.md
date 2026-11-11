@@ -49,10 +49,9 @@ There is no crates.io token in the repository. Publishing uses
 [trusted publishing](https://crates.io/docs/trusted-publishing): crates.io accepts the `publish`
 job because the crate's settings name this repository and `release.yml`.
 
-The release pull request is opened with the workflow's own token, and GitHub does not start other
-workflows for pull requests opened that way, so CI does not run on it. To change that, add a
-personal access token with write access to contents and pull requests as the `RELEASE_TOKEN`
-secret.
+The release pull request is opened with the workflow's own token. GitHub starts no workflows for
+pushes and pull requests made that way, and `main` requires the CI checks, so `release.yml` starts
+`ci.yml` and `postgres.yml` on the `release` branch itself.
 
 ## If a release fails half-way
 
