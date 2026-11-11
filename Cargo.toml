@@ -49,3 +49,7 @@ required-features = ["openai"]
 name = "steering_schedule"
 harness = false
 required-features = ["sqlite"]
+[[bench]]
+name = "attached_subagents"
+harness = false
+required-features = ["sqlite"]
