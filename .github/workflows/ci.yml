@@ -16,6 +16,7 @@ jobs:
       - run: cargo test --locked
       - run: cargo check --no-default-features --locked
       - run: cargo check --no-default-features --features mcp --locked
+      - run: cargo check --no-default-features --features codemode --locked
       - run: cargo clippy --all-targets --no-default-features --locked -- -D warnings
       - run: cargo test --no-default-features --locked
       - run: cargo doc --no-deps --all-features --locked
@@ -25,6 +26,7 @@ jobs:
       - run: cargo bench --bench model_adapters --locked -- --test
       - run: cargo bench --bench steering_schedule --locked -- --test
       - run: cargo bench --bench attached_subagents --locked -- --test
+      - run: cargo bench --features codemode --bench attached_subagents --locked -- --test
       - run: cargo bench --features mcp --bench mcp --locked -- --test
       - run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_benchmark.py
       # The personal-agent application, a workspace member the root-package steps above skip.

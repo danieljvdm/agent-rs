@@ -50,6 +50,17 @@ const SQLITE_RECORD_BYTES_DELEGATE_ONCE: u64 = 15_511;
 /// progress row would rewrite 14 KB of child state for the first round, rising to 21 KB by the
 /// eighth, per child.)
 const SQLITE_RECORD_BYTES_PER_CHILD_TOOL_ROUND: u64 = 11_600;
+// A parent that runs one code mode script of sequential `echo` calls, from `accept` to settlement.
+// Code mode adds no transactions of its own: its child is an attached child whose model is the
+// script, so each round of calls costs what a child's tool round costs, and the script's final
+// turn costs what a child that answers at once costs.
+/// Record bytes (with headroom) for a script of one round. Includes the child's acceptance, whose
+/// binding carries the tool declarations.
+const SQLITE_RECORD_BYTES_CODE_MODE_ONE_ROUND: u64 = 54_660;
+/// Record bytes (with headroom) each further round adds, the same from one round to four as from
+/// four to eight. About twice a child's own tool round: the parent's progress row, rewritten by
+/// each of the round's commits, holds the delegation's spec, whose description declares the tools.
+const SQLITE_RECORD_BYTES_PER_CODE_MODE_ROUND: u64 = 22_420;
 
 // SQLite cost of interval automations, from `fire_due` (exact unless stated). Every constant
 // above holds with the automation tables present: unused, they write nothing.
@@ -1079,6 +1090,96 @@ mod sqlite {
             assert!(
                 per_round <= with_headroom(SQLITE_RECORD_BYTES_PER_CHILD_TOOL_ROUND),
                 "child rounds {from} to {to}: {per_round} bytes per round"
+            );
+        }
+    }
+
+    /// Accepts, claims and drives a parent that runs, through code mode, a script of `rounds`
+    /// sequential `echo` calls. Returns (transactions for claim plus drive, record bytes from
+    /// accept).
+    #[cfg(feature = "codemode")]
+    async fn code_mode_run(rounds: usize) -> (u64, u64) {
+        use agent_rs::codemode::CodeMode;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("codemode.sqlite");
+        let store = SqliteStore::open(&path).await.unwrap();
+        let meter = RecordMeter::install(&path);
+        let code = format!(
+            "let total = 0; for (let n = 0; n < {rounds}; n++) total += await echo({{ n }}); return total;"
+        );
+        let mode = CodeMode::new("code").tools(tools()).build().unwrap();
+        let agent = Agent::builder(
+            "cost-parent",
+            Arc::new(ScriptedModel::new(vec![
+                ModelResponse::tools(vec![ToolCall {
+                    id: "script".into(),
+                    name: "code".into(),
+                    arguments: json!({ "code": code }),
+                }]),
+                ModelResponse::final_output(json!("done")),
+            ])),
+        )
+        .instructions("Run a script, then answer.")
+        .subagents(1, [mode])
+        .build()
+        .unwrap();
+        let id = store
+            .accept(&agent, CONVERSATION, "measured", json!("go"), None)
+            .await
+            .unwrap();
+        let transactions_before = store.metrics().transactions;
+        let mut state = store.claim(id).await.unwrap();
+        agent
+            .drive(&mut state, &store, RunControl::default())
+            .await
+            .unwrap();
+        let transactions = store.metrics().transactions - transactions_before;
+        let bytes = meter.bytes();
+        assert_eq!(
+            state.phase,
+            Phase::Settled(Settlement::Completed(json!("done")))
+        );
+        let child = &state.children[0].state;
+        assert_eq!(child.usage.tool_calls as usize, rounds);
+        assert_eq!(child.usage.model_calls as usize, rounds + 1);
+        assert_eq!(store.status(id).await.unwrap().usage, state.usage);
+        drop(meter);
+        store.close().await.unwrap();
+        (transactions, bytes)
+    }
+
+    #[cfg(feature = "codemode")]
+    #[tokio::test]
+    async fn sqlite_cost_of_code_mode_is_a_child_tool_round_per_round_of_calls() {
+        let mut bytes = Vec::new();
+        for rounds in [1, 4, 8] {
+            let (transactions, written) = code_mode_run(rounds).await;
+            eprintln!(
+                "sqlite_code_mode_rounds_{rounds}: {transactions} transactions, {written} record bytes"
+            );
+            assert_eq!(
+                transactions,
+                SQLITE_TRANSACTIONS_DELEGATE_ONCE
+                    + rounds as u64 * SQLITE_TRANSACTIONS_PER_CHILD_TOOL_ROUND,
+                "{rounds} rounds"
+            );
+            bytes.push(written);
+        }
+        eprintln!(
+            "sqlite_record_bytes_code_mode_one_round: {} (budget {SQLITE_RECORD_BYTES_CODE_MODE_ONE_ROUND})",
+            bytes[0]
+        );
+        assert!(bytes[0] <= with_headroom(SQLITE_RECORD_BYTES_CODE_MODE_ONE_ROUND));
+        for (from, to, (before, after)) in
+            [(1, 4, (bytes[0], bytes[1])), (4, 8, (bytes[1], bytes[2]))]
+        {
+            let per_round = (after - before) / (to - from);
+            eprintln!(
+                "sqlite_record_bytes_per_code_mode_round ({from} to {to}): {per_round} (budget {SQLITE_RECORD_BYTES_PER_CODE_MODE_ROUND})"
+            );
+            assert!(
+                per_round <= with_headroom(SQLITE_RECORD_BYTES_PER_CODE_MODE_ROUND),
+                "rounds {from} to {to}: {per_round} bytes per round"
             );
         }
     }

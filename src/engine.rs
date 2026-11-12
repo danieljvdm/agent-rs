@@ -780,13 +780,14 @@ impl Definition {
             if state.cancel_requested || control.cancel.is_cancelled() {
                 state.cancel_requested = true;
                 uncertain_dispatched(state, "cancelled after dispatch");
-                return settle(checkpoint, state, &control, Settlement::Cancelled).await;
+                return settle(self, checkpoint, state, &control, Settlement::Cancelled).await;
             }
             if control.shutdown.is_cancelled() {
                 return Err(Error::Interrupted);
             }
             if state.expires_at_ms.is_some_and(|t| t <= now_ms()) {
                 return settle(
+                    self,
                     checkpoint,
                     state,
                     &control,
@@ -798,8 +799,14 @@ impl Definition {
             let step = match state.phase {
                 Phase::Ready => {
                     if let Some(reason) = exhausted(state, true, 0) {
-                        return settle(checkpoint, state, &control, Settlement::Stopped(reason))
-                            .await;
+                        return settle(
+                            self,
+                            checkpoint,
+                            state,
+                            &control,
+                            Settlement::Stopped(reason),
+                        )
+                        .await;
                     }
                     self.model_turn(state, checkpoint, &control).await
                 }
@@ -815,7 +822,14 @@ impl Definition {
                 Err(Error::Interrupted) if control.cancel.is_cancelled() => continue,
                 Err(error) if error.fails_run() => {
                     let reason = bounded_error(&error, state.limits.max_tool_output_bytes);
-                    return settle(checkpoint, state, &control, Settlement::Failed(reason)).await;
+                    return settle(
+                        self,
+                        checkpoint,
+                        state,
+                        &control,
+                        Settlement::Failed(reason),
+                    )
+                    .await;
                 }
                 Err(error) => return Err(error),
             }
@@ -969,6 +983,7 @@ impl Definition {
         }
         if is_expired(state) {
             return settle(
+                self,
                 checkpoint,
                 state,
                 control,
@@ -988,6 +1003,7 @@ impl Definition {
             > state.limits.max_tokens
         {
             return settle(
+                self,
                 checkpoint,
                 state,
                 control,
@@ -1003,6 +1019,7 @@ impl Definition {
             });
             state.pending_response = None;
             return settle(
+                self,
                 checkpoint,
                 state,
                 control,
@@ -1096,6 +1113,7 @@ impl Definition {
             }
             if is_expired(state) {
                 return settle(
+                    self,
                     checkpoint,
                     state,
                     control,
@@ -1108,12 +1126,20 @@ impl Definition {
             if startable.charged > 0
                 && let Some(reason) = exhausted(state, false, startable.charged)
             {
-                return settle(checkpoint, state, control, Settlement::Stopped(reason)).await;
+                return settle(
+                    self,
+                    checkpoint,
+                    state,
+                    control,
+                    Settlement::Stopped(reason),
+                )
+                .await;
             }
             self.tool_window(state, checkpoint, control, &startable)
                 .await?;
             if is_expired(state) {
                 return settle(
+                    self,
                     checkpoint,
                     state,
                     control,
@@ -1223,7 +1249,8 @@ impl Definition {
             match window.next(&mut in_flight).await {
                 Some(Event::Finished(finished)) => window.record(state, finished),
                 Some(Event::Commit(request)) => {
-                    subagent::commit_child(state, checkpoint, control, &mut window, request).await
+                    subagent::commit_child(self, state, checkpoint, control, &mut window, request)
+                        .await
                 }
                 None => {}
             }
@@ -1999,6 +2026,7 @@ fn children_len(state: &RunState) -> (usize, usize) {
     (state.children.len(), history.sum())
 }
 async fn settle(
+    definition: &Definition,
     checkpoint: &dyn Checkpoint,
     state: &mut RunState,
     control: &RunControl,
@@ -2012,7 +2040,9 @@ async fn settle(
             || state.children.iter().all(|child| child.state.is_terminal())
     );
     // A settled run owns no unsettled children; their work stopped with the last window.
-    crate::children::cancel_unsettled(state);
+    crate::children::cancel_unsettled(state, |state, index| {
+        subagent::result_mapper(definition, state, index)
+    });
     state.phase = Phase::Settled(settlement);
     commit(checkpoint, state, control).await?;
     // A completion that queued steering reopened is not a settlement; the drive loop goes on.

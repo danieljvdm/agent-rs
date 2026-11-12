@@ -195,10 +195,21 @@ impl Settled {
         parent.child_usage = self.child_usage;
     }
 }
+/// How a settled child's result becomes its delegation's tool result: the result's value and
+/// whether it is an error. Set per [`Subagent`](crate::Subagent); [`envelope`] by default.
+pub(crate) type ResultMapper = fn(ChildResult<Value>) -> (Value, bool);
+/// The default [`ResultMapper`]: the whole [`ChildResult`], an error unless the child completed.
+pub(crate) fn envelope(result: ChildResult<Value>) -> (Value, bool) {
+    let failed = !matches!(result.outcome, ChildOutcome::Completed(_));
+    match serde_json::to_value(&result) {
+        Ok(value) => (value, failed),
+        Err(error) => (Value::String(error.to_string()), true),
+    }
+}
 /// Once the child at `index` has settled: replaces its allocation with what it used, exactly
-/// once, and records its result as its delegation's outcome. Both commit with the child's
-/// settlement.
-pub(crate) fn settle(parent: &mut RunState, index: usize) -> Option<Settled> {
+/// once, and records its result, as `map` makes it, as its delegation's outcome. Both commit with
+/// the child's settlement.
+pub(crate) fn settle(parent: &mut RunState, index: usize, map: ResultMapper) -> Option<Settled> {
     let child = &parent.children[index];
     let id = child.state.id;
     let op = parent
@@ -207,16 +218,13 @@ pub(crate) fn settle(parent: &mut RunState, index: usize) -> Option<Settled> {
         .position(|op| matches!(op.status, OperationStatus::Child { run_id } if run_id == id))?;
     let max_bytes = parent.limits.max_tool_output_bytes;
     let (value, is_error) = match child.result::<Value>() {
-        Ok(result) => {
-            let failed = !matches!(result.outcome, ChildOutcome::Completed(_));
-            match serde_json::to_value(&result) {
-                Ok(value) if encoded_len(&value) <= max_bytes => (value, failed),
-                _ => (
-                    error_value("child result exceeds the tool output limit", max_bytes),
-                    true,
-                ),
-            }
-        }
+        Ok(result) => match map(result) {
+            (value, is_error) if encoded_len(&value) <= max_bytes => (value, is_error),
+            _ => (
+                error_value("child result exceeds the tool output limit", max_bytes),
+                true,
+            ),
+        },
         Err(error) => (error_value(&error.to_string(), max_bytes), true),
     };
     let used = child.state.usage.clone();
@@ -243,8 +251,12 @@ pub(crate) fn settle(parent: &mut RunState, index: usize) -> Option<Settled> {
 }
 /// Settles every unsettled child as cancelled, with its dispatched work left
 /// [`Unknown`](OperationStatus::Unknown), before its parent settles. Their work is not in flight:
-/// a parent settles only between tool windows.
-pub(crate) fn cancel_unsettled(parent: &mut RunState) {
+/// a parent settles only between tool windows. `map_of` gives the [`ResultMapper`] of the child at
+/// an index.
+pub(crate) fn cancel_unsettled(
+    parent: &mut RunState,
+    map_of: impl Fn(&RunState, usize) -> ResultMapper,
+) {
     for index in 0..parent.children.len() {
         let child = &mut parent.children[index].state;
         if child.is_terminal() {
@@ -259,7 +271,8 @@ pub(crate) fn cancel_unsettled(parent: &mut RunState) {
         }
         child.phase = Phase::Settled(Settlement::Cancelled);
         child.revision = child.revision.saturating_add(1);
-        settle(parent, index);
+        let map = map_of(parent, index);
+        settle(parent, index, map);
     }
 }
 /// The error result for a delegation that admitted no child or whose result cannot be recorded.

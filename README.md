@@ -140,6 +140,7 @@ async fn serve(agent: Agent) -> agent_rs::Result<()> {
 | `memory` | | `memory::MemoryPolicy`: summaries and retrieval over earlier conversation |
 | `mcp` | | `mcp::McpClient`: tools from an MCP server over stdio |
 | `google-calendar` | | `google_calendar::GoogleCalendar`: calendar reads and reminders as tools |
+| `codemode` | | `codemode::CodeMode`: one tool whose JavaScript calls the agent's other tools, run in QuickJS in-process or in a subprocess (`agent-rs-quickjs`) |
 
 With `default-features = false` the crate is the engine, the host and `MemoryStore`.
 
@@ -150,6 +151,7 @@ With `default-features = false` the crate is the engine, the host and `MemorySto
 - **Providers.** Implement `Model` for another provider. See [model adapters](https://github.com/danieljvdm/agent-rs/blob/main/docs/model-adapters.md).
 - **Context.** A `ContextPolicy` pins history entries and adds derived context to each model call. See [memory](https://github.com/danieljvdm/agent-rs/blob/main/docs/memory.md).
 - **Subagents.** `AgentBuilder::subagents` lets the model delegate to child agents as tools. See [attached subagents](https://github.com/danieljvdm/agent-rs/blob/main/docs/attached-subagents.md).
+- **Code mode.** `codemode::CodeMode` gives the model one tool that runs a script calling other tools, each call durable as it happens. See [code mode](https://github.com/danieljvdm/agent-rs/blob/main/docs/codemode.md).
 - **Steering.** `Host::steer` adds an instruction to a run that is already going. See [steering](https://github.com/danieljvdm/agent-rs/blob/main/docs/steering.md).
 - **Automations.** `Host::fire_automations` starts runs on an interval. See [automations](https://github.com/danieljvdm/agent-rs/blob/main/docs/automation.md).
 - **Progress.** `HostOptions::with_events` streams best-effort `ProgressEvent`s; a full channel drops events and never blocks a run.
@@ -159,7 +161,7 @@ The repository also holds a [personal-agent application](https://github.com/dani
 
 ## Not included
 
-Distributed workers, bindings for other languages, in-flight preemption, agent graphs, nested or detached subagents, and MCP transports other than stdio.
+Distributed workers, bindings for other languages, in-flight preemption, agent graphs, nested or detached subagents, MCP transports other than stdio, and code mode scripts that call subagents.
 
 ## Development
 

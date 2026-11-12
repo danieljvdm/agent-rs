@@ -258,6 +258,51 @@ async fn child_failure_is_a_parent_tool_result_and_does_not_discard_siblings() {
     assert_eq!(state.usage.model_calls, 4);
 }
 
+/// The tool result of an ordinary delegation, byte for byte: the whole `ChildResult` envelope,
+/// an error unless the child completed. Code mode replaces it with its own result; ordinary
+/// subagents must not change.
+#[tokio::test]
+async fn a_delegation_result_is_the_whole_child_result_envelope() {
+    let completing = child_agent(Arc::new(ScriptedModel::new(vec![
+        ModelResponse::final_output(json!("ok")).with_usage(TokenUsage::new(2, 3)),
+    ])));
+    let failing = child_agent(Arc::new(ScriptedModel::new(vec![])));
+    for (child, completes) in [(completing, true), (failing, false)] {
+        let agent = parent(child, 1, 1, Limits::default());
+        let mut state = new_run(&agent);
+        agent
+            .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+            .await
+            .unwrap();
+        let child = &state.children[0].state;
+        let outcome = match &child.phase {
+            Phase::Settled(Settlement::Completed(_)) => json!({"Completed": "ok"}),
+            Phase::Settled(Settlement::Failed(message)) => json!({ "Failed": message }),
+            other => panic!("{other:?}"),
+        };
+        let (input, output) = if completes { (2, 3) } else { (0, 0) };
+        let expected = json!({
+            "parent_run_id": state.id,
+            "child_run_id": child.id,
+            "outcome": outcome,
+            "usage": {
+                "model_calls": 1,
+                "tool_calls": 0,
+                "input_tokens": input,
+                "output_tokens": output,
+                "active_ms": child.usage.active_ms,
+            },
+        });
+        let result = &results(&state)[0];
+        assert_eq!(
+            serde_json::to_string(&result.value).unwrap(),
+            serde_json::to_string(&expected).unwrap()
+        );
+        assert_eq!(result.is_error, !completes);
+        assert_eq!(result.call_id, "child-0");
+    }
+}
+
 #[tokio::test]
 async fn child_events_name_their_parent_and_never_pose_as_its_own() {
     let child = child_agent(Arc::new(ScriptedModel::with_events(vec![vec![

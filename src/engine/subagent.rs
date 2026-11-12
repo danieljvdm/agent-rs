@@ -18,7 +18,7 @@
 //! - **Failed commits.** Once a commit of the parent fails, no child commit is accepted and every
 //!   child is stopped; the window drains and reports the failure.
 use super::{Admission, Admitted, Definition, Event, Finished, Start, Window, Work, commit};
-use crate::children::{self, error_value};
+use crate::children::{self, ResultMapper, error_value};
 use crate::context::encoded_len;
 use crate::{
     Agent, AttachedChild, Checkpoint, Error, HistoryEntry, ModelResponse, Operation,
@@ -81,6 +81,7 @@ use tokio_util::sync::CancellationToken;
 pub struct Subagent {
     spec: ToolSpec,
     agent: Agent,
+    result: ResultMapper,
 }
 impl Subagent {
     /// Delegates calls of `name` to `agent`, described to the model by `description`. The
@@ -97,7 +98,17 @@ impl Subagent {
             .with_retry(RetryPolicy::Idempotent {
                 contract: "attached-child-v1".into(),
             });
-        Self { spec, agent }
+        Self {
+            spec,
+            agent,
+            result: children::envelope,
+        }
+    }
+    /// Replaces how a settled child's result becomes the delegation's tool result.
+    #[cfg_attr(not(feature = "codemode"), allow(dead_code))]
+    pub(crate) fn with_result(mut self, result: ResultMapper) -> Self {
+        self.result = result;
+        self
     }
     /// Requires each delegation to wait in [`OperationStatus::Approval`] before its child is
     /// admitted, as [`ToolSpec::requires_approval`] does for a tool. Defaults to `false`.
@@ -209,6 +220,15 @@ fn subagent_of<'a>(
             op.call.name
         ))),
     }
+}
+/// How the result of the unsettled child at `index` becomes its delegation's tool result, or the
+/// default envelope if its delegation cannot be found.
+pub(super) fn result_mapper(
+    definition: &Definition,
+    state: &RunState,
+    index: usize,
+) -> ResultMapper {
+    subagent_of(definition, state, index).map_or(children::envelope, |subagent| subagent.result)
 }
 /// Recovers the work each unsettled child left in flight, as the parent's own is recovered when
 /// it is driven again. Returns whether any child changed.
@@ -530,6 +550,7 @@ impl Checkpoint for ChildCheckpoint {
 /// settles the delegation if the child settled, and commits the parent. On failure the parent's
 /// copy is restored, so it never runs ahead of what is durable, and the window stops.
 pub(super) async fn commit_child(
+    definition: &Definition,
     state: &mut RunState,
     checkpoint: &dyn Checkpoint,
     control: &RunControl,
@@ -553,7 +574,8 @@ pub(super) async fn commit_child(
     stored.history.extend(history);
     stored.revision += 1;
     let settled = if stored.is_terminal() {
-        children::settle(state, child)
+        let map = result_mapper(definition, state, child);
+        children::settle(state, child, map)
     } else {
         None
     };
