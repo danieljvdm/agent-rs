@@ -551,7 +551,9 @@ pub struct RunState {
     pub phase: Phase,
     /// What the run has consumed.
     pub usage: Usage,
-    /// Bounded context at acceptance, never the conversation's entire lifetime history.
+    /// Bounded context at acceptance, never the conversation's entire lifetime history: its
+    /// newest entries as the run's model sees them, with any tool results the agent's
+    /// [`ContextPolicy`](crate::ContextPolicy) replaced.
     pub prior_context: Vec<HistoryEntry>,
     /// Evidence for this bounded run, appended atomically by the checkpoint store. Its first
     /// entry is the run's input.

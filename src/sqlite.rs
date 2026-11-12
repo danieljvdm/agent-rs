@@ -24,7 +24,8 @@ use crate::store;
 use crate::types::STATE_VERSION;
 use crate::{
     Agent, Checkpoint, CheckpointPosition, DurableStore, Error, HistoryEntry, HostSlot,
-    ModelResponse, Operation, Phase, Result, RunId, RunState, RunUpdate, StoreLease, Usage,
+    ModelResponse, Operation, Phase, PriorContext, Result, RunId, RunState, RunUpdate, StoreLease,
+    Usage,
 };
 use async_trait::async_trait;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -625,28 +626,23 @@ fn write_delta(
     writes += applied_writes;
     Ok(Written::Done { writes, applied })
 }
-fn bounded_history(
+/// Offers `prior` the conversation's history newest first, until it refuses an entry.
+fn read_prior_context(
     connection: &Connection,
     conversation: &str,
-    limit: usize,
-) -> Result<Vec<HistoryEntry>> {
+    prior: &mut PriorContext<'_>,
+) -> Result<()> {
     let mut stmt = connection
         .prepare_cached("SELECT entry FROM history WHERE conversation=?1 ORDER BY sequence DESC")
         .map_err(Error::storage)?;
     let mut rows = stmt.query([conversation]).map_err(Error::storage)?;
-    let mut result = Vec::new();
-    let mut bytes = 2usize;
     while let Some(row) = rows.next().map_err(Error::storage)? {
         let text: String = row.get(0).map_err(Error::storage)?;
-        let next = bytes.saturating_add(text.len()).saturating_add(1);
-        if next > limit {
+        if !prior.push(decode(&text)?) {
             break;
         }
-        bytes = next;
-        result.push(decode(&text)?);
     }
-    result.reverse();
-    Ok(result)
+    Ok(())
 }
 /// Accept within the caller's transaction, so optional admission adapters can commit their
 /// own records atomically with the run. Returns the run and the rows written (0 on replay).
@@ -688,8 +684,9 @@ fn accept_in(
     if busy {
         return Err(Error::ConversationBusy);
     }
-    let context = bounded_history(tx, conversation, agent.limits().max_context_bytes)?;
-    let state = agent.new_run(conversation, input, &context, expires_at_ms)?;
+    let mut prior = agent.prior_context();
+    read_prior_context(tx, conversation, &mut prior)?;
+    let state = agent.new_run_from(conversation, input, prior, expires_at_ms)?;
     let id = state.id.to_string();
     tx.prepare_cached(
         "INSERT INTO runs(id,conversation,idempotency_key,version,agent_id,binding,input,limits,

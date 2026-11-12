@@ -36,8 +36,8 @@ use crate::store;
 use crate::types::STATE_VERSION;
 use crate::{
     Agent, AttachedChild, Checkpoint, CheckpointPosition, DurableStore, Error, ErrorDetail,
-    HistoryEntry, HostSlot, ModelResponse, Operation, ParentRun, Phase, Result, RunId, RunState,
-    RunUpdate, StoreLease, Usage,
+    HistoryEntry, HostSlot, ModelResponse, Operation, ParentRun, Phase, PriorContext, Result,
+    RunId, RunState, RunUpdate, StoreLease, Usage,
 };
 use async_trait::async_trait;
 use futures::future::{BoxFuture, try_join_all};
@@ -991,36 +991,28 @@ async fn load_children(db: &Database, root: &RunState, count: usize) -> Result<V
     }
     Ok(children)
 }
-/// The conversation's newest history that fits `limit` encoded bytes, oldest first, read in
+/// Offers `prior` the conversation's history newest first, until it refuses an entry, read in
 /// pages of `CONTEXT_PAGE` rows: the same rule as SQLite and `MemoryStore`.
-async fn bounded_history(
+async fn read_prior_context(
     db: &Database,
     conversation: &str,
-    limit: usize,
-) -> Result<Vec<HistoryEntry>> {
-    let mut result = Vec::new();
-    let mut bytes = 2usize;
+    prior: &mut PriorContext<'_>,
+) -> Result<()> {
     let (mut run, mut ordinal) = (i64::MAX, i64::MAX);
-    'pages: loop {
+    loop {
         let rows = db
             .query(&db.sql.context, &[&conversation, &run, &ordinal])
             .await?;
         for row in &rows {
             (run, ordinal) = (get(row, 0)?, get(row, 1)?);
-            let text: &str = get(row, 2)?;
-            let next = bytes.saturating_add(text.len()).saturating_add(1);
-            if next > limit {
-                break 'pages;
+            if !prior.push(decode(get(row, 2)?)?) {
+                return Ok(());
             }
-            bytes = next;
-            result.push(decode(text)?);
         }
         if rows.len() < CONTEXT_PAGE {
-            break;
+            return Ok(());
         }
     }
-    result.reverse();
-    Ok(result)
 }
 async fn accept_on(
     db: &Database,
@@ -1045,8 +1037,9 @@ async fn accept_on(
     if get::<bool>(&row, 4)? {
         return Err(Error::ConversationBusy);
     }
-    let context = bounded_history(db, conversation, agent.limits().max_context_bytes).await?;
-    let state = agent.new_run(conversation, input, &context, expires_at_ms)?;
+    let mut prior = agent.prior_context();
+    read_prior_context(db, conversation, &mut prior).await?;
+    let state = agent.new_run_from(conversation, input, prior, expires_at_ms)?;
     let delta = Delta::encode(&state, state.revision, 0, false)?;
     let acceptance = [
         encode(&state.binding)?,

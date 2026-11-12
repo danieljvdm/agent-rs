@@ -25,8 +25,8 @@ struct Inner {
     runs: HashMap<RunId, Run>,
     keys: HashMap<(String, String), RunId>,
     unsettled: HashMap<String, RunId>,
-    /// Conversation history with each entry's encoded size, for bounded prior context.
-    conversations: HashMap<String, Vec<(HistoryEntry, usize)>>,
+    /// Conversation history in commit order.
+    conversations: HashMap<String, Vec<HistoryEntry>>,
     /// Every operation each child recorded, as `Run::operations` holds a run's own.
     child_operations: HashMap<RunId, Vec<Operation>>,
     /// Automations, kept under the same lock so a firing is one atomic step.
@@ -52,15 +52,9 @@ struct Steered {
 fn encode(value: &impl serde::Serialize) -> Result<String> {
     serde_json::to_string(value).map_err(Error::storage)
 }
-fn sizes(entries: &[HistoryEntry]) -> Result<Vec<(HistoryEntry, usize)>> {
-    entries
-        .iter()
-        .map(|entry| Ok((entry.clone(), encode(entry)?.len())))
-        .collect()
-}
 /// The history each child whose revision advanced appended, by its index in `new`. A child
 /// unknown to `stored` was admitted, and all of its history is new.
-type ChildHistory = Vec<(usize, Vec<(HistoryEntry, usize)>)>;
+type ChildHistory = Vec<(usize, Vec<HistoryEntry>)>;
 fn changed_children(stored: &[AttachedChild], new: &[AttachedChild]) -> Result<ChildHistory> {
     let mut changed = Vec::new();
     for (index, child) in new.iter().enumerate() {
@@ -74,7 +68,7 @@ fn changed_children(stored: &[AttachedChild], new: &[AttachedChild]) -> Result<C
         };
         let appended = (child.state.history.get(durable..))
             .ok_or_else(|| Error::input("history is append-only"))?;
-        changed.push((index, sizes(appended)?));
+        changed.push((index, appended.to_vec()));
     }
     Ok(changed)
 }
@@ -133,25 +127,21 @@ impl Inner {
         if self.unsettled.contains_key(conversation) {
             return Err(Error::ConversationBusy);
         }
-        let mut context = Vec::new();
-        let mut bytes = 2usize;
-        for (entry, size) in self
+        let mut prior = agent.prior_context();
+        for entry in self
             .conversations
             .get(conversation)
             .into_iter()
             .flatten()
             .rev()
         {
-            bytes = bytes.saturating_add(*size).saturating_add(1);
-            if bytes > agent.limits().max_context_bytes {
+            if !prior.push(entry.clone()) {
                 break;
             }
-            context.push(entry.clone());
         }
-        context.reverse();
-        let state = agent.new_run(conversation, input, &context, expires_at_ms)?;
+        let state = agent.new_run_from(conversation, input, prior, expires_at_ms)?;
         let id = state.id;
-        let history = sizes(&state.history)?;
+        let history = state.history.clone();
         self.keys.insert(identity, id);
         self.unsettled.insert(conversation.to_owned(), id);
         self.runs.insert(
@@ -173,7 +163,7 @@ impl Inner {
     fn persist(
         &mut self,
         id: RunId,
-        history: Vec<(HistoryEntry, usize)>,
+        history: Vec<HistoryEntry>,
         wake_now: bool,
         children: ChildHistory,
     ) {
@@ -234,7 +224,7 @@ impl Checkpoint for MemoryStore {
             return Err(Error::input("history is append-only"));
         }
         let revision = advance(state.revision, "revision")?;
-        let mut appended = sizes(&state.history[stored.history.len()..])?;
+        let mut appended = state.history[stored.history.len()..].to_vec();
         let children = changed_children(&stored.children, &state.children)?;
         // The steering changes `Checkpoint` allows, after the last step that can fail.
         let boundary = Boundary::of(state);
@@ -244,7 +234,7 @@ impl Checkpoint for MemoryStore {
                 for steered in queued {
                     let entry = steered.accepted.entry();
                     steered.applied = Some(revision);
-                    appended.push((entry.clone(), steered.accepted.bytes));
+                    appended.push(entry.clone());
                     state.history.push(entry);
                 }
             }
@@ -254,9 +244,7 @@ impl Checkpoint for MemoryStore {
         // Copy progress only: acceptance fields in the caller's state are never persisted.
         let stored = &mut run.state;
         stored.revision = revision;
-        stored
-            .history
-            .extend(appended.iter().map(|(entry, _)| entry.clone()));
+        stored.history.extend(appended.iter().cloned());
         stored.cancel_requested = state.cancel_requested;
         stored.phase = state.phase.clone();
         stored.usage = state.usage.clone();
@@ -314,7 +302,7 @@ impl DurableStore for MemoryStore {
             return Ok(());
         }
         state.revision = advance(state.revision, "revision")?;
-        let appended = sizes(&state.history[run.state.history.len()..])?;
+        let appended = state.history[run.state.history.len()..].to_vec();
         let children = changed_children(&run.state.children, &state.children)?;
         if effect.clear_error {
             run.last_error = None;
@@ -382,7 +370,7 @@ impl DurableStore for MemoryStore {
             .get(conversation)
             .into_iter()
             .flatten()
-            .map(|(entry, _)| entry.clone())
+            .cloned()
             .collect())
     }
     async fn operations(&self, id: RunId) -> Result<Vec<Operation>> {
