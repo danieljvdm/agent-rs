@@ -155,6 +155,7 @@ With `default-features = false` the crate is the engine, the host and `MemorySto
 - **Steering.** `Host::steer` adds an instruction to a run that is already going. See [steering](https://github.com/danieljvdm/agent-rs/blob/main/docs/steering.md).
 - **Automations.** `Host::fire_automations` starts runs on an interval. See [automations](https://github.com/danieljvdm/agent-rs/blob/main/docs/automation.md).
 - **Progress.** `HostOptions::with_events` streams best-effort `ProgressEvent`s; a full channel drops events and never blocks a run.
+- **Telemetry.** Content-free model, tool, and run spans use `tracing`. See [telemetry](https://github.com/danieljvdm/agent-rs/blob/main/docs/telemetry.md).
 - **Other guides.** [PostgreSQL](https://github.com/danieljvdm/agent-rs/blob/main/docs/postgres.md), [MCP](https://github.com/danieljvdm/agent-rs/blob/main/docs/mcp.md), [Google Calendar](https://github.com/danieljvdm/agent-rs/blob/main/docs/calendar-integration.md), [process recovery](https://github.com/danieljvdm/agent-rs/blob/main/docs/process-recovery.md).
 
 The repository also holds a [personal-agent application](https://github.com/danieljvdm/agent-rs/blob/main/docs/personal-agent.md) built on the crate: a local API and an inbox for approvals.

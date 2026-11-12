@@ -800,10 +800,11 @@ impl SqliteStore {
             .clone()
             .ok_or_else(|| Error::storage("store is closed"))?;
         let (tx, rx) = oneshot::channel();
+        let job: Job = Box::new(move |database| {
+            let _ = tx.send(action(database));
+        });
         sender
-            .send(Box::new(move |database| {
-                let _ = tx.send(action(database));
-            }))
+            .send(job)
             .await
             .map_err(|_| Error::storage("store is closed"))?;
         rx.await.map_err(Error::storage)?
@@ -1195,6 +1196,39 @@ mod tests {
     use super::*;
     use crate::{ScriptedModel, Settlement, types::now_ms};
     use serde_json::json;
+    #[tokio::test]
+    async fn store_jobs_do_not_inherit_the_callers_trace() {
+        use tracing::{Instrument, instrument::WithSubscriber};
+        let dir = tempfile::tempdir().unwrap();
+        let db = SqliteStore::open(dir.path().join("tracing.sqlite"))
+            .await
+            .unwrap();
+        let capture = crate::tracing_capture::Capture::default();
+        let (span, no_subscriber) = async {
+            db.call(|_| {
+                tracing::info!("store probe");
+                Ok((
+                    tracing::Span::current().id(),
+                    tracing::dispatcher::get_default(|d| {
+                        d.is::<tracing::subscriber::NoSubscriber>()
+                    }),
+                ))
+            })
+            .instrument(tracing::info_span!("caller"))
+            .await
+            .unwrap()
+        }
+        .with_subscriber(capture.clone())
+        .await;
+        assert!(span.is_none(), "store job inherited its caller's span");
+        assert!(
+            no_subscriber,
+            "uninstrumented store job inherited a subscriber"
+        );
+        assert!(capture.0.lock().unwrap().events.is_empty());
+        db.close().await.unwrap();
+    }
+
     #[tokio::test]
     async fn failure_during_retirement_rolls_back_history_terminal_state_and_checkpoint() {
         let directory = tempfile::tempdir().unwrap();

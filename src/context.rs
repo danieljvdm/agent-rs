@@ -117,6 +117,8 @@ impl io::Write for Counter {
 /// For the crate's JSON types, which cannot fail to encode: the counter never fails to write,
 /// and a `Value` has only string keys and finite numbers.
 pub(crate) fn encoded_len<T: Serialize + ?Sized>(value: &T) -> usize {
+    #[cfg(test)]
+    ENCODINGS.with(|count| count.set(count.get() + 1));
     let mut counter = Counter(0);
     serde_json::to_writer(&mut counter, value).expect("JSON values always encode");
     counter.0
@@ -258,6 +260,7 @@ fn fit_derived(items: &mut Vec<Value>, cap: usize, room: usize) -> usize {
 
 /// History and derived context for one model turn. Without a policy this is the default context:
 /// a bounded suffix of complete exchanges that always holds the current input.
+#[tracing::instrument(name = "assemble_context", level = "debug", skip_all)]
 pub(crate) async fn assemble(
     state: &RunState,
     policy: Option<&(Arc<dyn ContextPolicy>, usize)>,
@@ -374,4 +377,13 @@ mod tests {
         }
         assert!(cases > 1_000);
     }
+}
+
+#[cfg(test)]
+thread_local! { static ENCODINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(crate) fn count_encodings(work: impl FnOnce()) -> usize {
+    ENCODINGS.with(|count| count.set(0));
+    work();
+    ENCODINGS.with(std::cell::Cell::get)
 }

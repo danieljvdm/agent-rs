@@ -35,6 +35,7 @@ pub mod postgres;
 pub mod sqlite;
 mod steering;
 mod store;
+mod telemetry;
 mod tool;
 mod types;
 
@@ -87,3 +88,7 @@ pub use types::{
 /// ```
 #[cfg(doctest)]
 struct PrivateHelpers;
+
+#[cfg(test)]
+#[path = "tracing_test.rs"]
+mod tracing_capture;

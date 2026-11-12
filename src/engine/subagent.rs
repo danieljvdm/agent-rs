@@ -43,6 +43,7 @@ use tokio::{
     time::Instant,
 };
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 /// A child agent that a parent's model calls like a tool, set with
 /// [`AgentBuilder::subagents`](crate::AgentBuilder::subagents).
@@ -381,10 +382,22 @@ impl Definition {
             events: control.events.clone(),
         };
         let definition = subagent.definition();
-        Box::pin(async move {
+        let span = crate::telemetry::tool_span(
+            &state.operations[index],
+            crate::telemetry::Call::tool(state, index),
+        );
+        if !span.is_disabled() {
+            window.spans.push((index, span.clone()));
+        }
+        let future = async move {
             let result = definition.drive(&mut working, &checkpoint, control).await;
             Finished::Child { index, result }
-        })
+        };
+        if span.is_disabled() {
+            Box::pin(future)
+        } else {
+            Box::pin(future.instrument(span))
+        }
     }
 }
 
@@ -589,6 +602,11 @@ pub(super) async fn commit_child(
     }
     match commit(checkpoint, state, control).await {
         Ok(()) => {
+            if let Some(settled) = &settled
+                && let Some((_, span)) = window.spans.iter().find(|(index, _)| *index == settled.op)
+            {
+                span.record("output_bytes", settled.output_bytes);
+            }
             window.unsaved = false;
             let _ = reply.send(Ok(state.children[child].state.revision));
         }

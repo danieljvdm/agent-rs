@@ -183,7 +183,8 @@ pub(crate) fn unreserve(parent: &mut RunState, limits: &Limits) {
 
 /// What [`settle`] changed in the parent, so a failed commit can restore it.
 pub(crate) struct Settled {
-    op: usize,
+    pub(crate) op: usize,
+    pub(crate) output_bytes: usize,
     status: OperationStatus,
     usage: Usage,
     child_usage: Usage,
@@ -217,21 +218,29 @@ pub(crate) fn settle(parent: &mut RunState, index: usize, map: ResultMapper) -> 
         .iter()
         .position(|op| matches!(op.status, OperationStatus::Child { run_id } if run_id == id))?;
     let max_bytes = parent.limits.max_tool_output_bytes;
-    let (value, is_error) = match child.result::<Value>() {
-        Ok(result) => match map(result) {
-            (value, is_error) if encoded_len(&value) <= max_bytes => (value, is_error),
-            _ => (
-                error_value("child result exceeds the tool output limit", max_bytes),
-                true,
-            ),
-        },
-        Err(error) => (error_value(&error.to_string(), max_bytes), true),
+    let error_result = |message: &str| {
+        let value = error_value(message, max_bytes);
+        let bytes = encoded_len(&value);
+        (value, true, bytes)
+    };
+    let (value, is_error, output_bytes) = match child.result::<Value>() {
+        Ok(result) => {
+            let (value, is_error) = map(result);
+            let bytes = encoded_len(&value);
+            if bytes <= max_bytes {
+                (value, is_error, bytes)
+            } else {
+                error_result("child result exceeds the tool output limit")
+            }
+        }
+        Err(error) => error_result(&error.to_string()),
     };
     let used = child.state.usage.clone();
     let reserved = allocation(&child.state.limits);
     let call_id = child.call_id.clone();
     let undo = Settled {
         op,
+        output_bytes,
         status: std::mem::replace(
             &mut parent.operations[op].status,
             OperationStatus::Complete(ToolResult {
@@ -262,11 +271,20 @@ pub(crate) fn cancel_unsettled(
         if child.is_terminal() {
             continue;
         }
-        for op in &mut child.operations {
+        let call = crate::telemetry::Call::model(child);
+        for (index, op) in child.operations.iter_mut().enumerate() {
             if matches!(op.status, OperationStatus::Dispatched) {
                 op.status = OperationStatus::Unknown {
                     reason: "parent settled after dispatch".into(),
                 };
+                crate::telemetry::unknown(
+                    &tracing::Span::none(),
+                    op,
+                    crate::telemetry::Call {
+                        index: Some(index),
+                        ..call
+                    },
+                );
             }
         }
         child.phase = Phase::Settled(Settlement::Cancelled);

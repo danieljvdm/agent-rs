@@ -92,6 +92,9 @@ const ALLOC_RUN_EMPTY_CONVERSATION: Budget = Budget::new(32, 2_148);
 const ALLOC_RUN_1024_PRIOR_ENTRIES: Budget = Budget::new(6_177, 1_737_272);
 /// `Agent::run` of four rounds of one tool each in an empty conversation.
 const ALLOC_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(430, 50_618);
+/// The same workloads with a minimal enabled subscriber (see `MinimalSubscriber`).
+const ALLOC_TRACED_RUN_EMPTY: Budget = Budget::new(32, 2_148);
+const ALLOC_TRACED_RUN_FOUR_TOOL_ROUNDS: Budget = Budget::new(438, 54_138);
 /// `Agent::drive` of a final response streamed as 64 text deltas of 16 bytes, observed through
 /// an attached progress channel that a receiver drains concurrently. Includes the scripted
 /// model's copy of each delta, so the engine itself must add no allocation per delta. Bytes
@@ -377,6 +380,15 @@ fn prior_entries(count: usize) -> Vec<HistoryEntry> {
 
 #[tokio::test]
 async fn engine_allocation_budgets() {
+    // Other threads' subscribers can enable the shared callsite cache. This run still has
+    // no subscriber, so their interest must not select the allocating tracing path.
+    let _other_subscribers = [
+        tracing::Dispatch::new(MinimalSubscriber),
+        tracing::Dispatch::new(MinimalSubscriber),
+    ];
+    assert!(tracing::dispatcher::get_default(|subscriber| {
+        subscriber.is::<tracing::subscriber::NoSubscriber>()
+    }));
     let simple = agent(0, 0);
     stable(
         "run_empty_conversation",
@@ -1815,4 +1827,146 @@ mod mcp {
         }
         server.shutdown_background();
     }
+}
+
+// An enabled subscriber with a fixed-size span registry and no output allocations. This
+// measures engine instrumentation rather than the allocation policy of a log sink/exporter.
+struct MinimalSubscriber;
+struct MinimalSpans {
+    slots: [(Option<&'static tracing::Metadata<'static>>, u64); 64],
+    stack: [u64; 64],
+    depth: usize,
+}
+thread_local! {
+    static MINIMAL_SPANS: std::cell::RefCell<MinimalSpans> = const { std::cell::RefCell::new(MinimalSpans {
+        slots: [(None, 0); 64], stack: [0; 64], depth: 0,
+    }) };
+}
+impl tracing::Subscriber for MinimalSubscriber {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, attrs: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        MINIMAL_SPANS.with_borrow_mut(|state| {
+            let index = state
+                .slots
+                .iter()
+                .position(|(_, refs)| *refs == 0)
+                .expect("span capacity");
+            state.slots[index] = (Some(attrs.metadata()), 1);
+            tracing::span::Id::from_u64(index as u64 + 1)
+        })
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {}
+    fn enter(&self, id: &tracing::span::Id) {
+        MINIMAL_SPANS.with_borrow_mut(|state| {
+            state.stack[state.depth] = id.into_u64();
+            state.depth += 1;
+        });
+    }
+    fn exit(&self, id: &tracing::span::Id) {
+        MINIMAL_SPANS.with_borrow_mut(|state| {
+            state.depth -= 1;
+            assert_eq!(state.stack[state.depth], id.into_u64());
+        });
+    }
+    fn clone_span(&self, id: &tracing::span::Id) -> tracing::span::Id {
+        MINIMAL_SPANS.with_borrow_mut(|state| state.slots[id.into_u64() as usize - 1].1 += 1);
+        id.clone()
+    }
+    fn try_close(&self, id: tracing::span::Id) -> bool {
+        MINIMAL_SPANS.with_borrow_mut(|state| {
+            let refs = &mut state.slots[id.into_u64() as usize - 1].1;
+            *refs -= 1;
+            *refs == 0
+        })
+    }
+    fn current_span(&self) -> tracing_core::span::Current {
+        MINIMAL_SPANS.with_borrow(|state| {
+            if state.depth == 0 {
+                return tracing_core::span::Current::none();
+            }
+            let id = state.stack[state.depth - 1];
+            tracing_core::span::Current::new(
+                tracing::span::Id::from_u64(id),
+                state.slots[id as usize - 1].0.unwrap(),
+            )
+        })
+    }
+}
+#[tokio::test]
+async fn enabled_tracing_allocation_budgets() {
+    use tracing::instrument::WithSubscriber;
+    let subscriber = tracing::Dispatch::new(MinimalSubscriber);
+    for (rounds, budget) in [
+        (0, ALLOC_TRACED_RUN_EMPTY),
+        (4, ALLOC_TRACED_RUN_FOUR_TOOL_ROUNDS),
+    ] {
+        let agent = agent(rounds, 1);
+        stable(
+            if rounds == 0 {
+                "traced_empty"
+            } else {
+                "traced_four_tool_rounds"
+            },
+            budget,
+            || {
+                async {
+                    let mut conversation = Conversation::default();
+                    let _: Value = agent.run(&mut conversation, "go").await.unwrap();
+                    assert_completed(conversation.last_run.as_ref().unwrap(), rounds, 1);
+                }
+                .with_subscriber(subscriber.clone())
+            },
+        )
+        .await;
+    }
+}
+
+struct UninterestedSubscriber;
+impl tracing::Subscriber for UninterestedSubscriber {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        false
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        unreachable!()
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        unreachable!()
+    }
+    fn enter(&self, _: &tracing::span::Id) {
+        unreachable!()
+    }
+    fn exit(&self, _: &tracing::span::Id) {
+        unreachable!()
+    }
+}
+#[tokio::test]
+async fn uninterested_subscriber_uses_the_conservative_tracing_path() {
+    use tracing::instrument::WithSubscriber;
+    let subscriber = tracing::Dispatch::new(UninterestedSubscriber);
+    let agent = agent(4, 1);
+    let workload = || async {
+        let mut conversation = Conversation::default();
+        let _: Value = agent.run(&mut conversation, "go").await.unwrap();
+        assert_completed(conversation.last_run.as_ref().unwrap(), 4, 1);
+    };
+    workload().with_subscriber(tracing::Dispatch::none()).await;
+    let (_, untraced) = measure(workload().with_subscriber(tracing::Dispatch::none())).await;
+    workload().with_subscriber(subscriber.clone()).await;
+    let (_, allocations) = measure(workload().with_subscriber(subscriber.clone())).await;
+    assert!(
+        allocations.count > untraced.count,
+        "an installed subscriber must retain the warning-capable path even when it rejects this workload: {allocations:?} vs untraced {untraced:?}"
+    );
+    stable(
+        "uninterested_four_tool_rounds",
+        ALLOC_TRACED_RUN_FOUR_TOOL_ROUNDS,
+        || workload().with_subscriber(subscriber.clone()),
+    )
+    .await;
 }

@@ -1,6 +1,6 @@
 [package]
 name = "agent-rs"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.89"
 description = "A resumable agent engine with an optional SQLite durable host"
@@ -66,6 +66,7 @@ rquickjs = { version = "0.14", default-features = false, features = ["std"], opt
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["process"], optional = true }
 [dev-dependencies]
+tracing-core = { version = "0.1", default-features = false, features = ["std"] }
 criterion = { version = "0.6", features = ["async_tokio"] }
 dhat = "0.3.3"
 tempfile = "3"
