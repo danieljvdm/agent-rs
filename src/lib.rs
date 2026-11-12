@@ -44,7 +44,7 @@ pub use automation::{
     FiringReport, IntervalAutomation, Occurrence, OccurrenceOutcome,
 };
 pub use children::{AttachedChild, ChildOutcome, ChildResult, ParentRun};
-pub use context::{ContextPolicy, ContextRequest};
+pub use context::{ContextPolicy, ContextRequest, PriorContext};
 pub use engine::{
     Agent, AgentBuilder, Checkpoint, Conversation, MemoryCheckpoint, RunControl, Subagent,
 };

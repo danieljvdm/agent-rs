@@ -182,7 +182,9 @@ impl RunUpdate {
 pub trait DurableStore: Checkpoint {
     /// Take exclusive residency; fails with [`Error::StoreBusy`] while a lease is alive.
     fn lease(&self) -> Result<StoreLease>;
-    /// Durably accept a run with bounded prior context from the conversation's history.
+    /// Durably accept a run with bounded prior context from the conversation's history. Offer
+    /// that history, newest first, to the agent's [`prior_context`](Agent::prior_context) and
+    /// accept with [`Agent::new_run_from`], so every store retains the same context.
     async fn accept(
         &self,
         agent: &Agent,

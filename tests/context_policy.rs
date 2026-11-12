@@ -1,5 +1,5 @@
-//! The `ContextPolicy` seam, exercised by small test-only policies: one that pins entries and one
-//! that contributes derived context.
+//! The `ContextPolicy` seam, exercised by small test-only policies: one that pins entries, one
+//! that contributes derived context, and one that replaces earlier runs' tool results.
 use agent_rs::*;
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -81,6 +81,19 @@ impl ContextPolicy for Derived {
     async fn cleanup(&self, run_id: RunId) -> Result<()> {
         self.cleaned.lock().unwrap().push(run_id);
         Ok(())
+    }
+}
+
+/// Replaces each earlier `blob` result with its size, as an application would keep IDs and a
+/// count in place of the records a tool returned.
+struct BlobSizes;
+#[async_trait]
+impl ContextPolicy for BlobSizes {
+    fn binding(&self) -> Value {
+        json!("blob-sizes-v1")
+    }
+    fn prior_result(&self, call: &ToolCall, result: &ToolResult) -> Option<Value> {
+        (call.name == "blob").then(|| json!({"bytes": result.value.as_str().map(str::len)}))
     }
 }
 
@@ -562,4 +575,119 @@ async fn policies_can_be_called_and_composed_outside_the_engine() {
         a.requests.lock().unwrap()[1],
         (run_id, "c".to_owned(), input, 32)
     );
+}
+
+#[tokio::test]
+async fn earlier_tool_results_reach_later_runs_as_the_policy_replaces_them() {
+    // The script replays for each run, so both runs make the same calls.
+    let model = Capture::new(vec![
+        ModelResponse::tools(vec![call("a", "blob", 400), call("n", "note", 3)]),
+        ModelResponse::final_output(json!("done")),
+    ]);
+    let agent = agent(model.clone(), 4096)
+        .context_policy(Arc::new(BlobSizes), 0)
+        .build()
+        .unwrap();
+    let mut conversation = Conversation::default();
+    let _: Value = agent.run(&mut conversation, "first").await.unwrap();
+    let _: Value = agent.run(&mut conversation, "second").await.unwrap();
+
+    let result = |id: &str, value: Value| ToolResult {
+        call_id: id.into(),
+        value,
+        is_error: false,
+    };
+    let tools = |blob: Value| HistoryEntry::Exchange {
+        response: ModelResponse::tools(vec![call("a", "blob", 400), call("n", "note", 3)]),
+        results: vec![result("a", blob), result("n", json!("xxx"))],
+    };
+    let done = HistoryEntry::Exchange {
+        response: ModelResponse::final_output(json!("done")),
+        results: vec![],
+    };
+    let (first, second) = (
+        HistoryEntry::Input(json!("first")),
+        HistoryEntry::Input(json!("second")),
+    );
+    let recorded = tools(json!("x".repeat(400)));
+    // The call keeps its name and arguments, and the policy left the `note` result alone.
+    let replaced = tools(json!({"bytes": 400}));
+    let prior = vec![first.clone(), replaced, done.clone()];
+
+    let history: Vec<_> = model.seen().into_iter().map(|(h, _)| h).collect();
+    // A run's own results are sent as recorded.
+    assert_eq!(history[1], [first.clone(), recorded.clone()]);
+    assert_eq!(history[2], [prior.clone(), vec![second.clone()]].concat());
+    // The second run sees the same exchange twice: replaced from the first run, whole as its own.
+    assert_eq!(
+        history[3],
+        [prior.clone(), vec![second.clone(), recorded.clone()]].concat()
+    );
+    // The run records what it sends; the conversation keeps every result whole.
+    assert_eq!(conversation.last_run.as_ref().unwrap().prior_context, prior);
+    assert_eq!(
+        conversation.history,
+        [
+            first,
+            recorded.clone(),
+            done.clone(),
+            second,
+            recorded,
+            done
+        ]
+    );
+}
+
+#[test]
+fn replaced_results_leave_room_for_older_entries_and_an_older_entry_never_displaces_a_newer() {
+    let model = || Arc::new(ScriptedModel::new(vec![]));
+    let conversation = [
+        HistoryEntry::Input(json!("old")),
+        exchange("a", "blob", 400),
+        exchange("b", "blob", 400),
+    ];
+    let replaced = |id: &str| HistoryEntry::Exchange {
+        response: ModelResponse::tools(vec![call(id, "blob", 400)]),
+        results: vec![ToolResult {
+            call_id: id.into(),
+            value: json!({"bytes": 400}),
+            is_error: false,
+        }],
+    };
+    let max = 600;
+    assert!(len(&conversation[1..]) > max);
+
+    // As recorded, only the newest exchange fits.
+    let plain = agent(model(), max).build().unwrap();
+    let state = plain
+        .new_run("c", json!("go"), &conversation, None)
+        .unwrap();
+    assert_eq!(state.prior_context, conversation[2..]);
+
+    // Replaced before it is measured, the whole conversation does.
+    let compact = agent(model(), max)
+        .context_policy(Arc::new(BlobSizes), 0)
+        .build()
+        .unwrap();
+    let state = compact
+        .new_run("c", json!("go"), &conversation, None)
+        .unwrap();
+    let expected = [conversation[0].clone(), replaced("a"), replaced("b")];
+    assert_eq!(state.prior_context, expected);
+    assert!(len(&expected) <= max);
+
+    // A store offers entries newest first and stops at the first refusal.
+    let mut prior = compact.prior_context();
+    assert!(prior.push(conversation[2].clone()));
+    assert!(!prior.push(exchange("big", "note", max)));
+    assert!(!prior.push(conversation[0].clone()));
+    let state = compact.new_run_from("c", json!("go"), prior, None).unwrap();
+    assert_eq!(state.prior_context, [replaced("b")]);
+
+    // `new_run` reports a newest entry that cannot fit; a store's own read leaves it out.
+    let newest = [exchange("big", "note", max)];
+    assert!(matches!(
+        compact.new_run("c", json!("go"), &newest, None),
+        Err(Error::Context(_))
+    ));
 }

@@ -1,4 +1,4 @@
-use crate::context::{assemble, encoded_len, suffix_start};
+use crate::context::{PriorContext, assemble, encoded_len, suffix_start};
 use crate::steering::Boundary;
 use crate::types::{STATE_VERSION, now_ms};
 use crate::{
@@ -173,7 +173,8 @@ impl<I, O> Agent<I, O> {
     pub fn binding(&self) -> &Value {
         &self.definition.binding
     }
-    /// Accepts `input`, retaining the bounded suffix of `conversation` that fits the context limit.
+    /// Accepts `input`, retaining the newest entries of `conversation` that fit the context limit
+    /// once the agent's [`ContextPolicy`] has replaced any earlier tool results.
     ///
     /// The run is in memory only; drive it with [`drive`](Self::drive). Fails with
     /// [`Error::Input`] for input that does not deserialize as the agent's input type or does not
@@ -186,19 +187,77 @@ impl<I, O> Agent<I, O> {
         conversation: &[HistoryEntry],
         expires_at_ms: Option<u64>,
     ) -> Result<RunState> {
+        let accepted = self.check_acceptance(conversation_id.into(), input)?;
+        let definition = &*self.definition;
+        let prior_context = if definition.context_policy.is_none() {
+            // Nothing is replaced, so the suffix is measured in place and copied once.
+            let max_context_bytes = definition.limits.max_context_bytes;
+            conversation[suffix_start(conversation, max_context_bytes)?..].to_vec()
+        } else {
+            let mut prior = self.prior_context();
+            for entry in conversation.iter().rev() {
+                if !prior.push(entry.clone()) {
+                    break;
+                }
+            }
+            if prior.is_empty() && !conversation.is_empty() {
+                return Err(Error::context("newest history group exceeds context limit"));
+            }
+            prior.into_entries()
+        };
+        Ok(self.accepted(accepted, prior_context, expires_at_ms))
+    }
+    /// Starts the prior context of a run this agent is about to accept, for a store that reads
+    /// a conversation's history itself; see [`PriorContext`].
+    pub fn prior_context(&self) -> PriorContext<'_> {
+        let definition = &*self.definition;
+        PriorContext::new(
+            definition
+                .context_policy
+                .as_ref()
+                .map(|(policy, _)| &**policy),
+            definition.limits.max_context_bytes,
+        )
+    }
+    /// Accepts `input` with the prior context collected in `prior`, which must come from this
+    /// agent's [`prior_context`](Self::prior_context). Otherwise as [`new_run`](Self::new_run),
+    /// except that a newest entry `prior` refused is left out without an error.
+    pub fn new_run_from(
+        &self,
+        conversation_id: impl Into<String>,
+        input: Value,
+        prior: PriorContext<'_>,
+        expires_at_ms: Option<u64>,
+    ) -> Result<RunState> {
+        let accepted = self.check_acceptance(conversation_id.into(), input)?;
+        Ok(self.accepted(accepted, prior.into_entries(), expires_at_ms))
+    }
+    /// What every acceptance checks before it retains any context: the conversation ID, the
+    /// input and the input's history entry.
+    fn check_acceptance(
+        &self,
+        conversation_id: String,
+        input: Value,
+    ) -> Result<(String, Value, HistoryEntry)> {
         let definition = &*self.definition;
         (definition.validate_input)(&input).map_err(Error::input)?;
-        let conversation_id = conversation_id.into();
         if conversation_id.is_empty() || conversation_id.len() > 1024 {
             return Err(Error::input("conversation ID must be 1..1024 bytes"));
         }
-        let max_context_bytes = definition.limits.max_context_bytes;
         let input_entry = HistoryEntry::Input(input.clone());
-        if encoded_len(&input_entry) + 2 > max_context_bytes {
+        if encoded_len(&input_entry) + 2 > definition.limits.max_context_bytes {
             return Err(Error::input("input exceeds context limit"));
         }
-        let prior_context = conversation[suffix_start(conversation, max_context_bytes)?..].to_vec();
-        Ok(RunState {
+        Ok((conversation_id, input, input_entry))
+    }
+    fn accepted(
+        &self,
+        (conversation_id, input, input_entry): (String, Value, HistoryEntry),
+        prior_context: Vec<HistoryEntry>,
+        expires_at_ms: Option<u64>,
+    ) -> RunState {
+        let definition = &*self.definition;
+        RunState {
             version: STATE_VERSION,
             id: RunId::new_v4(),
             conversation_id,
@@ -219,7 +278,7 @@ impl<I, O> Agent<I, O> {
             parent: None,
             children: vec![],
             child_usage: Usage::default(),
-        })
+        }
     }
     /// The same agent with its types erased, to serve beside agents of other types or to
     /// accept JSON input. Shares the definition, so its binding is the same.

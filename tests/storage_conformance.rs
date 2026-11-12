@@ -511,6 +511,93 @@ async fn history_is_ordered_and_context_is_bounded(fixture: &impl Fixture) {
     fixture.close(store).await;
 }
 
+/// Replaces every earlier tool result with the size of its text.
+struct ResultSizes;
+impl ContextPolicy for ResultSizes {
+    fn binding(&self) -> Value {
+        json!("result-sizes-v1")
+    }
+    fn prior_result(&self, _: &ToolCall, result: &ToolResult) -> Option<Value> {
+        Some(json!({"bytes": result.value.as_str().map(str::len)}))
+    }
+}
+
+async fn prior_results_are_replaced_before_context_is_bounded(fixture: &impl Fixture) {
+    const MAX: usize = 1024;
+    let page = |n: u64, value: Value| HistoryEntry::Exchange {
+        response: ModelResponse::tools(vec![ToolCall {
+            id: format!("call-{n}"),
+            name: "page".into(),
+            arguments: json!(n),
+        }]),
+        results: vec![ToolResult {
+            call_id: format!("call-{n}"),
+            value,
+            is_error: n == 1,
+        }],
+    };
+    let len = |entries: &[HistoryEntry]| serde_json::to_vec(entries).unwrap().len();
+    let store = fixture.open().await;
+    let plain = agent(vec![], vec![]);
+    let (mut recorded, mut replaced) = (Vec::new(), Vec::new());
+    for n in 0..3 {
+        let id = store
+            .accept(&plain, "prior", &n.to_string(), json!(n), None)
+            .await
+            .unwrap();
+        let mut state = store.claim(id).await.unwrap();
+        state.phase = Phase::Settled(Settlement::Completed(json!(n)));
+        state.history.push(page(n, json!("x".repeat(600))));
+        store.commit(&mut state).await.unwrap();
+        recorded.extend(state.history);
+        replaced.extend([
+            HistoryEntry::Input(json!(n)),
+            page(n, json!({"bytes": 600})),
+        ]);
+    }
+    // As recorded, two exchanges cannot share the limit; replaced, the conversation fits.
+    assert!(len(&recorded[3..]) > MAX);
+    assert!(len(&replaced) <= MAX);
+    let bounded = |id: &str| {
+        Agent::builder(id, Arc::new(ScriptedModel::new(vec![])))
+            .instructions("test")
+            .limits(Limits::default().with_max_context_bytes(MAX))
+    };
+    let compact = bounded("compact")
+        .context_policy(Arc::new(ResultSizes), 0)
+        .build()
+        .unwrap();
+    let id = store
+        .accept(&compact, "prior", "compact", json!("next"), None)
+        .await
+        .unwrap();
+    // The run records each result as its model will see it, beside its call and error flag.
+    assert_eq!(store.status(id).await.unwrap().prior_context, replaced);
+    // Stored history keeps every result whole, and the replaced context survives a restart.
+    let store = fixture.reopen(store).await;
+    recorded.push(HistoryEntry::Input(json!("next")));
+    assert_eq!(store.history("prior").await.unwrap(), recorded);
+    let mut state = store.claim(id).await.unwrap();
+    assert_eq!(state.prior_context, replaced);
+    state.phase = Phase::Settled(Settlement::Cancelled);
+    store.commit(&mut state).await.unwrap();
+
+    // Without a policy the same limit retains only the newest entries, as recorded.
+    let id = store
+        .accept(
+            &bounded("plain").build().unwrap(),
+            "prior",
+            "plain",
+            json!("last"),
+            None,
+        )
+        .await
+        .unwrap();
+    let state = store.status(id).await.unwrap();
+    assert_eq!(state.prior_context, recorded[4..]);
+    fixture.close(store).await;
+}
+
 async fn due_order_waits_and_expiry(fixture: &impl Fixture) {
     let store = fixture.open().await;
     let agent = agent(vec![], vec![]);
@@ -884,6 +971,11 @@ macro_rules! conformance_tests {
         $(#[$attr])*
         async fn retained_history_and_bounded_context() {
             history_is_ordered_and_context_is_bounded(&$make).await;
+        }
+        #[tokio::test]
+        $(#[$attr])*
+        async fn prior_results_are_replaced_at_acceptance() {
+            prior_results_are_replaced_before_context_is_bounded(&$make).await;
         }
         #[tokio::test]
         $(#[$attr])*

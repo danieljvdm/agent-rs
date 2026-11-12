@@ -149,7 +149,7 @@ With `default-features = false` the crate is the engine, the host and `MemorySto
 - **Limits.** `Limits` caps model calls, tool calls, tokens, bytes, parallelism and time. A run that hits one stops with `Error::Stopped`.
 - **Errors.** Every call returns one `Error` type. Its variants separate input to fix, work that failed, storage that could not be reached, and a request the store refused.
 - **Providers.** Implement `Model` for another provider. See [model adapters](https://github.com/danieljvdm/agent-rs/blob/main/docs/model-adapters.md).
-- **Context.** A `ContextPolicy` pins history entries and adds derived context to each model call. See [memory](https://github.com/danieljvdm/agent-rs/blob/main/docs/memory.md).
+- **Context.** A `ContextPolicy` pins history entries, adds derived context to each model call, and replaces earlier runs' tool results with compact references. [Memory](https://github.com/danieljvdm/agent-rs/blob/main/docs/memory.md) is the built-in policy.
 - **Subagents.** `AgentBuilder::subagents` lets the model delegate to child agents as tools. See [attached subagents](https://github.com/danieljvdm/agent-rs/blob/main/docs/attached-subagents.md).
 - **Code mode.** `codemode::CodeMode` gives the model one tool that runs a script calling other tools, each call durable as it happens. See [code mode](https://github.com/danieljvdm/agent-rs/blob/main/docs/codemode.md).
 - **Steering.** `Host::steer` adds an instruction to a run that is already going. See [steering](https://github.com/danieljvdm/agent-rs/blob/main/docs/steering.md).

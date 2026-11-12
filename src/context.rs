@@ -1,6 +1,6 @@
 //! Context assembly: which history reaches the model on each turn, and what an optional
 //! [`ContextPolicy`] adds beside it.
-use crate::{Error, HistoryEntry, Result, RunId, RunState};
+use crate::{Error, HistoryEntry, Result, RunId, RunState, ToolCall, ToolResult};
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::Value;
@@ -55,6 +55,18 @@ impl<'a> ContextRequest<'a> {
 /// - If the pinned entries alone exceed `max_context_bytes`, the turn fails with
 ///   [`Error::Context`] and the run settles as failed. Pinned entries are never dropped.
 ///
+/// **Prior context.** A run is accepted with the newest entries of its conversation, written by
+/// earlier runs, that fit `max_context_bytes`. [`prior_result`](Self::prior_result) may replace
+/// the value of any tool result among them, for example a page of records with their IDs and a
+/// count, so a later run pays for a reference where the earlier run paid for the data.
+/// - Only the value changes. The exchange keeps its response, each call's name and arguments, and
+///   each result's call ID and error flag, so calls never lose their results.
+/// - Replacement happens once, at acceptance, before an entry is measured: replaced entries leave
+///   room for older ones, and the run records what it will send, on every turn and after a
+///   restart.
+/// - The conversation's stored history is never rewritten, and results of the run's own history
+///   are never replaced.
+///
 /// **Derived context.** [`prepare`](Self::prepare) may return lower-trust reference data, such as
 /// summaries or retrieved items, highest priority first. It reaches the model in
 /// `ModelRequest::derived_context`, is never appended to history and is never checkpointed.
@@ -76,12 +88,39 @@ impl<'a> ContextRequest<'a> {
 ///
 /// **Binding.** [`binding`](Self::binding) and the cap are part of `Agent::binding`, so a
 /// persisted run is never resumed under a different policy. It is read once, when the agent is
-/// built. Describe everything that changes what the policy pins or prepares, stably and without
-/// credentials.
+/// built. Describe everything that changes what the policy replaces, pins or prepares, stably and
+/// without credentials.
 #[async_trait]
 pub trait ContextPolicy: Send + Sync {
     /// Stable, credential-free configuration included in the durable agent binding.
     fn binding(&self) -> Value;
+    /// What a run's model sees in place of `result`, which an earlier run of the conversation
+    /// recorded for `call`. `None`, the default, sends the result as recorded. Called once per
+    /// prior result when a run is accepted, which a store may do inside a transaction: keep it
+    /// cheap and a pure function of its arguments.
+    ///
+    /// ```
+    /// # use agent_rs::*;
+    /// # use serde_json::{Value, json};
+    /// /// Later runs see which items a search returned, and call it again to read them.
+    /// struct ItemReferences;
+    /// impl ContextPolicy for ItemReferences {
+    ///     fn binding(&self) -> Value {
+    ///         json!("item-references-v1")
+    ///     }
+    ///     fn prior_result(&self, call: &ToolCall, result: &ToolResult) -> Option<Value> {
+    ///         if call.name != "search_items" || result.is_error {
+    ///             return None;
+    ///         }
+    ///         let items = result.value.get("items")?.as_array()?;
+    ///         let ids: Vec<_> = items.iter().filter_map(|item| item.get("id")).collect();
+    ///         Some(json!({"omitted": "item bodies", "count": items.len(), "item_ids": ids}))
+    ///     }
+    /// }
+    /// ```
+    fn prior_result(&self, _call: &ToolCall, _result: &ToolResult) -> Option<Value> {
+        None
+    }
     /// Whether an entry of the run's own history must survive truncation. Called several times
     /// per entry on every turn: keep it cheap and a pure function of the entry.
     fn pinned(&self, _entry: &HistoryEntry) -> bool {
@@ -170,6 +209,69 @@ pub(crate) fn suffix_start(history: &[HistoryEntry], max_bytes: usize) -> Result
         start = index;
     }
     Ok(start)
+}
+
+/// The prior context of a run an agent is about to accept, started with
+/// [`Agent::prior_context`](crate::Agent::prior_context). A store offers it the conversation's
+/// entries newest first until one is refused, then accepts the run with
+/// [`Agent::new_run_from`](crate::Agent::new_run_from). It is the one place acceptance bounds
+/// history, so every store retains the same context for the same conversation.
+pub struct PriorContext<'a> {
+    policy: Option<&'a dyn ContextPolicy>,
+    window: Window,
+    /// Newest first.
+    entries: Vec<HistoryEntry>,
+    full: bool,
+}
+impl<'a> PriorContext<'a> {
+    pub(crate) fn new(policy: Option<&'a dyn ContextPolicy>, max_bytes: usize) -> Self {
+        Self {
+            policy,
+            window: Window {
+                max: max_bytes,
+                bytes: 2,
+                entries: 0,
+            },
+            entries: Vec::new(),
+            full: false,
+        }
+    }
+    /// Offers the conversation's next older entry. Returns whether it was retained: once an
+    /// entry does not fit `max_context_bytes`, it and every older entry are refused, so stop
+    /// reading. An entry is measured as the run will send it, after the agent's
+    /// [`ContextPolicy::prior_result`] has replaced any of its tool results.
+    pub fn push(&mut self, mut entry: HistoryEntry) -> bool {
+        if self.full {
+            return false;
+        }
+        if let (Some(policy), HistoryEntry::Exchange { response, results }) =
+            (self.policy, &mut entry)
+        {
+            // A result is offered only beside the call that made it.
+            for (call, result) in response.tools.iter().zip(results) {
+                if call.id == result.call_id
+                    && let Some(value) = policy.prior_result(call, result)
+                {
+                    result.value = value;
+                }
+            }
+        }
+        if self.window.add(&entry) {
+            self.entries.push(entry);
+        } else {
+            self.full = true;
+        }
+        !self.full
+    }
+    /// Whether no entry has been retained.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+    /// The retained entries, oldest first.
+    pub(crate) fn into_entries(mut self) -> Vec<HistoryEntry> {
+        self.entries.reverse();
+        self.entries
+    }
 }
 
 /// One turn's history, selected in a single pass and cloned once, as [`ContextPolicy`] describes.
