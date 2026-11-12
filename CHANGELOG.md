@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2 (2026-11-12)
+
+### Features
+
+#### Add content-free engine tracing
+
+Expose run, model, and tool timings and outcomes through `tracing`, with safe call identifiers and warnings for timeouts, failed cleanup, recovery, and unknown effects. Keep message content out of telemetry and preserve no-subscriber allocation budgets.
+
 ## 0.1.1 (2026-11-11)
 
 ### Features
