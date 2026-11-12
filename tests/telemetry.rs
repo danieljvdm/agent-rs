@@ -15,6 +15,25 @@ use tracing::instrument::WithSubscriber;
 mod tracing_capture;
 use tracing_capture::{Capture, CaptureState, Captured};
 
+#[test]
+fn capturing_subscribers_recheck_each_instances_filter() {
+    use tracing::Subscriber;
+    let metadata = tracing::subscriber::with_default(Capture::default(), || {
+        tracing::info_span!("capture_filter_probe")
+            .metadata()
+            .unwrap()
+    });
+    // These subscribers share callsites while parallel tests create and drop them. Keep
+    // filtering in `enabled`, so an instance's cached answer cannot hide another's spans.
+    for capture in [
+        Capture::at(Level::INFO),
+        Capture::at(Level::WARN),
+        Capture::named("unrelated"),
+    ] {
+        assert!(capture.register_callsite(metadata).is_sometimes());
+    }
+}
+
 struct Context;
 #[async_trait]
 impl ContextPolicy for Context {

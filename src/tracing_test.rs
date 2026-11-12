@@ -50,6 +50,11 @@ impl Visit for Fields<'_> {
     }
 }
 impl Subscriber for Capture {
+    fn register_callsite(&self, _: &'static Metadata<'static>) -> tracing::subscriber::Interest {
+        // Parallel tests install instances with different filters. Always consult the
+        // current instance, including while another thread rebuilds callsite interest.
+        tracing::subscriber::Interest::sometimes()
+    }
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
         self.1.is_none_or(|level| *metadata.level() <= level)
             && self.2.is_none_or(|name| metadata.name() == name)
