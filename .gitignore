@@ -9,3 +9,6 @@
 # Personal-agent application data and browser-smoke sessions.
 /.personal-agent/
 /.playwright-cli/
+# Local planning notes and linked worktrees.
+/.plans/
+/.worktrees/
