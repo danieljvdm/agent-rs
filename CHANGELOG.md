@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.3 (2026-11-12)
+
+### Features
+
+#### Add code mode
+
+With the `codemode` feature, `codemode::CodeMode` builds a subagent the model calls with JavaScript that calls the agent's other tools as async functions and returns one value. Each round of calls is a durable tool batch of the script's child run, so calls keep their authorization, approval, retry policy, budgets and crash recovery; each turn replays the script in a fresh, deterministic QuickJS interpreter against the recorded rounds. See `docs/codemode.md`. `codemode::Subprocess` runs the interpreter in a process of its own per turn, the `agent-rs-quickjs` binary or any binary that calls `codemode::serve`.
+
+#### Replace earlier runs' tool results in context
+
+Implement `ContextPolicy::prior_result` to send later runs of a conversation a compact reference, such as IDs and a count, in place of a tool result an earlier run recorded. It is told how many runs back each result is, so the latest can stay whole. Stored history and a run's own results are untouched. A custom `DurableStore` should now bound prior context with `Agent::prior_context` and `Agent::new_run_from`.
+
 ## 0.1.2 (2026-11-12)
 
 ### Features
