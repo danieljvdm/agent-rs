@@ -497,7 +497,7 @@ impl<I, O> AgentBuilder<I, O> {
         self
     }
     /// Opt into a [`ContextPolicy`]. `max_derived_bytes` caps the encoded array of its derived
-    /// context within `max_context_bytes`; a policy that only pins entries may pass zero.
+    /// context within `max_context_bytes`; a policy that adds none may pass zero.
     pub fn context_policy(
         mut self,
         policy: Arc<dyn ContextPolicy>,

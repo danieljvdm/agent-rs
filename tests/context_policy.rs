@@ -92,8 +92,28 @@ impl ContextPolicy for BlobSizes {
     fn binding(&self) -> Value {
         json!("blob-sizes-v1")
     }
-    fn prior_result(&self, call: &ToolCall, result: &ToolResult) -> Option<Value> {
-        (call.name == "blob").then(|| json!({"bytes": result.value.as_str().map(str::len)}))
+    fn prior_result(&self, prior: PriorResult<'_>) -> Option<Value> {
+        (prior.call.name == "blob")
+            .then(|| json!({"bytes": prior.result.value.as_str().map(str::len)}))
+    }
+}
+
+/// Replaces results older than the latest earlier run unless they are errors, and records each
+/// result it was offered: the call's ID, the result's call ID and how many runs back it is.
+#[derive(Default)]
+struct OlderRuns(Mutex<Vec<(String, String, usize)>>);
+#[async_trait]
+impl ContextPolicy for OlderRuns {
+    fn binding(&self) -> Value {
+        json!("older-runs-v1")
+    }
+    fn prior_result(&self, prior: PriorResult<'_>) -> Option<Value> {
+        self.0.lock().unwrap().push((
+            prior.call.id.clone(),
+            prior.result.call_id.clone(),
+            prior.runs_since,
+        ));
+        (prior.runs_since > 0 && !prior.result.is_error).then(|| json!("replaced"))
     }
 }
 
@@ -690,4 +710,86 @@ fn replaced_results_leave_room_for_older_entries_and_an_older_entry_never_displa
         compact.new_run("c", json!("go"), &newest, None),
         Err(Error::Context(_))
     ));
+}
+
+#[test]
+fn a_policy_sees_how_many_runs_back_a_result_is_beside_the_call_that_made_it() {
+    let result = |id: &str, value: &str, is_error: bool| ToolResult {
+        call_id: id.into(),
+        value: json!(value),
+        is_error,
+    };
+    let done = HistoryEntry::Exchange {
+        response: ModelResponse::final_output(json!("done")),
+        results: vec![],
+    };
+    // Two runs back: a failed call, and results recorded out of call order with one that no
+    // call of the exchange made.
+    let calls = vec![call("a", "blob", 1), call("b", "blob", 2)];
+    let failed = HistoryEntry::Exchange {
+        response: ModelResponse::tools(vec![call("e", "blob", 0)]),
+        results: vec![result("e", "failed", true)],
+    };
+    let shuffled = |a: &str, b: &str| HistoryEntry::Exchange {
+        response: ModelResponse::tools(calls.clone()),
+        results: vec![
+            result("b", b, false),
+            result("stray", "stray", false),
+            result("a", a, false),
+        ],
+    };
+    // One run back, with a steering instruction that starts no run of its own.
+    let steering = HistoryEntry::Steering {
+        id: SteeringId::nil(),
+        instruction: "shorter".into(),
+    };
+    let latest = HistoryEntry::Exchange {
+        response: ModelResponse::tools(vec![call("c", "blob", 3)]),
+        results: vec![result("c", "c", false)],
+    };
+    let conversation = [
+        HistoryEntry::Input(json!("first")),
+        failed.clone(),
+        shuffled("a", "b"),
+        done.clone(),
+        HistoryEntry::Input(json!("second")),
+        steering.clone(),
+        latest.clone(),
+        done.clone(),
+    ];
+    let policy = Arc::new(OlderRuns::default());
+    let agent = agent(Arc::new(ScriptedModel::new(vec![])), 4096)
+        .context_policy(policy.clone(), 0)
+        .build()
+        .unwrap();
+    let state = agent
+        .new_run("c", json!("third"), &conversation, None)
+        .unwrap();
+
+    // Offered newest first, each result with its own call; the stray result is never offered.
+    let offered = |call: &str, runs_since| (call.to_owned(), call.to_owned(), runs_since);
+    assert_eq!(
+        *policy.0.lock().unwrap(),
+        [
+            offered("c", 0),
+            offered("b", 1),
+            offered("a", 1),
+            offered("e", 1)
+        ]
+    );
+    // The latest run's result, the error the policy declined and the stray result are sent as
+    // recorded. Replaced results keep their place.
+    assert_eq!(
+        state.prior_context,
+        [
+            conversation[0].clone(),
+            failed,
+            shuffled("replaced", "replaced"),
+            done.clone(),
+            conversation[4].clone(),
+            steering,
+            latest,
+            done,
+        ]
+    );
 }

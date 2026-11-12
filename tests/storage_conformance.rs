@@ -517,8 +517,8 @@ impl ContextPolicy for ResultSizes {
     fn binding(&self) -> Value {
         json!("result-sizes-v1")
     }
-    fn prior_result(&self, _: &ToolCall, result: &ToolResult) -> Option<Value> {
-        Some(json!({"bytes": result.value.as_str().map(str::len)}))
+    fn prior_result(&self, prior: PriorResult<'_>) -> Option<Value> {
+        Some(json!({"bytes": prior.result.value.as_str().map(str::len)}))
     }
 }
 

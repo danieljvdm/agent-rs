@@ -37,6 +37,32 @@ impl<'a> ContextRequest<'a> {
     }
 }
 
+/// One tool result an earlier run of the conversation recorded, as
+/// [`ContextPolicy::prior_result`] receives it.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct PriorResult<'a> {
+    /// The call the earlier run's model made.
+    pub call: &'a ToolCall,
+    /// The result recorded for it.
+    pub result: &'a ToolResult,
+    /// How many runs the conversation accepted after the one that recorded this result, not
+    /// counting the run being accepted: 0 for the latest earlier run, whose results a follow-up
+    /// most often refers to. Counted by the inputs between the result and the end of history.
+    pub runs_since: usize,
+}
+impl<'a> PriorResult<'a> {
+    /// A prior result for calling a policy outside the engine: in its own tests, or from a
+    /// policy that composes others. The engine builds one for every result it offers.
+    pub fn new(call: &'a ToolCall, result: &'a ToolResult, runs_since: usize) -> Self {
+        Self {
+            call,
+            result,
+            runs_since,
+        }
+    }
+}
+
 /// Optional policy for what reaches the model on each turn, set with
 /// [`AgentBuilder::context_policy`](crate::AgentBuilder::context_policy). Without one the engine
 /// sends the default context described below and makes no calls through this trait.
@@ -60,12 +86,19 @@ impl<'a> ContextRequest<'a> {
 /// the value of any tool result among them, for example a page of records with their IDs and a
 /// count, so a later run pays for a reference where the earlier run paid for the data.
 /// - Only the value changes. The exchange keeps its response, each call's name and arguments, and
-///   each result's call ID and error flag, so calls never lose their results.
+///   each result's call ID and error flag, so calls never lose their results. A result is offered
+///   with the call of its exchange that has its call ID; one with no such call is sent as
+///   recorded.
 /// - Replacement happens once, at acceptance, before an entry is measured: replaced entries leave
 ///   room for older ones, and the run records what it will send, on every turn and after a
 ///   restart.
 /// - The conversation's stored history is never rewritten, and results of the run's own history
 ///   are never replaced.
+/// - Acceptance reads stored history, newest first, until an entry does not fit as the run will
+///   send it. Without a policy that is at most `max_context_bytes` of history. With one that
+///   replaces results it is as much recorded history as fills the limit once replaced, read and
+///   decoded on every acceptance, which a store may do inside a transaction. Set
+///   `max_context_bytes` to what the model should receive; the default is far more than that.
 ///
 /// **Derived context.** [`prepare`](Self::prepare) may return lower-trust reference data, such as
 /// summaries or retrieved items, highest priority first. It reaches the model in
@@ -94,31 +127,32 @@ impl<'a> ContextRequest<'a> {
 pub trait ContextPolicy: Send + Sync {
     /// Stable, credential-free configuration included in the durable agent binding.
     fn binding(&self) -> Value;
-    /// What a run's model sees in place of `result`, which an earlier run of the conversation
-    /// recorded for `call`. `None`, the default, sends the result as recorded. Called once per
-    /// prior result when a run is accepted, which a store may do inside a transaction: keep it
-    /// cheap and a pure function of its arguments.
+    /// What a run's model sees in place of a tool result an earlier run of the conversation
+    /// recorded. `None`, the default, sends the result as recorded. Called once per prior result
+    /// when a run is accepted, which a store may do inside a transaction: keep it cheap and a
+    /// pure function of its argument.
     ///
     /// ```
     /// # use agent_rs::*;
     /// # use serde_json::{Value, json};
-    /// /// Later runs see which items a search returned, and call it again to read them.
+    /// /// The run after a search still sees its items. Later runs see which items it returned,
+    /// /// and search again to read them.
     /// struct ItemReferences;
     /// impl ContextPolicy for ItemReferences {
     ///     fn binding(&self) -> Value {
     ///         json!("item-references-v1")
     ///     }
-    ///     fn prior_result(&self, call: &ToolCall, result: &ToolResult) -> Option<Value> {
-    ///         if call.name != "search_items" || result.is_error {
+    ///     fn prior_result(&self, prior: PriorResult<'_>) -> Option<Value> {
+    ///         if prior.runs_since == 0 || prior.call.name != "search_items" || prior.result.is_error {
     ///             return None;
     ///         }
-    ///         let items = result.value.get("items")?.as_array()?;
+    ///         let items = prior.result.value.get("items")?.as_array()?;
     ///         let ids: Vec<_> = items.iter().filter_map(|item| item.get("id")).collect();
     ///         Some(json!({"omitted": "item bodies", "count": items.len(), "item_ids": ids}))
     ///     }
     /// }
     /// ```
-    fn prior_result(&self, _call: &ToolCall, _result: &ToolResult) -> Option<Value> {
+    fn prior_result(&self, _prior: PriorResult<'_>) -> Option<Value> {
         None
     }
     /// Whether an entry of the run's own history must survive truncation. Called several times
@@ -221,6 +255,8 @@ pub struct PriorContext<'a> {
     window: Window,
     /// Newest first.
     entries: Vec<HistoryEntry>,
+    /// Inputs offered so far: the runs accepted after the next entry's own.
+    runs: usize,
     full: bool,
 }
 impl<'a> PriorContext<'a> {
@@ -233,6 +269,7 @@ impl<'a> PriorContext<'a> {
                 entries: 0,
             },
             entries: Vec::new(),
+            runs: 0,
             full: false,
         }
     }
@@ -247,15 +284,21 @@ impl<'a> PriorContext<'a> {
         if let (Some(policy), HistoryEntry::Exchange { response, results }) =
             (self.policy, &mut entry)
         {
-            // A result is offered only beside the call that made it.
-            for (call, result) in response.tools.iter().zip(results) {
-                if call.id == result.call_id
-                    && let Some(value) = policy.prior_result(call, result)
-                {
+            for (index, result) in results.iter_mut().enumerate() {
+                // The engine records results in call order; any other order is paired by ID.
+                let made = |call: &&ToolCall| call.id == result.call_id;
+                let call = (response.tools.get(index).filter(made))
+                    .or_else(|| response.tools.iter().find(made));
+                let replaced = call.and_then(|call| {
+                    policy.prior_result(PriorResult::new(call, result, self.runs))
+                });
+                if let Some(value) = replaced {
                     result.value = value;
                 }
             }
         }
+        // A run's history starts with its input, so entries older than it are a run further back.
+        self.runs += usize::from(matches!(entry, HistoryEntry::Input(_)));
         if self.window.add(&entry) {
             self.entries.push(entry);
         } else {
