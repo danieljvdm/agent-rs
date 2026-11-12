@@ -3,13 +3,14 @@
 #![cfg(feature = "codemode")]
 use agent_rs::codemode::{
     Answer, CodeMode, QuickJs, ScriptCall, ScriptFunction, ScriptLimits, ScriptModel,
-    ScriptRuntime, ScriptSession, Step, Subprocess, default_limits, description, input_type,
+    ScriptRuntime, ScriptSession, Step, Subprocess, declaration, default_limits, description,
+    input_type, output_type,
 };
 use agent_rs::*;
 use async_trait::async_trait;
 use futures::StreamExt;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{
@@ -1396,8 +1397,7 @@ fn the_description_declares_each_tool_and_is_byte_stable() {
             ),
         ]
     };
-    let specs: Vec<ToolSpec> = tools().iter().map(|t| t.spec().clone()).collect();
-    let text = description(&specs);
+    let text = description(&tools());
     assert!(text.contains(
         "/** The search tool. */\ndeclare function search(input: {\n  q: string;\n}): Promise<unknown>;\n"
     ), "{text}");
@@ -1418,7 +1418,10 @@ fn the_description_declares_each_tool_and_is_byte_stable() {
         assert!(text.contains(rule), "{rule}");
     }
     let empty = ToolSpec::new("now", "1").with_input_schema(json!({"type": "object"}));
-    assert!(description(&[empty]).contains("declare function now(): Promise<unknown>;"));
+    assert_eq!(
+        declaration(&empty, None),
+        "declare function now(): Promise<unknown>;\n"
+    );
     let first = code_mode(tools()).build().unwrap();
     let second = code_mode(tools()).build().unwrap();
     assert_eq!(
@@ -1431,6 +1434,123 @@ fn the_description_declares_each_tool_and_is_byte_stable() {
         first.spec().input_schema["properties"]["code"]["type"],
         json!("string")
     );
+}
+
+#[derive(Serialize, JsonSchema)]
+struct Contact {
+    id: u64,
+    /// As the user saved it.
+    name: String,
+    email: Option<String>,
+}
+#[derive(Serialize, JsonSchema)]
+struct Contacts {
+    data: Vec<Contact>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next: Option<String>,
+}
+fn find_contacts() -> Arc<dyn Tool> {
+    typed_tool::<Query, Contacts, _, _>(spec("find_contacts"), |_, _| async {
+        Ok(ToolOutput::Complete(Contacts {
+            data: vec![Contact {
+                id: 7,
+                name: "Adam".into(),
+                email: None,
+            }],
+            next: None,
+        }))
+    })
+}
+/// A tool around another, as an application writes to add its own cleanup or audit.
+struct Wrapped(Arc<dyn Tool>, bool);
+#[async_trait]
+impl Tool for Wrapped {
+    fn spec(&self) -> &ToolSpec {
+        self.0.spec()
+    }
+    fn output_schema(&self) -> Option<&Value> {
+        self.0.output_schema().filter(|_| self.1)
+    }
+    fn validate(&self, arguments: &Value) -> Result<()> {
+        self.0.validate(arguments)
+    }
+    async fn execute(&self, arguments: Value, context: ToolContext) -> Result<ToolOutput<Value>> {
+        self.0.execute(arguments, context).await
+    }
+}
+
+#[test]
+fn a_typed_tool_declares_the_type_of_its_result() {
+    let tool = find_contacts();
+    let typed = "/** The find_contacts tool. */\ndeclare function find_contacts(input: {\n  q: string;\n}): Promise<{\n  data: {\n    email?: string | null;\n    id: number;\n    /** As the user saved it. */\n    name: string;\n  }[];\n  next?: string | null;\n}>;\n";
+    assert_eq!(declaration(tool.spec(), tool.output_schema()), typed);
+    assert!(description(std::slice::from_ref(&tool)).contains(typed));
+    // A tool with no output schema, or a wrapper that does not pass one on, stays `unknown`.
+    let untyped = "declare function find_contacts(input: {\n  q: string;\n}): Promise<unknown>;\n";
+    assert!(declaration(tool.spec(), None).ends_with(untyped));
+    let hidden: Arc<dyn Tool> = Arc::new(Wrapped(tool.clone(), false));
+    assert!(description(&[hidden]).contains(untyped));
+    let passed: Arc<dyn Tool> = Arc::new(Wrapped(tool.clone(), true));
+    assert!(description(&[passed]).contains(typed));
+    // Results are rendered and bounded as inputs are.
+    for (schema, expected) in [
+        (
+            json!({"type": "integer", "format": "uint64", "minimum": 0}),
+            "number",
+        ),
+        (
+            json!({"type": "array", "items": {"type": "string"}}),
+            "string[]",
+        ),
+        (json!(true), "unknown"),
+        (json!({"$ref": "#/$defs/Missing"}), "unknown"),
+    ] {
+        assert_eq!(output_type(&schema), expected, "{schema}");
+        assert_eq!(input_type(&schema), expected, "{schema}");
+    }
+}
+
+#[test]
+fn the_output_schema_changes_the_code_tool_and_nothing_else_about_a_binding() {
+    let tool = find_contacts();
+    let hidden: Arc<dyn Tool> = Arc::new(Wrapped(tool.clone(), false));
+    // The spec, and so a direct agent's binding and every recorded operation, is the same with
+    // or without it.
+    assert_eq!(tool.spec(), hidden.spec());
+    assert!(
+        serde_json::to_value(tool.spec())
+            .unwrap()
+            .get("output_schema")
+            .is_none()
+    );
+    let direct = |tool: Arc<dyn Tool>| {
+        Agent::builder("direct", Arc::new(ScriptedModel::new(vec![])))
+            .tools([tool])
+            .build()
+            .unwrap()
+            .binding()
+            .clone()
+    };
+    assert_eq!(direct(tool.clone()), direct(hidden.clone()));
+    // The model is told the result's type in the code tool's description, which is bound.
+    let typed = code_mode(vec![tool]).build().unwrap();
+    let untyped = code_mode(vec![hidden]).build().unwrap();
+    assert_ne!(typed.spec().description, untyped.spec().description);
+    assert_ne!(typed.spec(), untyped.spec());
+}
+
+#[tokio::test]
+async fn a_script_reads_a_result_as_its_declaration_says() {
+    let code = code_mode(vec![find_contacts()]).build().unwrap();
+    let agent = parent(
+        code,
+        "const c = await find_contacts({ q: 'Adam' }); return [c.data[0].id, c.data[0].email, c.next];",
+    );
+    let (result, state) = run(&agent).await;
+    result.unwrap();
+    // `next` is left out and `email` is null, as `next?: string | null` and
+    // `email?: string | null` allow.
+    assert_eq!(delegated(&state).value["result"], json!([7, null, null]));
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -182,6 +182,16 @@ async fn discovers_and_adapts_real_stdio_file_effects_and_results() {
     let contract: Value = serde_json::from_str(&write.spec().version).unwrap();
     assert_eq!(contract["server"]["id"], "test-filesystem");
     assert_eq!(contract["tool"]["name"], "write_file");
+    // The result is described as the whole MCP result, around the server's own output schema.
+    let output_schema = write.output_schema().unwrap().clone();
+    assert_eq!(
+        output_schema["required"],
+        json!(["content", "structuredContent"])
+    );
+    assert_eq!(
+        output_schema["properties"]["structuredContent"],
+        contract["tool"]["outputSchema"]
+    );
     let state = drive(agent(
         vec![
             ModelResponse::tools(vec![call(
@@ -211,6 +221,12 @@ async fn discovers_and_adapts_real_stdio_file_effects_and_results() {
     assert_eq!(results[0].value["content"][0]["text"], "hello");
     assert_eq!(results[0].value["_meta"]["fixture"], "retained");
     assert!(!results[0].is_error);
+    let described = jsonschema::validator_for(&output_schema).unwrap();
+    assert!(
+        described.is_valid(&results[0].value),
+        "{}",
+        results[0].value
+    );
     assert_eq!(calls(root.path()), 2);
     client.close().await.unwrap();
     client.close().await.unwrap();

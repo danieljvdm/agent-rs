@@ -27,7 +27,7 @@ pub struct NoteInput {
     pub body: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Note {
     pub note_id: String,
     pub title: String,
@@ -248,6 +248,9 @@ struct JoinedTool {
 impl Tool for JoinedTool {
     fn spec(&self) -> &ToolSpec {
         self.inner.spec()
+    }
+    fn output_schema(&self) -> Option<&Value> {
+        self.inner.output_schema()
     }
     fn validate(&self, arguments: &Value) -> Result<()> {
         self.inner.validate(arguments)

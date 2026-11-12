@@ -26,7 +26,7 @@ The input is `{code: string}`, the body of an async function. The model is told,
 - A failed call throws a `ToolError` whose `value` is the tool's error result and whose `tool` is its name. The effects of calls that already ran are not undone.
 - There is no clock, no timers, no randomness, and no network or file access other than through the declared functions.
 
-Each allowed tool is declared as a TypeScript function after the contract, rendered from its input schema: `declare function search(input: { q: string }): Promise<unknown>;`. Results are `unknown`, since a `ToolSpec` has no output schema. A schema that cannot be rendered, or whose type is over 4 KiB, is declared `unknown`. A tool name that is not an identifier is mangled (`read-file` becomes `read_file`); two tools that mangle to the same name are a `build` error. The description is rendered once, in `build`, and is byte-stable for a given list of tools, because it is part of the parent's binding.
+Each allowed tool is declared as a TypeScript function after the contract, rendered from its input schema and its output schema: `declare function search(input: { q: string }): Promise<{ hits: string[] }>;`. The output schema is `Tool::output_schema`. `typed_tool` derives it from the handler's output type, and an MCP tool's is the MCP result around the server's declared output schema, so its data is under `structuredContent`. A tool without one resolves to `unknown`; a tool that wraps another should return the inner tool's. The schema describes a successful result and nothing checks a result against it; a failed call throws instead. A schema that cannot be rendered, or whose type is over 4 KiB, is declared `unknown`. A tool name that is not an identifier is mangled (`read-file` becomes `read_file`); two tools that mangle to the same name are a `build` error. The description is rendered once, in `build`, and is byte-stable for a given list of tools, because it is part of the parent's binding.
 
 A function takes at most one argument. No argument sends `{}`; an argument that is not JSON, or a second argument, throws a `TypeError` before anything is called. A call whose tool would reject its arguments (`Tool::validate`) is answered as a `ToolError` and is never dispatched.
 
@@ -105,4 +105,3 @@ Cancellation settles the child as cancelled and the parent sees `{error: "cancel
 ## Not supported
 
 - Scripts calling subagents: delegation stays one level deep, and a code mode child cannot have subagents.
-- Typed results in declarations, until `ToolSpec` has an output schema.

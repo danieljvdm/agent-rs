@@ -387,6 +387,7 @@ impl McpClient {
             identity: self.identity.clone(),
             remote_name: remote_name.into(),
             spec,
+            output_schema: result_schema(definition.output_schema.as_deref()),
             input,
             output,
         }))
@@ -441,6 +442,7 @@ pub struct McpTool {
     identity: ServerIdentity,
     remote_name: String,
     spec: ToolSpec,
+    output_schema: Value,
     input: jsonschema::Validator,
     output: Option<jsonschema::Validator>,
 }
@@ -464,6 +466,10 @@ fn not_sent(message: String) -> ToolOutput<Value> {
 impl Tool for McpTool {
     fn spec(&self) -> &ToolSpec {
         &self.spec
+    }
+
+    fn output_schema(&self) -> Option<&Value> {
+        Some(&self.output_schema)
     }
 
     fn validate(&self, arguments: &Value) -> Result<()> {
@@ -711,6 +717,52 @@ impl jsonschema::Retrieve for NoExternalSchemas {
         Err("MCP schemas must bundle their references; external retrieval is disabled".into())
     }
 }
+/// The schema of a successful result, for [`Tool::output_schema`]: the MCP result with its
+/// content blocks and, when the tool declares an output schema, the `structuredContent` that
+/// schema describes.
+fn result_schema(declared: Option<&serde_json::Map<String, Value>>) -> Value {
+    let mut schema = json!({
+        "type": "object",
+        "properties": {"content": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"type": {"type": "string"}, "text": {"type": "string"}},
+            "required": ["type"],
+        }}},
+        "required": ["content"],
+    });
+    if let Some(declared) = declared {
+        let mut declared = declared.clone();
+        // The declared schema is no longer the root, and must not claim to be.
+        declared.remove("$schema");
+        declared.remove("$id");
+        let mut declared = Value::Object(declared);
+        rebase_references(&mut declared);
+        schema["properties"]["structuredContent"] = declared;
+        schema["required"] = json!(["content", "structuredContent"]);
+    }
+    schema
+}
+
+/// Points every local `$ref` of a schema at where [`result_schema`] puts that schema.
+fn rebase_references(schema: &mut Value) {
+    match schema {
+        Value::Object(object) => {
+            for (key, value) in object {
+                match (key.as_str(), value) {
+                    ("$ref", Value::String(reference)) if reference.starts_with('#') => {
+                        reference.insert_str(1, "/properties/structuredContent");
+                    }
+                    // Data, not schemas.
+                    ("const" | "enum" | "default" | "examples", _) => {}
+                    (_, value) => rebase_references(value),
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(rebase_references),
+        _ => {}
+    }
+}
+
 fn compile_schema(schema: &Value) -> Result<jsonschema::Validator> {
     if schema.get("type").and_then(Value::as_str) != Some("object") {
         return Err(Error::config("MCP tool schemas must have type object"));
@@ -719,4 +771,83 @@ fn compile_schema(schema: &Value) -> Result<jsonschema::Validator> {
         .with_retriever(NoExternalSchemas)
         .build(schema)
         .map_err(|error| Error::config(format!("invalid MCP tool schema: {error}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn object(value: Value) -> serde_json::Map<String, Value> {
+        value.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn a_result_schema_describes_the_mcp_result_around_the_declared_schema() {
+        let undeclared = result_schema(None);
+        assert_eq!(undeclared["required"], json!(["content"]));
+        assert!(undeclared["properties"].get("structuredContent").is_none());
+        let validator = jsonschema::validator_for(&undeclared).unwrap();
+        assert!(validator.is_valid(&json!({"content": [{"type": "text", "text": "hi"}]})));
+        assert!(!validator.is_valid(&json!({"content": [{"text": "hi"}]})));
+
+        // Local references still resolve where the declared schema now sits; data that only
+        // looks like a reference is left alone.
+        let declared = object(json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": "https://example.com/items",
+            "type": "object",
+            "properties": {
+                "items": {"type": "array", "items": {"$ref": "#/$defs/Item"}},
+                "parent": {"$ref": "#"},
+                "kind": {"const": {"$ref": "#/kept"}}
+            },
+            "required": ["items"],
+            "$defs": {"Item": {"type": "object", "properties": {"id": {"type": "integer"}},
+                               "required": ["id"]}}
+        }));
+        let schema = result_schema(Some(&declared));
+        assert_eq!(schema["required"], json!(["content", "structuredContent"]));
+        let inner = &schema["properties"]["structuredContent"];
+        assert!(inner.get("$schema").is_none() && inner.get("$id").is_none());
+        assert_eq!(
+            inner["properties"]["items"]["items"]["$ref"],
+            "#/properties/structuredContent/$defs/Item"
+        );
+        assert_eq!(
+            inner["properties"]["parent"]["$ref"],
+            "#/properties/structuredContent"
+        );
+        assert_eq!(
+            inner["properties"]["kind"]["const"],
+            json!({"$ref": "#/kept"})
+        );
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        let result = |structured: Value| json!({"content": [], "structuredContent": structured});
+        assert!(validator.is_valid(&result(
+            json!({"items": [{"id": 1}], "parent": {"items": []}})
+        )));
+        assert!(!validator.is_valid(&result(json!({"items": [{"id": "one"}]}))));
+        assert!(!validator.is_valid(&result(json!({"items": [], "parent": {"items": [{}]}}))));
+        assert!(!validator.is_valid(&json!({"content": []})));
+    }
+
+    #[cfg(feature = "codemode")]
+    #[test]
+    fn code_mode_declares_an_mcp_result_with_its_structured_content() {
+        let declared = object(json!({
+            "type": "object",
+            "properties": {"items": {"type": "array", "items": {"$ref": "#/$defs/Item"}}},
+            "required": ["items"],
+            "$defs": {"Item": {"type": "object", "properties": {"id": {"type": "integer"}},
+                               "required": ["id"]}}
+        }));
+        assert_eq!(
+            crate::codemode::output_type(&result_schema(Some(&declared))),
+            "{\n  content: {\n    text?: string;\n    type: string;\n  }[];\n  structuredContent: {\n    items: {\n      id: number;\n    }[];\n  };\n}"
+        );
+        assert_eq!(
+            crate::codemode::output_type(&result_schema(None)),
+            "{\n  content: {\n    text?: string;\n    type: string;\n  }[];\n}"
+        );
+    }
 }

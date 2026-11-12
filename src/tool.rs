@@ -90,6 +90,15 @@ pub trait Tool: Send + Sync {
     /// The tool's spec. It must not change while the agent exists: the agent's binding and every
     /// recorded operation keep a copy of it.
     fn spec(&self) -> &ToolSpec;
+    /// JSON Schema of a successful result, or `None`, the default, to leave results undescribed.
+    /// Code mode declares the tool's return type from it. It is not part of the spec, so it is
+    /// neither stored with a run nor part of the agent's binding, and the engine does not check
+    /// a result against it: a reported failure, or an application's reply to a
+    /// [`WaitRequest::Input`], may have another shape. A tool that wraps another should return
+    /// the inner tool's.
+    fn output_schema(&self) -> Option<&Value> {
+        None
+    }
     /// Checks the model's arguments before any call of the batch starts. An error fails the run;
     /// report it with [`Error::model_output`].
     fn validate(&self, arguments: &Value) -> Result<()>;
@@ -105,6 +114,7 @@ pub trait Tool: Send + Sync {
 }
 struct TypedTool<A, O, F> {
     spec: ToolSpec,
+    output_schema: Value,
     handler: F,
     marker: PhantomData<fn(A) -> O>,
 }
@@ -118,6 +128,9 @@ where
 {
     fn spec(&self) -> &ToolSpec {
         &self.spec
+    }
+    fn output_schema(&self) -> Option<&Value> {
+        Some(&self.output_schema)
     }
     fn validate(&self, arguments: &Value) -> Result<()> {
         // `&Value` is a deserializer, so checking the arguments never copies them.
@@ -140,19 +153,21 @@ where
 }
 /// Register one heterogeneous dispatch boundary with typed arguments and results.
 ///
-/// The tool's input schema is derived from `A`, replacing `spec.input_schema`. Arguments that do
-/// not deserialize as `A` are rejected by `validate`, which fails the run; an output that cannot
-/// be encoded as JSON is an execution error.
+/// The tool's input schema is derived from `A`, replacing `spec.input_schema`, and its
+/// [`output_schema`](Tool::output_schema) is derived from `O`. Arguments that do not deserialize
+/// as `A` are rejected by `validate`, which fails the run; an output that cannot be encoded as
+/// JSON is an execution error.
 pub fn typed_tool<A, O, F, Fut>(mut spec: ToolSpec, handler: F) -> Arc<dyn Tool>
 where
     A: DeserializeOwned + JsonSchema + Send + 'static,
-    O: Serialize + Send + 'static,
+    O: Serialize + JsonSchema + Send + 'static,
     F: Fn(A, ToolContext) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<ToolOutput<O>>> + Send + 'static,
 {
     spec.input_schema = serde_json::to_value(schema_for!(A)).expect("schema serialization");
     Arc::new(TypedTool::<A, O, F> {
         spec,
+        output_schema: serde_json::to_value(schema_for!(O)).expect("schema serialization"),
         handler,
         marker: PhantomData,
     })

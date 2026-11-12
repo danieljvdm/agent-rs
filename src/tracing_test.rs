@@ -2,11 +2,11 @@
 #![allow(dead_code)]
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     thread::ThreadId,
 };
 use tracing::{
-    Level, Metadata, Subscriber,
+    Dispatch, Level, Metadata, Subscriber,
     field::{Field, Visit},
     span::{Attributes, Id, Record},
 };
@@ -26,18 +26,33 @@ pub(crate) struct CaptureState {
     pub(crate) records: Vec<(usize, BTreeMap<String, String>)>,
     pub(crate) closed: Vec<usize>,
 }
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct Capture(
     pub(crate) Arc<Mutex<CaptureState>>,
     Option<Level>,
     Option<&'static str>,
 );
+impl Default for Capture {
+    fn default() -> Self {
+        Self::new(None, None)
+    }
+}
 impl Capture {
     pub(crate) fn named(name: &'static str) -> Self {
-        Self(Arc::default(), None, Some(name))
+        Self::new(None, Some(name))
     }
     pub(crate) fn at(level: Level) -> Self {
-        Self(Arc::default(), Some(level), None)
+        Self::new(Some(level), None)
+    }
+    fn new(level: Option<Level>, name: Option<&'static str>) -> Self {
+        // While one dispatcher is registered, tracing computes a new callsite's interest from
+        // the subscriber of the thread that reaches it first. A parallel test on a thread with
+        // no subscriber then caches `never`, and hides the callsite from the capture on this
+        // one. Two idle dispatchers that outlive every test keep tracing asking each
+        // registered dispatcher instead, and every capture answers `sometimes`.
+        static IDLE: OnceLock<[Dispatch; 2]> = OnceLock::new();
+        IDLE.get_or_init(|| [(); 2].map(|()| Dispatch::new(Self(Arc::default(), None, None))));
+        Self(Arc::default(), level, name)
     }
 }
 struct Fields<'a>(&'a mut BTreeMap<String, String>);
