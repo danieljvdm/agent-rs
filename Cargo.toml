@@ -37,6 +37,8 @@ memory = []
 mcp = ["dep:rmcp", "dep:jsonschema", "dep:rustix", "tokio/process", "tokio/io-util", "tokio-util/codec"]
 google-calendar = ["dep:reqwest", "dep:chrono", "dep:sha2"]
 postgres = ["dep:tokio-postgres"]
+# Code mode: a `code` tool whose JavaScript calls the agent's other tools, run in QuickJS.
+codemode = ["dep:rquickjs"]
 # Used only by the repository's `examples/benchmark_metrics.rs` to count allocations; it changes
 # nothing in the library.
 allocation-metrics = []
@@ -60,6 +62,7 @@ chrono = { version = "0.4", default-features = false, features = ["std"], option
 sha2 = { version = "0.10", optional = true }
 # Its default `runtime` feature adds Tokio networking, only when `postgres` is enabled.
 tokio-postgres = { version = "0.7.18", optional = true }
+rquickjs = { version = "0.14", default-features = false, features = ["std"], optional = true }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["process"], optional = true }
 [dev-dependencies]
@@ -85,6 +88,14 @@ required-features = ["mcp"]
 [[example]]
 name = "postgres_workflow"
 required-features = ["postgres"]
+[[example]]
+name = "codemode_workflow"
+required-features = ["codemode"]
+# The script process of `codemode::Subprocess`.
+[[bin]]
+name = "agent-rs-quickjs"
+path = "src/bin/agent-rs-quickjs.rs"
+required-features = ["codemode"]
 [[bench]]
 name = "agent_loop"
 harness = false

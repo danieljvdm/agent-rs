@@ -1,7 +1,8 @@
 //! Attached subagents under Criterion: a parent that delegates to 1 or 4 children, in memory and
-//! through a resident SQLite host. Scripts and children are deterministic, and every iteration
-//! verifies the typed result, each child's settlement and the exact work counts, so skipping
-//! work fails the benchmark. See `docs/benchmarks.md`.
+//! through a resident SQLite host, and, with `codemode`, a code mode script of 1, 8 or 32 rounds
+//! in memory. Scripts and children are deterministic, and every iteration verifies the typed
+//! result, each child's settlement and the exact work counts, so skipping work fails the
+//! benchmark. See `docs/benchmarks.md`.
 use agent_rs::{sqlite::SqliteStore, *};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use serde_json::{Value, json};
@@ -140,6 +141,99 @@ fn workloads(c: &mut Criterion) {
     group.finish();
 }
 
+/// A code mode script of `rounds` sequential calls, in memory, with the interpreter in-process
+/// and in a subprocess. Each turn replays every earlier round, so the time grows with the square
+/// of the rounds; a subprocess adds a process start per turn.
+#[cfg(feature = "codemode")]
+fn code_mode(c: &mut Criterion) {
+    use agent_rs::codemode::{QuickJs, ScriptRuntime, Subprocess, default_limits};
+    let runtime = runtime();
+    let mut group = c.benchmark_group("code-mode-rounds-v1");
+    group.throughput(Throughput::Elements(1));
+    let interpreters: [(&str, Arc<dyn ScriptRuntime>); 2] = [
+        ("in-process", Arc::new(QuickJs)),
+        (
+            "subprocess",
+            Arc::new(Subprocess::new(env!("CARGO_BIN_EXE_agent-rs-quickjs"))),
+        ),
+    ];
+    for (name, interpreter) in interpreters {
+        for rounds in [1_u32, 8, 32] {
+            let agent = code_mode_parent(rounds, interpreter.clone(), default_limits());
+            let total = rounds * (rounds - 1) / 2;
+            group.bench_with_input(BenchmarkId::new(name, rounds), &rounds, |b, _| {
+                b.iter_custom(|iterations| {
+                    runtime.block_on(async {
+                        let mut elapsed = Duration::ZERO;
+                        for _ in 0..iterations {
+                            let started = Instant::now();
+                            let mut state = agent.new_run("bench", json!("go"), &[], None).unwrap();
+                            agent
+                                .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+                                .await
+                                .unwrap();
+                            elapsed += started.elapsed();
+                            let child = &state.children[0].state;
+                            assert_eq!(
+                                child.phase,
+                                Phase::Settled(Settlement::Completed(
+                                    json!({"result": total, "logs": []})
+                                ))
+                            );
+                            assert_eq!(child.usage.model_calls, rounds + 1);
+                            assert_eq!(child.usage.tool_calls, rounds);
+                        }
+                        elapsed
+                    })
+                })
+            });
+        }
+    }
+    group.finish();
+}
+/// A parent that runs, through code mode in `interpreter`, `rounds` sequential `echo` calls.
+#[cfg(feature = "codemode")]
+fn code_mode_parent(
+    rounds: u32,
+    interpreter: Arc<dyn agent_rs::codemode::ScriptRuntime>,
+    limits: Limits,
+) -> Agent {
+    let echo = typed_tool::<u32, u32, _, _>(
+        ToolSpec::new("echo", "1").with_retry(RetryPolicy::ReadOnly),
+        |n, _| async move { Ok(ToolOutput::Complete(n)) },
+    );
+    let mode = agent_rs::codemode::CodeMode::new("code")
+        .tools([echo])
+        .runtime(interpreter)
+        .limits(
+            limits
+                .with_max_model_calls(rounds + 1)
+                .with_max_tool_calls(rounds),
+        )
+        .build()
+        .unwrap();
+    let code = format!(
+        "let total = 0; for (let n = 0; n < {rounds}; n++) total += await echo(n); return total;"
+    );
+    Agent::builder(
+        "bench-code-parent",
+        Arc::new(ScriptedModel::new(vec![
+            ModelResponse::tools(vec![ToolCall {
+                id: "script".into(),
+                name: "code".into(),
+                arguments: json!({ "code": code }),
+            }]),
+            ModelResponse::final_output(json!("done")),
+        ])),
+    )
+    .limits(Limits::default().with_max_model_calls(rounds + 3))
+    .subagents(1, [mode])
+    .build()
+    .unwrap()
+}
+#[cfg(not(feature = "codemode"))]
+fn code_mode(_: &mut Criterion) {}
+
 /// A fresh database and resident host.
 struct Resident {
     _directory: tempfile::TempDir,
@@ -183,5 +277,5 @@ impl Resident {
     }
 }
 
-criterion_group! { name = benches; config = configured(); targets = workloads }
+criterion_group! { name = benches; config = configured(); targets = workloads, code_mode }
 criterion_main!(benches);

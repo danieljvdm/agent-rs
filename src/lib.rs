@@ -14,6 +14,8 @@
 #![warn(missing_docs)]
 mod automation;
 mod children;
+#[cfg(feature = "codemode")]
+pub mod codemode;
 mod context;
 mod engine;
 mod error;

@@ -32,6 +32,12 @@ use agent_rs::{
     FiringReport, IntervalAutomation, Occurrence, OccurrenceOutcome,
 };
 // Optional adapters, each behind its feature.
+#[cfg(feature = "codemode")]
+use agent_rs::codemode::{
+    Answer, CodeMode, Logs, PinAll, QuickJs, ScriptCall, ScriptFunction, ScriptLimits, ScriptModel,
+    ScriptRuntime, ScriptSession, Step, Subprocess, declaration, default_limits, description,
+    identifier, input_type, serve,
+};
 #[cfg(feature = "google-calendar")]
 use agent_rs::google_calendar::{
     CalendarDay, CalendarScope, GoogleCalendar, Meeting, ReminderReceipt,
