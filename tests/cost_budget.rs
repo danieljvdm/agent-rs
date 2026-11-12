@@ -367,6 +367,15 @@ fn prior_entries(count: usize) -> Vec<HistoryEntry> {
 
 #[tokio::test]
 async fn engine_allocation_budgets() {
+    // Other threads' subscribers can enable the shared callsite cache. This run still has
+    // no subscriber, so their interest must not select the allocating tracing path.
+    let _other_subscribers = [
+        tracing::Dispatch::new(MinimalSubscriber),
+        tracing::Dispatch::new(MinimalSubscriber),
+    ];
+    assert!(tracing::dispatcher::get_default(|subscriber| {
+        subscriber.is::<tracing::subscriber::NoSubscriber>()
+    }));
     let simple = agent(0, 0);
     stable(
         "run_empty_conversation",
@@ -1838,31 +1847,23 @@ async fn uninterested_subscriber_uses_the_conservative_tracing_path() {
     use tracing::instrument::WithSubscriber;
     let subscriber = tracing::Dispatch::new(UninterestedSubscriber);
     let agent = agent(4, 1);
-    let workload = || {
-        async {
-            let mut conversation = Conversation::default();
-            let _: Value = agent.run(&mut conversation, "go").await.unwrap();
-            assert_completed(conversation.last_run.as_ref().unwrap(), 4, 1);
-        }
-        .with_subscriber(subscriber.clone())
+    let workload = || async {
+        let mut conversation = Conversation::default();
+        let _: Value = agent.run(&mut conversation, "go").await.unwrap();
+        assert_completed(conversation.last_run.as_ref().unwrap(), 4, 1);
     };
-    workload().await;
-    let (_, allocations) = measure(workload()).await;
+    workload().with_subscriber(tracing::Dispatch::none()).await;
+    let (_, untraced) = measure(workload().with_subscriber(tracing::Dispatch::none())).await;
+    workload().with_subscriber(subscriber.clone()).await;
+    let (_, allocations) = measure(workload().with_subscriber(subscriber.clone())).await;
     assert!(
-        allocations.count > ALLOC_RUN_FOUR_TOOL_ROUNDS.count,
-        "an installed subscriber must retain the warning-capable path even when it rejects this workload"
+        allocations.count > untraced.count,
+        "an installed subscriber must retain the warning-capable path even when it rejects this workload: {allocations:?} vs untraced {untraced:?}"
     );
     stable(
         "uninterested_four_tool_rounds",
         ALLOC_TRACED_RUN_FOUR_TOOL_ROUNDS,
-        || {
-            async {
-                let mut conversation = Conversation::default();
-                let _: Value = agent.run(&mut conversation, "go").await.unwrap();
-                assert_completed(conversation.last_run.as_ref().unwrap(), 4, 1);
-            }
-            .with_subscriber(subscriber.clone())
-        },
+        || workload().with_subscriber(subscriber.clone()),
     )
     .await;
 }

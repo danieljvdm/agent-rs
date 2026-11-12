@@ -172,6 +172,11 @@ pub(crate) fn unknown(span: &Span, op: &Operation, call: Call) {
 }
 
 pub(crate) fn tool_span(op: &Operation, call: Call) -> Span {
+    // Callsite interest is shared across dispatchers. Another thread's subscriber can
+    // make the macro return a non-disabled span even when this thread has no subscriber.
+    if !has_subscriber() {
+        return Span::none();
+    }
     tracing::info_span!("execute_tool",
         otel.name = %format_args!("execute_tool {}", op.spec.name), otel.kind = "internal",
         gen_ai.operation.name = "execute_tool", gen_ai.tool.name = %op.spec.name,
@@ -192,7 +197,7 @@ where
     F: Future + Send + 'a,
     G: Future<Output = F::Output> + Send + 'a,
 {
-    if !span.is_disabled() || has_subscriber() {
+    if has_subscriber() {
         Either::Right(Box::pin(traced(args).instrument(span)))
     } else {
         Either::Left(plain(args))
