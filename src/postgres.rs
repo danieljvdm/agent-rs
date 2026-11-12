@@ -1307,7 +1307,7 @@ impl PostgresStore {
             .await
             .map_err(|_| Error::storage("PostgreSQL connection timed out"))?
             .map_err(Error::storage)?;
-        let mut connection = ConnectionTask(crate::telemetry::spawn(connection));
+        let mut connection = ConnectionTask(tokio::spawn(connection));
         let counters = Arc::new(Counters::default());
         let opened = timeout(deadline, Database::open(client, schema, counters.clone()))
             .await

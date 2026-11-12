@@ -1699,6 +1699,13 @@ impl Window {
         let deadline = work_deadline(state, now, timeout_ms).min(work_end);
         (deadline > now).then_some(deadline)
     }
+    fn take_span(&mut self, index: usize) -> Span {
+        self.spans
+            .iter()
+            .position(|(i, _)| *i == index)
+            .map(|position| self.spans.swap_remove(position).1)
+            .unwrap_or_else(Span::none)
+    }
     fn record_span(
         &mut self,
         op: &Operation,
@@ -1706,12 +1713,7 @@ impl Window {
         call: telemetry::Call,
         bytes: Option<usize>,
     ) {
-        let span = self
-            .spans
-            .iter()
-            .position(|(i, _)| *i == index)
-            .map(|position| self.spans.swap_remove(position).1)
-            .unwrap_or_else(Span::none);
+        let span = self.take_span(index);
         telemetry::record_operation(&span, op, call, bytes);
     }
     fn record(&mut self, state: &mut RunState, finished: Finished) {
@@ -1735,11 +1737,17 @@ impl Window {
             self.interrupted = true;
         }
         let call = telemetry::Call::tool(state, index);
+        let span = self.take_span(index);
         let op = &mut state.operations[index];
-        let (status, bytes) =
-            outcome_status(op, outcome, cleanup, state.limits.max_tool_output_bytes);
+        let (status, bytes) = outcome_status(
+            op,
+            outcome,
+            cleanup,
+            state.limits.max_tool_output_bytes,
+            !span.is_disabled(),
+        );
         op.status = status;
-        self.record_span(op, index, call, bytes);
+        telemetry::record_operation(&span, op, call, bytes);
         if self.interrupted || stops_dispatch(&op.status) {
             self.open = false;
         }
@@ -1963,6 +1971,7 @@ fn outcome_status(
     outcome: WorkOutcome<ToolOutput<Value>>,
     cleanup: std::result::Result<Result<()>, tokio::time::error::Elapsed>,
     max_bytes: usize,
+    record_bytes: bool,
 ) -> (OperationStatus, Option<usize>) {
     let interrupted = matches!(outcome, WorkOutcome::Interrupted);
     let mut value = match outcome {
@@ -1989,7 +1998,7 @@ fn outcome_status(
         ),
     };
     let bytes = match &status {
-        OperationStatus::Complete(result) => Some(encoded_len(&result.value)),
+        OperationStatus::Complete(result) if record_bytes => Some(encoded_len(&result.value)),
         _ => None,
     };
     (status, bytes)
@@ -2333,6 +2342,82 @@ mod telemetry_tests {
                 capture.0.lock().unwrap().spans[0].fields["output_bytes"],
                 expected.to_string()
             );
+        }
+    }
+    #[test]
+    fn failed_tool_outputs_are_only_encoded_for_an_enabled_span() {
+        for traced in [false, true] {
+            for fault in 0..3 {
+                let agent = Agent::builder("encoding", Arc::new(crate::ScriptedModel::new(vec![])))
+                    .build()
+                    .unwrap();
+                let mut state = agent
+                    .new_run("conversation", json!("input"), &[], None)
+                    .unwrap();
+                state.operations.push(Operation {
+                    call: ToolCall {
+                        id: "id".into(),
+                        name: "tool".into(),
+                        arguments: Value::Null,
+                    },
+                    spec: ToolSpec::new("tool", "1").with_retry(RetryPolicy::ReadOnly),
+                    idempotency_key: "key".into(),
+                    status: OperationStatus::Dispatched,
+                });
+                let capture = crate::tracing_capture::Capture::default();
+                let dispatch = if traced {
+                    tracing::Dispatch::new(capture.clone())
+                } else {
+                    tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default())
+                };
+                tracing::dispatcher::with_default(&dispatch, || {
+                    let mut window = Window::new(0);
+                    window.running = 1;
+                    if traced {
+                        window.spans.push((
+                            0,
+                            telemetry::tool_span(
+                                &state.operations[0],
+                                telemetry::Call::tool(&state, 0),
+                            ),
+                        ));
+                    }
+                    let outcome = if fault == 0 {
+                        WorkOutcome::TimedOut
+                    } else if fault == 1 {
+                        WorkOutcome::Done(Err(Error::tool("failure")))
+                    } else {
+                        WorkOutcome::Done(Ok(ToolOutput::Complete(json!("result"))))
+                    };
+                    let cleanup = if fault == 2 {
+                        Ok(Err(Error::tool("cleanup")))
+                    } else {
+                        Ok(Ok(()))
+                    };
+                    let encodings = crate::context::count_encodings(|| {
+                        window.record(
+                            &mut state,
+                            Finished::Tool {
+                                index: 0,
+                                outcome,
+                                cleanup,
+                            },
+                        )
+                    });
+                    assert_eq!(
+                        encodings,
+                        usize::from(traced),
+                        "failure encoding must depend on a recorded span"
+                    );
+                });
+                if traced {
+                    assert!(
+                        capture.0.lock().unwrap().spans[0]
+                            .fields
+                            .contains_key("output_bytes")
+                    );
+                }
+            }
         }
     }
 }

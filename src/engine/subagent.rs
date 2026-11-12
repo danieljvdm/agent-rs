@@ -43,6 +43,7 @@ use tokio::{
     time::Instant,
 };
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 /// A child agent that a parent's model calls like a tool, set with
 /// [`AgentBuilder::subagents`](crate::AgentBuilder::subagents).
@@ -372,9 +373,10 @@ impl Definition {
             let result = definition.drive(&mut working, &checkpoint, control).await;
             Finished::Child { index, result }
         };
-        match crate::telemetry::instrument(span, future, |future| future, |future| future) {
-            futures::future::Either::Left(future) => Box::pin(future),
-            futures::future::Either::Right(future) => future,
+        if span.is_disabled() {
+            Box::pin(future)
+        } else {
+            Box::pin(future.instrument(span))
         }
     }
 }

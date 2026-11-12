@@ -117,14 +117,14 @@ pub(crate) fn record_cleanup(
     } else {
         "chat"
     };
-    match result {
+    span.in_scope(|| match result {
         Ok(Ok(())) => {
             span.record("outcome", "done");
         }
         Ok(Err(error)) => {
             span.record("outcome", "failed");
             span.record("error.type", error_type(error));
-            tracing::event!(name: "cleanup_failed", target: module_path!(), parent: span, tracing::Level::WARN, {
+            tracing::event!(name: "cleanup_failed", target: module_path!(), tracing::Level::WARN, {
                 operation, run_id = %call.run_id, turn = call.turn,
                 gen_ai.tool.name = tool, tool_call_index = call.index, "error.type" = error_type(error)
             });
@@ -132,12 +132,12 @@ pub(crate) fn record_cleanup(
         Err(_) => {
             span.record("outcome", "timed_out");
             span.record("error.type", "timeout");
-            tracing::event!(name: "cleanup_timed_out", target: module_path!(), parent: span, tracing::Level::WARN, {
+            tracing::event!(name: "cleanup_timed_out", target: module_path!(), tracing::Level::WARN, {
                 operation, run_id = %call.run_id, turn = call.turn,
                 gen_ai.tool.name = tool, tool_call_index = call.index, timeout_ms
             });
         }
-    }
+    });
 }
 
 pub(crate) fn record_operation(span: &Span, op: &Operation, call: Call, bytes: Option<usize>) {
@@ -163,9 +163,11 @@ pub(crate) fn record_operation(span: &Span, op: &Operation, call: Call, bytes: O
 }
 
 pub(crate) fn unknown(span: &Span, op: &Operation, call: Call) {
-    tracing::event!(name: "operation_unknown", target: module_path!(), parent: span, tracing::Level::WARN, {
-        run_id = %call.run_id, turn = call.turn,
-        gen_ai.tool.name = %op.spec.name, tool_call_index = call.index
+    span.in_scope(|| {
+        tracing::event!(name: "operation_unknown", target: module_path!(), tracing::Level::WARN, {
+            run_id = %call.run_id, turn = call.turn,
+            gen_ai.tool.name = %op.spec.name, tool_call_index = call.index
+        })
     });
 }
 
@@ -190,34 +192,23 @@ where
     F: Future + Send + 'a,
     G: Future<Output = F::Output> + Send + 'a,
 {
-    if !span.is_disabled() || tool_diagnostics_enabled() {
+    if !span.is_disabled() || has_subscriber() {
         Either::Right(Box::pin(traced(args).instrument(span)))
     } else {
         Either::Left(plain(args))
     }
 }
 
-// Query the actual diagnostic names/fields, not a generic level probe: subscribers may
-// select a single event or cleanup span while disabling the surrounding execution span.
-fn tool_diagnostics_enabled() -> bool {
-    use tracing::callsite::Callsite as _;
-    let sites = [
-        tracing::callsite! { name: "tool_cleanup", kind: tracing::metadata::Kind::SPAN,
-        target: "agent_rs::engine", level: tracing::Level::DEBUG, fields: outcome, "error.type" },
-        tracing::callsite! { name: "operation_timed_out", kind: tracing::metadata::Kind::EVENT,
-        target: "agent_rs::telemetry", level: tracing::Level::WARN,
-        fields: operation, run_id, turn, gen_ai.tool.name, tool_call_index },
-        tracing::callsite! { name: "cleanup_failed", kind: tracing::metadata::Kind::EVENT,
-        target: "agent_rs::telemetry", level: tracing::Level::WARN,
-        fields: operation, run_id, turn, gen_ai.tool.name, tool_call_index, "error.type" },
-        tracing::callsite! { name: "cleanup_timed_out", kind: tracing::metadata::Kind::EVENT,
-        target: "agent_rs::telemetry", level: tracing::Level::WARN,
-        fields: operation, run_id, turn, gen_ai.tool.name, tool_call_index, timeout_ms },
-    ];
+// The public tracing API cannot expose macro callsite metadata for an exact probe.
+// With a subscriber installed, prefer a possibly unused traced path over losing diagnostics.
+fn has_subscriber() -> bool {
     tracing::dispatcher::get_default(|subscriber| {
-        sites
-            .iter()
-            .any(|site| !site.interest().is_never() && subscriber.enabled(site.metadata()))
+        !subscriber.is::<tracing::subscriber::NoSubscriber>()
+    })
+}
+fn current_subscriber() -> Option<tracing::Dispatch> {
+    tracing::dispatcher::get_default(|subscriber| {
+        (!subscriber.is::<tracing::subscriber::NoSubscriber>()).then(|| subscriber.clone())
     })
 }
 
@@ -228,7 +219,10 @@ where
     F::Output: Send + 'static,
 {
     use tracing::instrument::WithSubscriber;
-    tokio::spawn(future.with_current_subscriber())
+    match current_subscriber() {
+        Some(subscriber) => tokio::spawn(future.with_subscriber(subscriber)),
+        None => tokio::spawn(future),
+    }
 }
 
 pub(crate) fn spawn_in<F>(tasks: &mut tokio::task::JoinSet<F::Output>, future: F)
@@ -237,5 +231,12 @@ where
     F::Output: Send + 'static,
 {
     use tracing::instrument::WithSubscriber;
-    tasks.spawn(future.with_current_subscriber());
+    match current_subscriber() {
+        Some(subscriber) => {
+            tasks.spawn(future.with_subscriber(subscriber));
+        }
+        None => {
+            tasks.spawn(future);
+        }
+    }
 }

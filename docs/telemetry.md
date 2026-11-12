@@ -103,17 +103,28 @@ Application-owned run/conversation/agent IDs and configured model/tool names are
 recorded as supplied: applications should keep content out of those identifiers.
 The application or provider may emit its own telemetry separately.
 
-Background host, PostgreSQL connection/worker, and MCP transport tasks retain
-the subscriber without retaining the span of the call that started them. Hosted
-runs have root spans. SQLite and PostgreSQL jobs do not propagate spans or
-subscribers while the stores have no instrumentation of their own. The SQLite
-thread join does no run work and needs no run span.
+Background host, PostgreSQL worker, and MCP transport tasks retain an installed
+subscriber without retaining the span of the call that started them. If started
+without a subscriber, they use the ambient default: installing a global subscriber
+later enables tracing for subsequent work. Existing spans are not recreated.
+Install tracing before startup to observe startup itself. Scoped subscribers must
+be installed when the background task starts if it should keep using that scope.
+
+Hosted runs have root spans. Uninstrumented PostgreSQL connection tasks and
+SQLite/PostgreSQL jobs do not capture spans or subscribers. The SQLite thread
+join does no run work and needs no run span.
 
 End fields are recorded through their owning span handles. Disabling a span
-cannot redirect its fields into an enabled ancestor or application span.
+cannot redirect its fields into an enabled ancestor or application span. Warning
+events use the intended parent when enabled and otherwise fall back to the
+current context, so filtering out a cleanup span does not detach its warning.
 
 Tool execution has one generic protocol with a zero-sized observer when tracing
-is disabled. Uninterested subscribers also use that compact path. Existing
+has no subscriber. When any subscriber is installed, the engine conservatively
+uses the traced path even if that subscriber currently filters out every event.
+The public tracing API does not expose exact macro callsites for probing, and
+this policy avoids silently dropping diagnostics selected by name or field.
+A fully uninterested subscriber therefore has some boxing overhead; the existing
 no-subscriber allocation budgets are unchanged.
 `tests/cost_budget.rs` also pins deterministic costs with a minimal enabled
 subscriber; a real subscriber or exporter can allocate additional memory.

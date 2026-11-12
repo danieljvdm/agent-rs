@@ -1834,13 +1834,27 @@ impl tracing::Subscriber for UninterestedSubscriber {
     }
 }
 #[tokio::test]
-async fn uninterested_subscriber_keeps_untraced_allocations() {
+async fn uninterested_subscriber_uses_the_conservative_tracing_path() {
     use tracing::instrument::WithSubscriber;
     let subscriber = tracing::Dispatch::new(UninterestedSubscriber);
     let agent = agent(4, 1);
+    let workload = || {
+        async {
+            let mut conversation = Conversation::default();
+            let _: Value = agent.run(&mut conversation, "go").await.unwrap();
+            assert_completed(conversation.last_run.as_ref().unwrap(), 4, 1);
+        }
+        .with_subscriber(subscriber.clone())
+    };
+    workload().await;
+    let (_, allocations) = measure(workload()).await;
+    assert!(
+        allocations.count > ALLOC_RUN_FOUR_TOOL_ROUNDS.count,
+        "an installed subscriber must retain the warning-capable path even when it rejects this workload"
+    );
     stable(
         "uninterested_four_tool_rounds",
-        ALLOC_RUN_FOUR_TOOL_ROUNDS,
+        ALLOC_TRACED_RUN_FOUR_TOOL_ROUNDS,
         || {
             async {
                 let mut conversation = Conversation::default();

@@ -963,3 +963,192 @@ async fn filters_for_individual_tool_diagnostics_still_enable_their_work() {
         assert_private(&state);
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn cleanup_warnings_keep_the_nearest_enabled_operation_parent() {
+    for level in [Level::INFO, Level::DEBUG] {
+        for fault in [Fault::CleanupError, Fault::CleanupTimeout] {
+            for is_tool in [false, true] {
+                let capture = Capture::at(level);
+                let agent = if is_tool {
+                    let tool = Arc::new(FaultTool {
+                        spec: ToolSpec::new("tool", "1"),
+                        fault,
+                    });
+                    Agent::builder(
+                        "parentage",
+                        script(vec![ModelResponse::tools(vec![call("tool")])]),
+                    )
+                    .tools([tool as Arc<dyn Tool>])
+                    .limits(small_limits())
+                    .build()
+                    .unwrap()
+                } else {
+                    Agent::builder(
+                        "parentage",
+                        Arc::new(FaultModel {
+                            fault,
+                            shutdown: CancellationToken::new(),
+                        }),
+                    )
+                    .limits(small_limits())
+                    .build()
+                    .unwrap()
+                };
+                let mut run = agent
+                    .new_run("conversation", json!(INPUT), &[], None)
+                    .unwrap();
+                agent
+                    .drive(&mut run, &MemoryCheckpoint, RunControl::default())
+                    .with_subscriber(capture.clone())
+                    .await
+                    .unwrap();
+                let state = capture.0.lock().unwrap();
+                let event = event_named(
+                    &state,
+                    if matches!(fault, Fault::CleanupError) {
+                        "cleanup_failed"
+                    } else {
+                        "cleanup_timed_out"
+                    },
+                );
+                let expected = match (is_tool, level) {
+                    (false, Level::INFO) => "chat",
+                    (true, Level::INFO) => "execute_tool",
+                    (false, _) => "model_cleanup",
+                    (true, _) => "tool_cleanup",
+                };
+                assert_eq!(
+                    event.parent.map(|index| state.spans[index].metadata.name()),
+                    Some(expected)
+                );
+                assert_private(&state);
+            }
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn unknown_warnings_stay_in_the_drive_trace_during_recovery_and_settlement() {
+    for level in [Level::INFO, Level::DEBUG] {
+        for cancelled in [false, true] {
+            let agent = Agent::builder(
+                "parentage",
+                script(vec![
+                    ModelResponse::tools(vec![call("tool")]),
+                    ModelResponse::final_output(json!(ANSWER)),
+                ]),
+            )
+            .tools([completed_tool(
+                "tool",
+                if cancelled {
+                    RetryPolicy::ReadOnly
+                } else {
+                    RetryPolicy::Never
+                },
+            )])
+            .build()
+            .unwrap();
+            let snapshot = DispatchSnapshot::default();
+            let mut run = agent
+                .new_run("conversation", json!(INPUT), &[], None)
+                .unwrap();
+            agent
+                .drive(&mut run, &snapshot, RunControl::default())
+                .await
+                .unwrap();
+            let mut run = snapshot.saved.lock().unwrap().take().unwrap();
+            run.cancel_requested = cancelled;
+            let capture = Capture::at(level);
+            agent
+                .drive(&mut run, &MemoryCheckpoint, RunControl::default())
+                .with_subscriber(capture.clone())
+                .await
+                .unwrap();
+            let state = capture.0.lock().unwrap();
+            let event = event_named(&state, "operation_unknown");
+            assert_eq!(
+                event.parent.map(|index| state.spans[index].metadata.name()),
+                Some("invoke_agent")
+            );
+            assert_private(&state);
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancelling_a_parent_warns_about_its_abandoned_child_effects() {
+    for level in [Level::INFO, Level::DEBUG] {
+        let shutdown = CancellationToken::new();
+        let tool = Arc::new(ProtocolTool {
+            inner: FaultTool {
+                spec: ToolSpec::new("tool", "1").with_retry(RetryPolicy::ReadOnly),
+                fault: Fault::Interrupted,
+            },
+            shutdown: shutdown.clone(),
+        });
+        let child = Agent::builder(
+            "child",
+            script(vec![ModelResponse::tools(vec![call("tool")])]),
+        )
+        .limits(
+            small_limits()
+                .with_max_model_calls(4)
+                .with_max_tool_calls(4)
+                .with_max_tokens(100)
+                .with_active_budget(Duration::from_secs(2)),
+        )
+        .tools([tool as Arc<dyn Tool>])
+        .build()
+        .unwrap();
+        let parent = Agent::builder(
+            "parent",
+            script(vec![ModelResponse::tools(vec![call("delegate")])]),
+        )
+        .subagents(1, [Subagent::new("delegate", "child", child)])
+        .build()
+        .unwrap();
+        let mut run = parent
+            .new_run("conversation", json!(INPUT), &[], None)
+            .unwrap();
+        assert!(matches!(
+            parent
+                .drive(
+                    &mut run,
+                    &MemoryCheckpoint,
+                    RunControl::default().with_shutdown(shutdown)
+                )
+                .await,
+            Err(Error::Interrupted)
+        ));
+        let child_id = run.children[0].state.id;
+        assert!(matches!(
+            run.children[0].state.operations[0].status,
+            OperationStatus::Dispatched
+        ));
+        run.cancel_requested = true;
+        let capture = Capture::at(level);
+        parent
+            .drive(&mut run, &MemoryCheckpoint, RunControl::default())
+            .with_subscriber(capture.clone())
+            .await
+            .unwrap();
+        assert!(matches!(
+            run.children[0].state.operations[0].status,
+            OperationStatus::Unknown { .. }
+        ));
+        let state = capture.0.lock().unwrap();
+        let event = event_named(&state, "operation_unknown");
+        assert_fields(
+            event,
+            &[
+                ("run_id", &child_id.to_string()),
+                ("turn", "1"),
+                ("tool_call_index", "0"),
+                ("gen_ai.tool.name", "tool"),
+            ],
+        );
+        assert!(event.parent.is_some());
+        assert_private(&state);
+    }
+}

@@ -261,11 +261,20 @@ pub(crate) fn cancel_unsettled(parent: &mut RunState) {
         if child.is_terminal() {
             continue;
         }
-        for op in &mut child.operations {
+        let call = crate::telemetry::Call::model(child);
+        for (index, op) in child.operations.iter_mut().enumerate() {
             if matches!(op.status, OperationStatus::Dispatched) {
                 op.status = OperationStatus::Unknown {
                     reason: "parent settled after dispatch".into(),
                 };
+                crate::telemetry::unknown(
+                    &tracing::Span::none(),
+                    op,
+                    crate::telemetry::Call {
+                        index: Some(index),
+                        ..call
+                    },
+                );
             }
         }
         child.phase = Phase::Settled(Settlement::Cancelled);
