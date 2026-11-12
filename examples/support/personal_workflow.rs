@@ -531,6 +531,9 @@ impl Tool for ObservedServiceTool {
     fn spec(&self) -> &ToolSpec {
         self.inner.spec()
     }
+    fn output_schema(&self) -> Option<&Value> {
+        self.inner.output_schema()
+    }
     fn validate(&self, arguments: &Value) -> Result<()> {
         self.inner.validate(arguments)
     }

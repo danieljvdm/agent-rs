@@ -1,11 +1,11 @@
 //! What the model is told about code mode: each allowed tool as a TypeScript declaration, after a
 //! fixed description of the contract. Rendering never fails; a schema it cannot render, or one
-//! too large, becomes `unknown`.
-use crate::ToolSpec;
+//! too large, becomes `unknown`, as does the result of a tool with no output schema.
+use crate::{Tool, ToolSpec};
 use serde_json::{Map, Value};
-use std::fmt::Write;
+use std::{fmt::Write, sync::Arc};
 
-/// Bytes one input type may take before it is declared `unknown`.
+/// Bytes one input or result type may take before it is declared `unknown`.
 const MAX_TYPE_BYTES: usize = 4 * 1024;
 /// How deep a type may nest, counting `$ref`s followed, before it is `unknown`.
 const MAX_DEPTH: usize = 8;
@@ -132,30 +132,32 @@ Functions:
 ";
 
 /// The description of a code mode tool for `tools`: the fixed contract, then one declaration per
-/// tool. Byte-stable for a given list of specs.
-pub fn description(tools: &[ToolSpec]) -> String {
+/// tool. Byte-stable for a given list of specs and output schemas.
+pub fn description(tools: &[Arc<dyn Tool>]) -> String {
     let mut out = String::from(PREAMBLE);
     out.push_str("```ts\n");
-    for spec in tools {
-        out.push_str(&declaration(spec));
+    for tool in tools {
+        out.push_str(&declaration(tool.spec(), tool.output_schema()));
     }
     out.push_str("```\n");
     out
 }
 
-/// One tool's declaration, with its description as a doc comment.
-pub fn declaration(spec: &ToolSpec) -> String {
+/// One tool's declaration, with its description as a doc comment. The function resolves to the
+/// type of `output_schema`, the tool's [`Tool::output_schema`], or to `unknown` without one.
+pub fn declaration(spec: &ToolSpec, output_schema: Option<&Value>) -> String {
     let mut out = String::new();
     doc_comment(&mut out, &spec.description, "");
     let name = identifier(&spec.name);
     let schema = &spec.input_schema;
+    let output = output_schema.map_or_else(|| "unknown".into(), output_type);
     if is_empty_object(schema) {
-        let _ = writeln!(out, "declare function {name}(): Promise<unknown>;");
+        let _ = writeln!(out, "declare function {name}(): Promise<{output}>;");
     } else {
         let input = input_type(schema);
         let _ = writeln!(
             out,
-            "declare function {name}(input: {input}): Promise<unknown>;"
+            "declare function {name}(input: {input}): Promise<{output}>;"
         );
     }
     out
@@ -164,6 +166,16 @@ pub fn declaration(spec: &ToolSpec) -> String {
 /// The TypeScript type of an input schema, or `unknown` if it cannot be rendered within
 /// `MAX_TYPE_BYTES`.
 pub fn input_type(schema: &Value) -> String {
+    schema_type(schema)
+}
+
+/// The TypeScript type of an output schema, rendered as [`input_type`] renders an input's: a
+/// property that is not required is optional.
+pub fn output_type(schema: &Value) -> String {
+    schema_type(schema)
+}
+
+fn schema_type(schema: &Value) -> String {
     let mut renderer = Renderer { root: schema };
     match renderer.render(schema, 0, "") {
         Some(ty) if ty.len() <= MAX_TYPE_BYTES => ty,

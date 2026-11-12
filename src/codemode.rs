@@ -40,7 +40,7 @@ mod quickjs;
 mod replay;
 mod runtime;
 
-pub use declarations::{declaration, description, identifier, input_type};
+pub use declarations::{declaration, description, identifier, input_type, output_type};
 pub use model::{PinAll, ScriptModel};
 pub use process::{Subprocess, serve};
 pub use quickjs::QuickJs;
@@ -50,7 +50,6 @@ pub use runtime::{
 
 use crate::{
     Agent, AllowAll, Authorizer, ChildOutcome, ChildResult, Limits, Result, Subagent, Tool,
-    ToolSpec,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -142,7 +141,7 @@ impl CodeMode {
             script_limits,
             runtime,
         } = self;
-        let specs: Vec<ToolSpec> = tools.iter().map(|tool| tool.spec().clone()).collect();
+        let description = description(&tools);
         let model = ScriptModel::new(runtime, tools.iter().cloned(), script_limits)?;
         let agent = Agent::builder("codemode", Arc::new(model))
             .tools(tools)
@@ -152,7 +151,7 @@ impl CodeMode {
             .input::<CodeInput>()
             .output::<Value>()
             .build()?;
-        Ok(Subagent::new(name, description(&specs), agent).with_result(result))
+        Ok(Subagent::new(name, description, agent).with_result(result))
     }
 }
 

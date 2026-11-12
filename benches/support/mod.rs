@@ -155,6 +155,9 @@ impl Tool for CheckedTool {
     fn spec(&self) -> &ToolSpec {
         self.inner.spec()
     }
+    fn output_schema(&self) -> Option<&Value> {
+        self.inner.output_schema()
+    }
     fn validate(&self, args: &Value) -> Result<()> {
         self.inner.validate(args)
     }

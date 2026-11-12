@@ -58,6 +58,8 @@ rejection fails the run as `Error::ModelOutput`. Bundled `$ref`s are supported; 
 HTTP and file retrieval is disabled, and a schema needing it is rejected at registration. A
 declared output schema validates successful `structuredContent`. Results keep MCP content
 blocks, structured content and `_meta`; resource links are data and are not fetched.
+`Tool::output_schema` describes that whole result: `content`, and `structuredContent` as the
+declared output schema when there is one. Code mode declares the tool's return type from it.
 
 ## Outcomes
 

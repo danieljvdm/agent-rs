@@ -476,6 +476,7 @@ fn rejected_requests_name_their_kind() {
 
 #[tokio::test]
 async fn tool_errors_keep_their_cause() {
+    #[derive(schemars::JsonSchema)]
     struct Unencodable;
     impl serde::Serialize for Unencodable {
         fn serialize<S: serde::Serializer>(&self, _: S) -> std::result::Result<S::Ok, S::Error> {

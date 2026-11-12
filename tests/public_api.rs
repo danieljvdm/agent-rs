@@ -36,7 +36,7 @@ use agent_rs::{
 use agent_rs::codemode::{
     Answer, CodeMode, Logs, PinAll, QuickJs, ScriptCall, ScriptFunction, ScriptLimits, ScriptModel,
     ScriptRuntime, ScriptSession, Step, Subprocess, declaration, default_limits, description,
-    identifier, input_type, serve,
+    identifier, input_type, output_type, serve,
 };
 #[cfg(feature = "google-calendar")]
 use agent_rs::google_calendar::{
