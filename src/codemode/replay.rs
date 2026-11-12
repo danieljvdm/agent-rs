@@ -100,6 +100,8 @@ pub(crate) enum Outcome {
         error: String,
         logs: Vec<String>,
         calls: Vec<CallRecord>,
+        /// Calls made beyond the first `MAX_RECORDED_CALLS`, counted but not listed.
+        omitted: usize,
     },
 }
 impl Outcome {
@@ -108,9 +110,57 @@ impl Outcome {
         match self {
             Self::Calls(_) => None,
             Self::Returned { result, logs } => Some(json!({"result": result, "logs": logs})),
-            Self::Threw { error, logs, calls } => {
-                Some(json!({"error": error, "logs": logs, "calls": calls}))
+            Self::Threw {
+                error,
+                logs,
+                calls,
+                omitted,
+            } => {
+                let mut output = json!({"error": error, "logs": logs, "calls": calls});
+                if omitted > 0 {
+                    output["calls_omitted"] = json!(omitted);
+                }
+                Some(output)
             }
+        }
+    }
+}
+
+/// Calls listed in a thrown script's result; later ones are only counted.
+pub(crate) const MAX_RECORDED_CALLS: usize = 100;
+/// Calls refused before dispatch that a script may make. Refusals spend no budget, so a script
+/// that makes more ends, rather than loop on them until its deadline.
+pub(crate) const MAX_REFUSED_CALLS: usize = 1_000;
+
+/// How each call of a script ended, for the result of a script that throws.
+#[derive(Default)]
+struct Record {
+    calls: Vec<CallRecord>,
+    omitted: usize,
+}
+impl Record {
+    fn push(&mut self, tool: String, id: Option<String>, status: CallStatus) {
+        if self.calls.len() < MAX_RECORDED_CALLS {
+            self.calls.push(CallRecord { tool, id, status });
+        } else {
+            self.omitted += 1;
+        }
+    }
+    /// The outcome of a script that threw `error`, with the calls still unanswered.
+    fn threw(
+        mut self,
+        error: String,
+        logs: Vec<String>,
+        unanswered: impl IntoIterator<Item = ScriptCall>,
+    ) -> Outcome {
+        for call in unanswered {
+            self.push(call.tool, None, CallStatus::NotDispatched);
+        }
+        Outcome::Threw {
+            error: bounded(error),
+            logs,
+            calls: self.calls,
+            omitted: self.omitted,
         }
     }
 }
@@ -147,7 +197,8 @@ pub(crate) fn replay(
     let mut issued = 0;
     let mut waiting: Vec<(usize, ScriptCall)> = Vec::new();
     let mut dispatched = 0;
-    let mut record = Vec::new();
+    let mut record = Record::default();
+    let mut refused = 0;
     loop {
         match session.advance(std::mem::take(&mut answers))? {
             Step::Blocked(calls) => {
@@ -162,13 +213,21 @@ pub(crate) fn replay(
                                 value: Value::String(reason),
                                 is_error: true,
                             });
-                            record.push(CallRecord {
-                                tool: call.tool,
-                                id: None,
-                                status: CallStatus::Rejected,
-                            });
+                            record.push(call.tool, None, CallStatus::Rejected);
+                            refused += 1;
                         }
                     }
+                }
+                if refused > MAX_REFUSED_CALLS {
+                    if rounds.next().is_some() {
+                        return Err(diverged());
+                    }
+                    let error = format!(
+                        "the script made more than {MAX_REFUSED_CALLS} calls that were refused \
+                         before dispatch"
+                    );
+                    let unanswered = waiting.into_iter().map(|(_, call)| call);
+                    return Ok(record.threw(error, session.logs(), unanswered));
                 }
                 if !answers.is_empty() {
                     continue;
@@ -203,15 +262,12 @@ pub(crate) fn replay(
                         value: result.value.clone(),
                         is_error: result.is_error,
                     });
-                    record.push(CallRecord {
-                        tool: call.tool,
-                        id: Some(recorded.id.clone()),
-                        status: if result.is_error {
-                            CallStatus::Failed
-                        } else {
-                            CallStatus::Succeeded
-                        },
-                    });
+                    let status = if result.is_error {
+                        CallStatus::Failed
+                    } else {
+                        CallStatus::Succeeded
+                    };
+                    record.push(call.tool, Some(recorded.id.clone()), status);
                 }
                 dispatched += round.calls.len();
             }
@@ -231,16 +287,7 @@ pub(crate) fn replay(
                     Step::Blocked(_) => unreachable!("matched above"),
                 };
                 let unanswered = waiting.into_iter().map(|(_, call)| call).chain(issued);
-                record.extend(unanswered.map(|call| CallRecord {
-                    tool: call.tool,
-                    id: None,
-                    status: CallStatus::NotDispatched,
-                }));
-                return Ok(Outcome::Threw {
-                    error: bounded(error),
-                    logs,
-                    calls: record,
-                });
+                return Ok(record.threw(error, logs, unanswered));
             }
         }
     }

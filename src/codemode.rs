@@ -11,7 +11,7 @@
 //! call gets the child's authorization, approval, retry policy, budgets and crash recovery from
 //! the subagent machinery, and its result is durable before the script goes on. Each model turn
 //! replays the script from the top against the rounds recorded so far, so a [`ScriptRuntime`]
-//! must be deterministic; [`QuickJs`] removes every source of nondeterminism. [`QuickJs`] runs
+//! must be deterministic; [`QuickJs`] removes the built-ins that are not. [`QuickJs`] runs
 //! in the host's process; [`Subprocess`] runs the same interpreter in a process of its own.
 //!
 //! Each round is a model call of the child, so a script of ten sequential calls spends eleven of

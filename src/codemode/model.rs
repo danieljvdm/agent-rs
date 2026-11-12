@@ -119,6 +119,7 @@ impl Model for ScriptModel {
     ) -> Result<ModelStream> {
         let inner = self.inner.clone();
         let history = request.history;
+        let max_response_bytes = request.max_response_bytes;
         let (done, finished) = oneshot::channel::<()>();
         (self.inner.running.lock())
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -133,7 +134,7 @@ impl Model for ScriptModel {
         .map_err(|error| Error::provider(format!("script turn panicked: {error}")))??;
         let response = match outcome {
             Outcome::Calls(calls) => ModelResponse::tools(calls),
-            ended => ModelResponse::final_output(ended.output().expect("the script ended")),
+            ended => fit(ended, max_response_bytes),
         };
         Ok(Box::pin(stream::iter([Ok(ModelEvent::Response(response))])))
     }
@@ -147,6 +148,31 @@ impl Model for ScriptModel {
         }
         Ok(())
     }
+}
+
+/// The final response of a script that ended, within `max_bytes`: an output too large for it,
+/// which would fail the run, becomes an error naming its size and keeping the start of the
+/// script's own error, so the parent's model still learns why it failed.
+fn fit(ended: Outcome, max_bytes: usize) -> ModelResponse {
+    let error = match &ended {
+        Outcome::Threw { error, .. } => Some(error.clone()),
+        _ => None,
+    };
+    let response = ModelResponse::final_output(ended.output().expect("the script ended"));
+    let size = serde_json::to_vec(&response).map_or(usize::MAX, |bytes| bytes.len());
+    if size <= max_bytes {
+        return response;
+    }
+    let mut message =
+        format!("the script's output is {size} bytes, over the response limit of {max_bytes}");
+    if let Some(error) = error {
+        let mut end = error.len().min(max_bytes / 4);
+        while !error.is_char_boundary(end) {
+            end -= 1;
+        }
+        message = format!("{message}; it threw: {}", &error[..end]);
+    }
+    ModelResponse::final_output(json!({"error": message, "logs": [], "calls": []}))
 }
 
 /// A [`ContextPolicy`] that pins every entry, so a code mode run's history is never truncated: a

@@ -117,7 +117,8 @@ const PREAMBLE: &str = "\
 Run JavaScript that calls the tools below as async functions, and get back the value it returns.
 
 `code` is the body of an async function. Use `await`, and `return` the result, which must be JSON.
-- Await every call. A call that is not awaited when the code returns is never made.
+- Await every call. A call runs the next time the code waits, awaited or not, but if it is not \
+awaited its failure is lost, and a call not yet run when the code returns is never made.
 - Calls awaited one after another run one after another; `Promise.all` runs calls in parallel.
 - A failed call throws a `ToolError` whose `value` is the tool's error result. Catch it to carry on. \
 The effects of calls that already ran are not undone.

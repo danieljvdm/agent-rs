@@ -70,6 +70,8 @@ const PRELUDE: &str = r#"(function (functionsJson, appendLog) {
   const rejected = Promise.reject.bind(Promise);
   const mapGet = uncurry(Map.prototype.get), mapSet = uncurry(Map.prototype.set);
   const mapDelete = uncurry(Map.prototype.delete);
+  // Rust strings are Unicode: a lone surrogate, as in `"😀".slice(0, 1)`, becomes U+FFFD.
+  const wellFormed = uncurry(String.prototype.toWellFormed);
   const isError = (value) => value instanceof SafeError;
 
   for (const name of ["Date", "WeakRef", "FinalizationRegistry", "performance", "Atomics",
@@ -127,7 +129,7 @@ const PRELUDE: &str = r#"(function (functionsJson, appendLog) {
   const log = (...values) => {
     let line = "";
     for (let i = 0; i < values.length; i++) line += (i > 0 ? " " : "") + text(values[i]);
-    appendLog(line);
+    appendLog(wellFormed(line));
   };
   define("console", { log, info: log, warn: log, error: log, debug: log });
 
@@ -165,7 +167,7 @@ const PRELUDE: &str = r#"(function (functionsJson, appendLog) {
     },
     describe(reason) {
       try {
-        return describe(reason);
+        return wellFormed(describe(reason));
       } catch {
         return "the script threw a value that cannot be described";
       }
@@ -176,6 +178,52 @@ const PRELUDE: &str = r#"(function (functionsJson, appendLog) {
 fn js_error(error: rquickjs::Error) -> Error {
     Error::provider(format!("script runtime: {error}"))
 }
+/// `JSON.stringify` writes a lone surrogate as an escape such as `\ud83d`: valid JSON text, but
+/// not a Unicode string, so serde refuses it. Replaces each with `\ufffd`, as
+/// `String.prototype.toWellFormed` does. Escaped pairs are kept; `JSON.stringify` writes a valid
+/// pair unescaped.
+fn well_formed(json: String) -> String {
+    if !json.contains("\\u") {
+        return json;
+    }
+    let bytes = json.as_bytes();
+    let unit = |at: usize| (json.get(at..at + 4)).and_then(|hex| u16::from_str_radix(hex, 16).ok());
+    let high = |unit: u16| (0xD800..0xDC00).contains(&unit);
+    let low = |unit: u16| (0xDC00..0xE000).contains(&unit);
+    let mut out = String::with_capacity(json.len());
+    let (mut at, mut copied) = (0, 0);
+    while at < bytes.len() {
+        if bytes[at] != b'\\' {
+            at += 1;
+            continue;
+        }
+        // Inside a JSON string a backslash always starts an escape; skip escapes other than `\u`.
+        let Some(first) = (bytes.get(at + 1) == Some(&b'u'))
+            .then(|| unit(at + 2))
+            .flatten()
+        else {
+            at += 2;
+            continue;
+        };
+        let paired = high(first)
+            && bytes.get(at + 6) == Some(&b'\\')
+            && bytes.get(at + 7) == Some(&b'u')
+            && unit(at + 8).is_some_and(low);
+        if paired {
+            at += 12;
+        } else if high(first) || low(first) {
+            out.push_str(&json[copied..at]);
+            out.push_str("\\ufffd");
+            at += 6;
+            copied = at;
+        } else {
+            at += 6;
+        }
+    }
+    out.push_str(&json[copied..]);
+    out
+}
+
 fn threw(error: impl Into<String>) -> Step {
     Step::Threw {
         error: error.into(),
@@ -324,7 +372,7 @@ impl Session {
                 .and_then(|f| f.call(()))
                 .map_err(js_error)?;
             let calls: Vec<(String, Value)> =
-                serde_json::from_str(&taken).map_err(Error::provider)?;
+                serde_json::from_str(&well_formed(taken)).map_err(Error::provider)?;
             let calls: Vec<ScriptCall> = (calls.into_iter())
                 .map(|(tool, arguments)| ScriptCall { tool, arguments })
                 .collect();
@@ -367,7 +415,7 @@ impl Session {
                         )));
                     }
                     Ok(Step::Returned(
-                        serde_json::from_str(&json).map_err(Error::provider)?,
+                        serde_json::from_str(&well_formed(json)).map_err(Error::provider)?,
                     ))
                 }
                 PromiseState::Rejected => {
@@ -398,5 +446,26 @@ impl ScriptSession for Session {
     }
     fn logs(&mut self) -> Vec<String> {
         self.logs.borrow().lines()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::well_formed;
+
+    #[test]
+    fn lone_surrogate_escapes_become_replacement_characters() {
+        for (json, expected) in [
+            (r#""plain""#, r#""plain""#),
+            (r#""\ud83d""#, r#""\ufffd""#),
+            (r#""a\udc00b""#, r#""a\ufffdb""#),
+            (r#""\ud83d\ude00""#, r#""\ud83d\ude00""#),
+            (r#""\ud83d\u0041""#, r#""\ufffd\u0041""#),
+            (r#"{"\ud800":"\\ud83d"}"#, r#"{"\ufffd":"\\ud83d"}"#),
+            (r#""\\\ud83d""#, r#""\\\ufffd""#),
+        ] {
+            assert_eq!(well_formed(json.into()), expected, "{json}");
+            serde_json::from_str::<serde_json::Value>(expected).unwrap();
+        }
     }
 }

@@ -22,7 +22,7 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::PathBuf,
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     thread::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
@@ -57,31 +57,37 @@ fn process_binding() -> Value {
 
 /// Serves one script session over `input` and `output`, as a [`Subprocess`] process: reads the
 /// `start` request, runs the script in [`QuickJs`], and answers each request until `input`
-/// ends. The process needs nothing else; call it from `main` with the locked standard input and
-/// output.
+/// ends. The process needs nothing else; call it from `main` with the standard input and output.
 ///
-/// The session's interpreter is never interrupted from inside the process: the host kills the
-/// process when the turn ends. Fails only when `input` or `output` fails or a request is not
-/// valid; a script's own failure is reported to the host.
-pub fn serve(input: impl BufRead, mut output: impl Write) -> Result<()> {
+/// `input` is read on a thread of its own. When it ends, because the host closed it or exited
+/// without doing so, the interpreter is interrupted, so a script cannot outlive its host. Fails
+/// only when `input` or `output` fails or a request is not valid; a script's own failure is
+/// reported to the host.
+pub fn serve(input: impl Read + Send + 'static, mut output: impl Write) -> Result<()> {
     let mut send = |reply: &Reply| -> Result<()> {
         let mut line = serde_json::to_vec(reply).map_err(Error::provider)?;
         line.push(b'\n');
         output.write_all(&line).map_err(Error::provider)?;
         output.flush().map_err(Error::provider)
     };
-    let mut lines = input.lines();
-    let mut read = || -> Result<Option<Request>> {
-        match lines.next() {
-            None => Ok(None),
-            Some(line) => {
-                let line = line.map_err(Error::provider)?;
-                serde_json::from_str(&line)
-                    .map(Some)
-                    .map_err(Error::provider)
+    let cancel = CancellationToken::new();
+    let (requests, received) = mpsc::channel::<Result<Request>>();
+    {
+        let cancel = cancel.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(input).lines() {
+                let request = (line.map_err(Error::provider))
+                    .and_then(|line| serde_json::from_str(&line).map_err(Error::provider));
+                let failed = request.is_err();
+                if requests.send(request).is_err() || failed {
+                    break;
+                }
             }
-        }
-    };
+            // The host is gone, or will not be heard from: stop the script.
+            cancel.cancel();
+        });
+    }
+    let read = || received.recv().ok().transpose();
     let Some(Request::Start {
         code,
         functions,
@@ -90,7 +96,7 @@ pub fn serve(input: impl BufRead, mut output: impl Write) -> Result<()> {
     else {
         return Err(Error::provider("a script process must start with `start`"));
     };
-    let mut session = match QuickJs.start(&code, &functions, &limits, CancellationToken::new()) {
+    let mut session = match QuickJs.start(&code, &functions, &limits, cancel) {
         Ok(session) => session,
         Err(error) => return send(&Reply::Error(error.to_string())),
     };
@@ -118,7 +124,8 @@ pub fn serve(input: impl BufRead, mut output: impl Write) -> Result<()> {
 /// A defect in the interpreter, or a script that exhausts the process, then ends that process
 /// and fails the turn, and cannot reach the host's memory. Each session costs a process start.
 /// The process is killed when its turn's deadline passes, the run is cancelled, or the session
-/// ends, and its standard error is discarded.
+/// ends; if the host exits first, the process stops once its input closes. It inherits none of
+/// the host's environment (see [`env`](Self::env)), and its standard error is discarded.
 ///
 /// `program` is the `agent-rs-quickjs` binary, built with the `codemode` feature (`cargo install
 /// agent-rs --features codemode --bin agent-rs-quickjs`), or any binary that calls [`serve`]. It
@@ -129,6 +136,7 @@ pub fn serve(input: impl BufRead, mut output: impl Write) -> Result<()> {
 pub struct Subprocess {
     program: PathBuf,
     args: Vec<OsString>,
+    env: Vec<(OsString, OsString)>,
 }
 impl Subprocess {
     /// A runtime that starts `program` with no arguments.
@@ -136,12 +144,19 @@ impl Subprocess {
         Self {
             program: program.into(),
             args: Vec::new(),
+            env: Vec::new(),
         }
     }
     /// Adds an argument to pass to the program, such as a flag that makes an application's own
     /// binary call [`serve`].
     pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
         self.args.push(arg.into());
+        self
+    }
+    /// Sets one environment variable of the process. The process inherits none of the host's,
+    /// so its secrets stay out of the process; set here what the program needs.
+    pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.env.push((key.into(), value.into()));
         self
     }
 }
@@ -197,6 +212,8 @@ impl ProcessSession {
     ) -> Result<Self> {
         let mut child = Command::new(&runtime.program)
             .args(&runtime.args)
+            .env_clear()
+            .envs(runtime.env.iter().map(|(key, value)| (key, value)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

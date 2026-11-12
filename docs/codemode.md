@@ -22,7 +22,7 @@ It is behind the `codemode` feature, which adds `rquickjs` and builds QuickJS fr
 The input is `{code: string}`, the body of an async function. The model is told, in the tool's description:
 
 - `code` uses `await` and `return`s the result, which must be JSON. `undefined` is `null`.
-- Every call must be awaited. `Promise.all` runs calls in parallel; calls awaited one after another run one after another.
+- Every call should be awaited. `Promise.all` runs calls in parallel; calls awaited one after another run one after another. A call that is not awaited still runs, in the round of the next call the code waits on, but its failure is lost; a call not yet run when the code returns is never made, and the script fails with `N calls were not awaited`.
 - A failed call throws a `ToolError` whose `value` is the tool's error result and whose `tool` is its name. The effects of calls that already ran are not undone.
 - There is no clock, no timers, no randomness, and no network or file access other than through the declared functions.
 
@@ -33,7 +33,7 @@ A function takes at most one argument. No argument sends `{}`; an argument that 
 The parent's model receives:
 
 - `{result, logs}` when the script returns, as a successful result.
-- `{error, logs, calls}` when it throws, as an error result. `calls` lists every call it made, in the order it made them, with its `id` if dispatched and its `status`: `succeeded`, `failed`, `rejected` (refused before dispatch) or `not_dispatched` (issued but not awaited before the script ended).
+- `{error, logs, calls}` when it throws, as an error result. `calls` lists the first 100 calls it made (`calls_omitted` counts the rest), in the order it made them, with its `id` if dispatched and its `status`: `succeeded`, `failed`, `rejected` (refused before dispatch) or `not_dispatched` (issued but not awaited before the script ended).
 - `{error}` naming how the child ended otherwise: `stopped: <limit>`, `failed: <message>` or `cancelled`.
 
 `logs` holds each `console.log`, `info`, `warn`, `error` or `debug` line, strings as they are and other values as JSON, joined by spaces.
@@ -54,6 +54,10 @@ Every call is therefore a normal operation of the child: it is authorized by `Co
 ## Determinism
 
 Replay depends on the interpreter doing the same thing every time. `QuickJs` runs each turn in a fresh QuickJS runtime with only deterministic built-ins: the base objects, `eval`, regular expressions, JSON, `Map` and `Set`, promises and `Proxy`. There is no `Date`, `Math.random`, `WeakRef`, `FinalizationRegistry`, `performance`, typed arrays or shared memory, and a bare context has no timers or I/O. A replacement `ScriptRuntime` must keep the same property: the same code and the same answers must issue the same calls in the same order.
+
+Two failures depend on the build rather than the script: where a stack overflow (`RangeError: Maximum call stack size exceeded`) or running out of memory happens can change with the interpreter's build or the host's compiler. Both are catchable. A script that catches one and goes on can therefore make different calls after the host is rebuilt, and its replay then fails the child cleanly with "script diverged from its recorded calls"; it never runs a call twice or out of order.
+
+Strings reach the host as Unicode: a lone surrogate, as left by `"😀".slice(0, 1)`, in an argument, the result, a log line or an error becomes U+FFFD.
 
 The tool functions and `console` are non-writable, non-configurable globals, and the bridge between the script and the host captures every built-in it uses before the script runs, so a script that replaces `JSON`, `Map.prototype` or `Array.prototype` methods cannot change which calls are reported. The script cannot reach the bridge. Built-in prototypes are not frozen: that would break ordinary code such as `this.name = "MyError"` in an `Error` subclass.
 
@@ -82,6 +86,8 @@ The child runs within `CodeMode::limits`, by default `codemode::default_limits()
 - **Tool calls.** Every dispatched call counts against the child's `max_tool_calls`. A round that would exceed it stops the script with `StopReason::ToolCalls`; a single round larger than the whole limit fails it.
 - **Time.** Each turn, replay included, is one model operation and must finish within `operation_timeout_ms`. A script that runs too long, such as an infinite loop, is interrupted when the operation's deadline passes and the child fails with "model operation timed out". The model's cleanup waits for the interpreter to stop, within `cleanup_timeout_ms`.
 - **Context.** The child pins its whole history (`PinAll`), because replay needs every round. A history that grows past `max_context_bytes` fails the child with `Error::Context` instead of dropping rounds.
+- **Refused calls.** Calls refused before dispatch spend no budget, so a script that makes more than 1,000 of them fails.
+- **The output.** A final output larger than the child's `max_response_bytes` becomes an error naming its size and keeping the start of the script's error.
 - **The script.** `CodeMode::script_limits` sets `ScriptLimits`: the interpreter's memory (64 MiB), log bytes kept (16 KiB; later lines are dropped and counted in a last line), and the result's encoded bytes (128 KiB; a larger result is a failure).
 
 Replay work grows with the square of the rounds, since turn *n* replays *n − 1* rounds, but for short scripts the fixed cost of a fresh interpreter per turn dominates: `benches/attached_subagents.rs` measures a script of 1, 8 and 32 sequential calls. Storage grows linearly, since each round is one exchange of the child's history; `tests/cost_budget.rs` pins both the SQLite transactions, six per round as for any child tool round, and the record bytes.

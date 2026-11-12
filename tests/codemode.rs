@@ -179,7 +179,15 @@ fn round(first: usize, queries: &[&str]) -> HistoryEntry {
     }
 }
 async fn turn(model: &ScriptModel, history: Vec<HistoryEntry>) -> Result<ModelResponse> {
-    let request = ModelRequest::new(RunId::new_v4(), history);
+    turn_within(model, history, Limits::default().max_response_bytes).await
+}
+async fn turn_within(
+    model: &ScriptModel,
+    history: Vec<HistoryEntry>,
+    max_response_bytes: usize,
+) -> Result<ModelResponse> {
+    let mut request = ModelRequest::new(RunId::new_v4(), history);
+    request.max_response_bytes = max_response_bytes;
     let mut stream = model.stream(request, CancellationToken::new()).await?;
     match stream.next().await {
         Some(Ok(ModelEvent::Response(response))) => Ok(response),
@@ -351,6 +359,50 @@ async fn a_script_that_ends_is_the_final_output() {
 }
 
 #[tokio::test]
+async fn the_calls_of_a_script_that_threw_are_bounded_and_so_are_refusals() {
+    let refusals = |n: usize| blocked(&vec![("search", json!({"wrong": 1})); n]);
+    // 150 refused calls, then the script throws: the first 100 are listed, the rest counted.
+    let model = fake_model(Fake::new(vec![refusals(150), threw("gave up")]));
+    let output = turn(&model, vec![input("x")])
+        .await
+        .unwrap()
+        .output
+        .unwrap();
+    assert_eq!(output["calls"].as_array().unwrap().len(), 100);
+    assert_eq!(output["calls_omitted"], json!(50));
+    // Refusals spend no budget, so a script that keeps making them is ended.
+    let model = fake_model(Fake::new(vec![refusals(600), refusals(600)]));
+    let output = turn(&model, vec![input("x")])
+        .await
+        .unwrap()
+        .output
+        .unwrap();
+    assert_eq!(
+        output["error"],
+        json!("the script made more than 1000 calls that were refused before dispatch")
+    );
+    assert_eq!(output["calls_omitted"], json!(1_100));
+}
+
+#[tokio::test]
+async fn an_output_over_the_response_limit_becomes_an_error_that_keeps_the_script_error() {
+    let model = fake_model(Fake::new(vec![Step::Returned(json!("x".repeat(5_000)))]));
+    let output = turn_within(&model, vec![input("x")], 2_000)
+        .await
+        .unwrap()
+        .output
+        .unwrap();
+    let error = output["error"].as_str().unwrap();
+    assert!(error.contains("over the response limit of 2000"), "{error}");
+    let reason = format!("the real reason {}", "x".repeat(3_000));
+    let model = fake_model(Fake::new(vec![threw(&reason)]));
+    let response = turn_within(&model, vec![input("x")], 2_000).await.unwrap();
+    let error = response.output.as_ref().unwrap()["error"].as_str().unwrap();
+    assert!(error.contains("; it threw: the real reason xxx"), "{error}");
+    assert!(serde_json::to_vec(&response).unwrap().len() <= 2_000);
+}
+
+#[tokio::test]
 async fn a_long_error_is_bounded() {
     let long = format!("{}é", "x".repeat(10_000));
     let model = fake_model(Fake::new(vec![threw(&long)]));
@@ -405,6 +457,8 @@ macro_rules! conformance {
                 cancelling_a_session_interrupts_a_running_script,
                 a_memory_bomb_deep_recursion_and_a_log_flood_are_contained,
                 a_script_cannot_replace_a_tool_function_or_reach_the_bridge,
+                an_unawaited_call_runs_in_the_round_of_the_next_awaited_one,
+                lone_surrogates_reach_the_host_as_replacement_characters,
             );
         }
     };
@@ -471,6 +525,62 @@ fn a_process_that_cannot_start_or_runs_another_interpreter_is_refused() {
             "{result:?}"
         );
     }
+}
+
+#[test]
+fn a_script_process_stops_when_its_host_goes_away() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(env!("CARGO_BIN_EXE_agent-rs-quickjs"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let start = json!({"start": {
+        "code": "while (true) {}",
+        "functions": [],
+        "limits": ScriptLimits::default(),
+    }});
+    writeln!(stdin, "{start}").unwrap();
+    let mut ready = String::new();
+    stdout.read_line(&mut ready).unwrap();
+    assert!(ready.starts_with(r#"{"ready""#), "{ready}");
+    writeln!(stdin, r#"{{"advance":[]}}"#).unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    // The host goes away without killing it: its input closes while the script spins.
+    drop(stdin);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while child.try_wait().unwrap().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the process outlived its host"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_script_process_inherits_none_of_the_hosts_environment() {
+    let home = |runtime: Subprocess| {
+        let runtime = runtime
+            .arg("-c")
+            .arg(r#"read line; echo "{\"ready\":{\"binding\":\"home=$HOME\"}}""#);
+        let result = runtime.start("", &[], &ScriptLimits::default(), CancellationToken::new());
+        match result {
+            Err(Error::Provider(detail)) => detail.to_string(),
+            other => panic!("{:?}", other.map(|_| ())),
+        }
+    };
+    assert!(
+        std::env::var_os("HOME").is_some(),
+        "the test needs HOME set"
+    );
+    assert!(home(Subprocess::new("/bin/sh")).contains(r#"runs "home=""#));
+    assert!(home(Subprocess::new("/bin/sh").env("HOME", "/kept")).contains(r#"runs "home=/kept""#));
 }
 
 #[test]
@@ -772,6 +882,59 @@ fn a_result_that_is_not_json_or_too_large_is_a_failure(runtime: &dyn ScriptRunti
     let limits = ScriptLimits::default().with_max_result_bytes(16);
     let (steps, _) = script(runtime, "return 'x'.repeat(100);", &limits, echo);
     assert!(error_of(ended(&steps)).contains("over the limit"));
+}
+
+fn an_unawaited_call_runs_in_the_round_of_the_next_awaited_one(runtime: &dyn ScriptRuntime) {
+    // As the description says: `write` is dispatched beside `search`, and its failure is lost.
+    let (steps, _) = script(
+        runtime,
+        "write({}); await search({ q: 'x' }); return 1;",
+        &ScriptLimits::default(),
+        |call| (json!("failed"), call.tool == "write"),
+    );
+    assert_eq!(
+        steps,
+        [
+            Step::Blocked(vec![
+                script_call("write", json!({})),
+                script_call("search", json!({"q": "x"})),
+            ]),
+            Step::Returned(json!(1)),
+        ]
+    );
+}
+
+fn lone_surrogates_reach_the_host_as_replacement_characters(runtime: &dyn ScriptRuntime) {
+    let (steps, logs) = script(
+        runtime,
+        r#"
+        const lone = "😀".slice(0, 1);
+        console.log("log", lone);
+        await search({ q: lone, [lone]: true, kept: "\\ud83d" });
+        try { throw new Error(lone); } catch (error) { console.log(error.message.length); }
+        return { lone, pair: "😀", kept: "\\ud83d" };
+        "#,
+        &ScriptLimits::default(),
+        echo,
+    );
+    assert_eq!(
+        steps,
+        [
+            Step::Blocked(vec![script_call(
+                "search",
+                json!({"q": "\u{fffd}", "\u{fffd}": true, "kept": "\\ud83d"})
+            )]),
+            Step::Returned(json!({"lone": "\u{fffd}", "pair": "😀", "kept": "\\ud83d"})),
+        ]
+    );
+    assert_eq!(logs, ["log \u{fffd}", "1"]);
+    let (steps, _) = script(
+        runtime,
+        r#"throw new Error("😀".slice(0, 1));"#,
+        &ScriptLimits::default(),
+        echo,
+    );
+    assert!(error_of(ended(&steps)).starts_with("Error: \u{fffd}"));
 }
 
 // ---------------------------------------------------------------------------------------------
