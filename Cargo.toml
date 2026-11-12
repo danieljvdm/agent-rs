@@ -63,6 +63,7 @@ tokio-postgres = { version = "0.7.18", optional = true }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["process"], optional = true }
 [dev-dependencies]
+tracing-core = { version = "0.1", default-features = false, features = ["std"] }
 criterion = { version = "0.6", features = ["async_tokio"] }
 dhat = "0.3.3"
 tempfile = "3"

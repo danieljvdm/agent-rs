@@ -1324,7 +1324,7 @@ impl PostgresStore {
         };
         let (sender, receiver) = mpsc::channel(QUEUE);
         let failure = Failure::default();
-        let worker = tokio::spawn(work(
+        let worker = crate::telemetry::spawn(work(
             database,
             connection,
             receiver,

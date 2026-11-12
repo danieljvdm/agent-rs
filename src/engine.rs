@@ -22,8 +22,10 @@ use std::{
 };
 use tokio::{sync::mpsc, time::Instant};
 use tokio_util::sync::CancellationToken;
+use tracing::{Instrument, Span, field::Empty};
 
 mod subagent;
+use crate::telemetry;
 use futures::future::Either;
 pub use subagent::Subagent;
 use subagent::{ChildWindow, Subagents};
@@ -749,97 +751,124 @@ impl std::fmt::Debug for ConversationId {
 }
 /// The state machine runs on the shared definition of the agent being driven.
 impl Definition {
-    #[tracing::instrument(skip_all, fields(run_id = %state.id))]
     async fn drive(
         &self,
         state: &mut RunState,
         checkpoint: &dyn Checkpoint,
         control: RunControl,
     ) -> Result<()> {
-        // A run accepted by this definition shares its binding; a stored one compares by value.
-        if state.version != STATE_VERSION
-            || state.agent_id != self.id
-            || !(Arc::ptr_eq(&state.binding, &self.binding) || state.binding == self.binding)
-            || state.limits != self.limits
-        {
-            return Err(Error::incompatible(
-                "persisted state or immutable agent definition differs",
-            ));
-        }
-        if state.is_terminal() {
-            return Ok(());
-        }
-        let mut recovered = self.recover(state)?;
-        if !state.children.is_empty() {
-            recovered |= subagent::recover_children(self, state)?;
-        }
-        if recovered {
-            commit(checkpoint, state, &control).await?;
-        }
-        loop {
-            if state.cancel_requested || control.cancel.is_cancelled() {
-                state.cancel_requested = true;
-                uncertain_dispatched(state, "cancelled after dispatch");
-                return settle(checkpoint, state, &control, Settlement::Cancelled).await;
+        let span = tracing::info_span!("invoke_agent",
+            otel.name = %format_args!("invoke_agent {}", self.id), otel.kind = "internal",
+            gen_ai.operation.name = "invoke_agent", gen_ai.agent.id = %self.id, run_id = %state.id,
+            parent_run_id = state.parent.as_ref().map(|p| tracing::field::display(p.run_id)),
+            gen_ai.conversation.id = state.parent.is_none().then_some(state.conversation_id.as_str()),
+            outcome = Empty, error.type = Empty
+        );
+        let result = async {
+            // A run accepted by this definition shares its binding; a stored one compares by value.
+            if state.version != STATE_VERSION
+                || state.agent_id != self.id
+                || !(Arc::ptr_eq(&state.binding, &self.binding) || state.binding == self.binding)
+                || state.limits != self.limits
+            {
+                return Err(Error::incompatible(
+                    "persisted state or immutable agent definition differs",
+                ));
             }
-            if control.shutdown.is_cancelled() {
-                return Err(Error::Interrupted);
-            }
-            if state.expires_at_ms.is_some_and(|t| t <= now_ms()) {
-                return settle(
-                    checkpoint,
-                    state,
-                    &control,
-                    Settlement::Stopped(StopReason::Expired),
-                )
-                .await;
-            }
-            let batch = matches!(state.phase, Phase::Tools);
-            let step = match state.phase {
-                Phase::Ready => {
-                    if let Some(reason) = exhausted(state, true, 0) {
-                        return settle(checkpoint, state, &control, Settlement::Stopped(reason))
-                            .await;
-                    }
-                    self.model_turn(state, checkpoint, &control).await
-                }
-                Phase::Tools => self.tool_batch(state, checkpoint, &control).await,
-                Phase::Settled(_) => return Ok(()),
-                Phase::ModelInFlight => {
-                    return Err(Error::input("unexpected in-flight model state"));
-                }
-            };
-            match step {
-                Ok(()) => {}
-                // Cancellation interrupted the work; the next iteration settles the run.
-                Err(Error::Interrupted) if control.cancel.is_cancelled() => continue,
-                Err(error) if error.fails_run() => {
-                    let reason = bounded_error(&error, state.limits.max_tool_output_bytes);
-                    return settle(checkpoint, state, &control, Settlement::Failed(reason)).await;
-                }
-                Err(error) => return Err(error),
-            }
-            // A batch still in `Tools` waits on approval, input, reconciliation or a timer.
-            if batch && matches!(state.phase, Phase::Tools) {
+            if state.is_terminal() {
                 return Ok(());
             }
+            let mut recovered = self.recover(state)?;
+            if !state.children.is_empty() {
+                recovered |= subagent::recover_children(self, state)?;
+            }
+            if recovered {
+                commit(checkpoint, state, &control).await?;
+            }
+            loop {
+                if state.cancel_requested || control.cancel.is_cancelled() {
+                    state.cancel_requested = true;
+                    uncertain_dispatched(state, "cancelled after dispatch");
+                    return settle(checkpoint, state, &control, Settlement::Cancelled).await;
+                }
+                if control.shutdown.is_cancelled() {
+                    return Err(Error::Interrupted);
+                }
+                if state.expires_at_ms.is_some_and(|t| t <= now_ms()) {
+                    return settle(
+                        checkpoint,
+                        state,
+                        &control,
+                        Settlement::Stopped(StopReason::Expired),
+                    )
+                    .await;
+                }
+                let batch = matches!(state.phase, Phase::Tools);
+                let step = match state.phase {
+                    Phase::Ready => {
+                        if let Some(reason) = exhausted(state, true, 0) {
+                            return settle(
+                                checkpoint,
+                                state,
+                                &control,
+                                Settlement::Stopped(reason),
+                            )
+                            .await;
+                        }
+                        self.model_turn(state, checkpoint, &control).await
+                    }
+                    Phase::Tools => self.tool_batch(state, checkpoint, &control).await,
+                    Phase::Settled(_) => return Ok(()),
+                    Phase::ModelInFlight => {
+                        return Err(Error::input("unexpected in-flight model state"));
+                    }
+                };
+                match step {
+                    Ok(()) => {}
+                    // Cancellation interrupted the work; the next iteration settles the run.
+                    Err(Error::Interrupted) if control.cancel.is_cancelled() => continue,
+                    Err(error) if error.fails_run() => {
+                        let reason = bounded_error(&error, state.limits.max_tool_output_bytes);
+                        return settle(checkpoint, state, &control, Settlement::Failed(reason))
+                            .await;
+                    }
+                    Err(error) => return Err(error),
+                }
+                // A batch still in `Tools` waits on approval, input, reconciliation or a timer.
+                if batch && matches!(state.phase, Phase::Tools) {
+                    return Ok(());
+                }
+            }
         }
+        .instrument(span.clone())
+        .await;
+        telemetry::record_drive(&span, state, &result);
+        result
     }
+
     /// Recovers work an earlier execution left in flight: a model call is made again, and a
     /// dispatched call that must not repeat becomes `Unknown`. Returns whether anything changed.
     fn recover(&self, state: &mut RunState) -> Result<bool> {
         let mut recovered = false;
         if matches!(state.phase, Phase::ModelInFlight) {
+            telemetry::Call::model(state).recovered(None);
             state.phase = Phase::Ready;
             recovered = true;
         }
-        for op in &mut state.operations {
+        let call = telemetry::Call::model(state);
+        for (index, op) in state.operations.iter_mut().enumerate() {
             if matches!(op.status, OperationStatus::Dispatched) {
                 self.recorded(op)?;
                 if op.spec.retry == RetryPolicy::Never {
                     op.status = OperationStatus::Unknown {
                         reason: "execution ended after dispatch without a recorded outcome".into(),
                     };
+                    let call = telemetry::Call {
+                        index: Some(index),
+                        ..call
+                    };
+                    call.recovered(Some(&op.spec.name));
+                    telemetry::unknown(&Span::none(), op, call);
                     recovered = true;
                 }
                 // Keep retryable uncertain work Dispatched until it really retries. This
@@ -854,190 +883,245 @@ impl Definition {
         checkpoint: &dyn Checkpoint,
         control: &RunControl,
     ) -> Result<()> {
-        let (reservation, work_ms) = reserve(state);
-        state.usage.model_calls += 1;
-        state.phase = Phase::ModelInFlight;
-        emit(state, control, ProgressKind::ModelStarted);
-        commit(checkpoint, state, control).await?;
-        let started = Instant::now();
-        let operation_cancel = CancellationToken::new();
-        // The attempt's reported usage, outside the operation so it is charged however that ends.
+        let span = tracing::info_span!("chat",
+            otel.name = %format_args!("chat {}", self.config.model), otel.kind = "client",
+            gen_ai.operation.name = "chat", gen_ai.request.model = %self.config.model,
+            turn = state.usage.model_calls.saturating_sub(state.child_usage.model_calls) + 1,
+            gen_ai.usage.input_tokens = Empty, gen_ai.usage.output_tokens = Empty,
+            response_bytes = Empty, time_to_first_delta_ms = Empty, outcome = Empty, error.type = Empty
+        );
+        // Reported usage survives rejection, interruption, timeout, and cleanup failure.
         let mut usage = crate::TokenUsage::default();
-        let outcome = {
-            let future = async {
-                // Assemble context after the dispatch checkpoint and inside the operation's
-                // deadline, so the checkpoint can contribute history and preparation is bounded.
-                let (history, derived_context) =
-                    assemble(state, self.context_policy.as_ref(), &operation_cancel).await?;
-                let request = ModelRequest {
-                    run_id: state.id,
-                    instructions: self.instructions.clone(),
-                    config: self.config.clone(),
-                    history,
-                    derived_context,
-                    tools: self.tool_specs.clone(),
-                    output_schema: self.output_schema.clone(),
-                    // Children's model calls are in the run's usage but are not its turns.
-                    turn: (state.usage.model_calls).saturating_sub(state.child_usage.model_calls),
-                    max_response_bytes: state.limits.max_response_bytes,
-                    remaining_tokens: state.limits.max_tokens.saturating_sub(
-                        state
-                            .usage
-                            .input_tokens
-                            .saturating_add(state.usage.output_tokens),
-                    ),
+        let mut bytes = 0_usize;
+        let mut response_bytes = 0_usize;
+        let mut first_delta = None;
+        let mut outcome_name = "rejected";
+        let result = async {
+            let (reservation, work_ms) = reserve(state);
+            state.usage.model_calls += 1;
+            state.phase = Phase::ModelInFlight;
+            emit(state, control, ProgressKind::ModelStarted);
+            commit(checkpoint, state, control).await?;
+            let started = Instant::now();
+            let operation_cancel = CancellationToken::new();
+            let outcome = {
+                let future = async {
+                    // Assemble context after the dispatch checkpoint and inside the operation's
+                    // deadline, so the checkpoint can contribute history and preparation is bounded.
+                    let (history, derived_context) =
+                        assemble(state, self.context_policy.as_ref(), &operation_cancel).await?;
+                    let request = ModelRequest {
+                        run_id: state.id,
+                        instructions: self.instructions.clone(),
+                        config: self.config.clone(),
+                        history,
+                        derived_context,
+                        tools: self.tool_specs.clone(),
+                        output_schema: self.output_schema.clone(),
+                        // Children's model calls are in the run's usage but are not its turns.
+                        turn: (state.usage.model_calls)
+                            .saturating_sub(state.child_usage.model_calls),
+                        max_response_bytes: state.limits.max_response_bytes,
+                        remaining_tokens: state.limits.max_tokens.saturating_sub(
+                            state
+                                .usage
+                                .input_tokens
+                                .saturating_add(state.usage.output_tokens),
+                        ),
+                    };
+                    let mut stream = self
+                        .model
+                        .stream(request, operation_cancel.clone())
+                        .await
+                        .map_err(provider_error)?;
+                    let mut response = None;
+                    let mut events = 0_usize;
+                    while let Some(event) = stream.next().await {
+                        events += 1;
+                        if events > state.limits.max_response_bytes.clamp(1, 65_536) {
+                            return Err(Error::provider("model event count exceeds limit"));
+                        }
+                        if response.is_some() {
+                            return Err(Error::provider(
+                                "model emitted data after its complete response",
+                            ));
+                        }
+                        match event.map_err(provider_error)? {
+                            ModelEvent::Usage(reported) => record_usage(&mut usage, &reported)?,
+                            ModelEvent::TextDelta(text) => {
+                                first_delta.get_or_insert_with(|| started.elapsed());
+                                bytes = bytes.saturating_add(text.len());
+                                if bytes > state.limits.max_response_bytes {
+                                    return Err(Error::provider(
+                                        "stream exceeds response byte limit",
+                                    ));
+                                }
+                                emit(state, control, ProgressKind::TextDelta(text));
+                            }
+                            ModelEvent::ReasoningDelta(text) => {
+                                first_delta.get_or_insert_with(|| started.elapsed());
+                                bytes = bytes.saturating_add(text.len());
+                                if bytes > state.limits.max_response_bytes {
+                                    return Err(Error::provider(
+                                        "stream exceeds response byte limit",
+                                    ));
+                                }
+                                emit(state, control, ProgressKind::ReasoningDelta(text));
+                            }
+                            ModelEvent::Response(value) => {
+                                record_usage(&mut usage, &value.usage)?;
+                                response_bytes = encoded_len(&value);
+                                if response_bytes > state.limits.max_response_bytes {
+                                    return Err(Error::provider("response exceeds byte limit"));
+                                }
+                                response = Some(value);
+                            }
+                        }
+                    }
+                    response
+                        .ok_or_else(|| Error::provider("stream ended without a complete response"))
                 };
-                let mut stream = self
-                    .model
-                    .stream(request, operation_cancel.clone())
-                    .await
-                    .map_err(provider_error)?;
-                let mut response = None;
-                let mut bytes = 0_usize;
-                let mut events = 0_usize;
-                while let Some(event) = stream.next().await {
-                    events += 1;
-                    if events > state.limits.max_response_bytes.clamp(1, 65_536) {
-                        return Err(Error::provider("model event count exceeds limit"));
-                    }
-                    if response.is_some() {
-                        return Err(Error::provider(
-                            "model emitted data after its complete response",
-                        ));
-                    }
-                    match event.map_err(provider_error)? {
-                        ModelEvent::Usage(reported) => record_usage(&mut usage, &reported)?,
-                        ModelEvent::TextDelta(text) => {
-                            bytes = bytes.saturating_add(text.len());
-                            if bytes > state.limits.max_response_bytes {
-                                return Err(Error::provider("stream exceeds response byte limit"));
-                            }
-                            emit(state, control, ProgressKind::TextDelta(text));
-                        }
-                        ModelEvent::ReasoningDelta(text) => {
-                            bytes = bytes.saturating_add(text.len());
-                            if bytes > state.limits.max_response_bytes {
-                                return Err(Error::provider("stream exceeds response byte limit"));
-                            }
-                            emit(state, control, ProgressKind::ReasoningDelta(text));
-                        }
-                        ModelEvent::Response(value) => {
-                            record_usage(&mut usage, &value.usage)?;
-                            if encoded_len(&value) > state.limits.max_response_bytes {
-                                return Err(Error::provider("response exceeds byte limit"));
-                            }
-                            response = Some(value);
-                        }
-                    }
-                }
-                response.ok_or_else(|| Error::provider("stream ended without a complete response"))
+                run_work(future, work_deadline(state, started, work_ms), control).await
             };
-            run_work(future, work_deadline(state, started, work_ms), control).await
-        };
-        operation_cancel.cancel();
-        let cleanup = tokio::time::timeout(
-            Duration::from_millis(state.limits.cleanup_timeout_ms),
-            async {
-                let model = self.model.cleanup(state.id);
-                match &self.context_policy {
-                    None => model.await,
-                    Some((policy, _)) => {
-                        let (model, context) = tokio::join!(model, policy.cleanup(state.id));
-                        model.and(context)
-                    }
+            match &outcome {
+                WorkOutcome::TimedOut => {
+                    outcome_name = "timed_out";
+                    telemetry::Call::model(state).timed_out("chat", None);
                 }
-            },
-        )
-        .await;
-        refund(state, reservation, started.elapsed());
-        state.phase = Phase::Ready;
-        // Reported tokens are charged even when the turn is then rejected, interrupted, timed out
-        // or its cleanup fails. The response repeats the totals; it is not a second charge.
-        state.usage.input_tokens = state.usage.input_tokens.saturating_add(usage.input);
-        state.usage.output_tokens = state.usage.output_tokens.saturating_add(usage.output);
-        let response_result = match outcome {
-            WorkOutcome::Done(result) => result,
-            WorkOutcome::Interrupted => {
-                commit(checkpoint, state, control).await?;
-                return Err(Error::Interrupted);
+                WorkOutcome::Interrupted => outcome_name = "interrupted",
+                WorkOutcome::Done(Ok(_)) => outcome_name = "done",
+                WorkOutcome::Done(Err(_)) => {}
             }
-            WorkOutcome::TimedOut => Err(Error::provider("model operation timed out")),
-        };
-        if let Ok(response) = &response_result {
-            // Retain the complete response even when cleanup or validation rejects it.
-            state.pending_response = Some(response.clone());
-        }
-        if is_expired(state) {
-            return settle(
-                checkpoint,
-                state,
-                control,
-                Settlement::Stopped(StopReason::Expired),
+            operation_cancel.cancel();
+            let cleanup = telemetry::cleanup(
+                tracing::debug_span!("model_cleanup", outcome = Empty, error.type = Empty),
+                telemetry::Call::model(state),
+                None,
+                state.limits.cleanup_timeout_ms,
+                async {
+                    let model = self.model.cleanup(state.id);
+                    match &self.context_policy {
+                        None => model.await,
+                        Some((policy, _)) => {
+                            let context = policy
+                                .cleanup(state.id)
+                                .instrument(tracing::debug_span!("context_cleanup"));
+                            let (model, context) = tokio::join!(model, context);
+                            model.and(context)
+                        }
+                    }
+                },
             )
             .await;
-        }
-        let response = response_result?;
-        cleanup
-            .map_err(|_| Error::provider("model cleanup timed out"))?
-            .map_err(provider_error)?;
-        self.validate_response(&response, state)?;
-        if state
-            .usage
-            .input_tokens
-            .saturating_add(state.usage.output_tokens)
-            > state.limits.max_tokens
-        {
-            return settle(
-                checkpoint,
-                state,
-                control,
-                Settlement::Stopped(StopReason::Tokens),
-            )
-            .await;
-        }
-        if let Some(output) = &response.output {
-            (self.validate_output)(output).map_err(Error::model_output)?;
-            state.history.push(HistoryEntry::Exchange {
-                response: response.clone(),
-                results: vec![],
-            });
-            state.pending_response = None;
-            return settle(
-                checkpoint,
-                state,
-                control,
-                Settlement::Completed(output.clone()),
-            )
-            .await;
-        }
-        state.operations = response
-            .tools
-            .iter()
-            .map(|call| {
-                let spec = self
-                    .work(&call.name)
-                    .expect("validated call")
-                    .spec()
-                    .clone();
-                let status = if spec.requires_approval {
-                    OperationStatus::Approval
-                } else {
-                    OperationStatus::Pending
-                };
-                Operation {
-                    call: call.clone(),
-                    spec,
-                    idempotency_key: format!(
-                        "{}:{}:{}",
-                        state.id, state.usage.model_calls, call.id
-                    ),
-                    status,
+            refund(state, reservation, started.elapsed());
+            state.phase = Phase::Ready;
+            // Reported tokens are charged even when the turn is then rejected, interrupted, timed out
+            // or its cleanup fails. The response repeats the totals; it is not a second charge.
+            state.usage.input_tokens = state.usage.input_tokens.saturating_add(usage.input);
+            state.usage.output_tokens = state.usage.output_tokens.saturating_add(usage.output);
+            let response_result = match outcome {
+                WorkOutcome::Done(result) => result,
+                WorkOutcome::Interrupted => {
+                    commit(checkpoint, state, control).await?;
+                    return Err(Error::Interrupted);
                 }
-            })
-            .collect();
-        state.phase = Phase::Tools;
-        commit(checkpoint, state, control).await
+                WorkOutcome::TimedOut => Err(Error::provider("model operation timed out")),
+            };
+            if let Ok(response) = &response_result {
+                // Retain the complete response even when cleanup or validation rejects it.
+                state.pending_response = Some(response.clone());
+            }
+            if is_expired(state) {
+                return settle(
+                    checkpoint,
+                    state,
+                    control,
+                    Settlement::Stopped(StopReason::Expired),
+                )
+                .await;
+            }
+            let response = response_result?;
+            cleanup
+                .map_err(|_| Error::provider("model cleanup timed out"))?
+                .map_err(provider_error)?;
+            self.validate_response(&response, state)?;
+            if state
+                .usage
+                .input_tokens
+                .saturating_add(state.usage.output_tokens)
+                > state.limits.max_tokens
+            {
+                return settle(
+                    checkpoint,
+                    state,
+                    control,
+                    Settlement::Stopped(StopReason::Tokens),
+                )
+                .await;
+            }
+            if let Some(output) = &response.output {
+                (self.validate_output)(output).map_err(Error::model_output)?;
+                state.history.push(HistoryEntry::Exchange {
+                    response: response.clone(),
+                    results: vec![],
+                });
+                state.pending_response = None;
+                return settle(
+                    checkpoint,
+                    state,
+                    control,
+                    Settlement::Completed(output.clone()),
+                )
+                .await;
+            }
+            state.operations = response
+                .tools
+                .iter()
+                .map(|call| {
+                    let spec = self
+                        .work(&call.name)
+                        .expect("validated call")
+                        .spec()
+                        .clone();
+                    let status = if spec.requires_approval {
+                        OperationStatus::Approval
+                    } else {
+                        OperationStatus::Pending
+                    };
+                    Operation {
+                        call: call.clone(),
+                        spec,
+                        idempotency_key: format!(
+                            "{}:{}:{}",
+                            state.id, state.usage.model_calls, call.id
+                        ),
+                        status,
+                    }
+                })
+                .collect();
+            state.phase = Phase::Tools;
+            commit(checkpoint, state, control).await
+        }
+        .instrument(span.clone())
+        .await;
+        span.record("gen_ai.usage.input_tokens", usage.input);
+        span.record("gen_ai.usage.output_tokens", usage.output);
+        span.record("response_bytes", response_bytes.max(bytes));
+        if let Some(duration) = first_delta {
+            span.record("time_to_first_delta_ms", telemetry::milliseconds(duration));
+        }
+        if result.is_err() && outcome_name == "done" {
+            outcome_name = "rejected";
+        }
+        span.record("outcome", outcome_name);
+        if outcome_name == "timed_out" {
+            span.record("error.type", "timeout");
+        } else if let Err(error) = &result {
+            span.record("error.type", telemetry::error_type(error));
+        }
+        result
     }
+
     fn validate_response(&self, response: &ModelResponse, state: &RunState) -> Result<()> {
         if response.output.is_some() == !response.tools.is_empty() {
             return Err(Error::model_output(
@@ -1141,6 +1225,7 @@ impl Definition {
     /// the child's admission, and its execution drives the child, whose commits this window makes
     /// as commits of the run (see `subagent`). A window that only resumes children reserves
     /// nothing: they charge their own work.
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn tool_window(
         &self,
         state: &mut RunState,
@@ -1192,6 +1277,10 @@ impl Definition {
             }
             for admission in admitted {
                 let op = &state.operations[admission.index];
+                let call = telemetry::Call::tool(state, admission.index);
+                if matches!(admission.previous, OperationStatus::Dispatched) {
+                    call.recovered(Some(&op.spec.name));
+                }
                 let tool = match admission.start {
                     Start::Tool(tool) => tool,
                     Start::Child(child) => {
@@ -1208,15 +1297,33 @@ impl Definition {
                     idempotency_key: op.idempotency_key.clone(),
                     cancel: CancellationToken::new(),
                 };
-                in_flight.push(Either::Left(execute(
-                    admission.index,
+                let span = telemetry::tool_span(op, call);
+                if !span.is_disabled() {
+                    window.spans.push((admission.index, span.clone()));
+                }
+                let work = ToolExecution {
+                    index: admission.index,
                     tool,
-                    admission.deadline,
-                    op.call.arguments.clone(),
+                    deadline: admission.deadline,
+                    arguments: op.call.arguments.clone(),
                     context,
                     control,
-                    state.limits.cleanup_timeout_ms,
-                )));
+                    cleanup_ms: state.limits.cleanup_timeout_ms,
+                };
+                in_flight.push(telemetry::instrument(
+                    span,
+                    (work, call),
+                    |(work, _)| execute(work, Untraced),
+                    |(work, call)| {
+                        execute(
+                            work,
+                            Traced {
+                                call,
+                                cleanup: Span::none(),
+                            },
+                        )
+                    },
+                ));
                 window.running += 1;
             }
             // A storage failure never drops other live children. Drain and clean all of them first.
@@ -1332,6 +1439,9 @@ impl Definition {
             window.record(state, finished);
         }
         let name = &state.operations[index].call.name;
+        if matches!(authorization, WorkOutcome::TimedOut) {
+            telemetry::Call::tool(state, index).timed_out("authorize_tool", Some(name));
+        }
         match authorization {
             WorkOutcome::Done(Ok(true)) => {}
             WorkOutcome::Done(Ok(false)) => {
@@ -1536,6 +1646,7 @@ struct Window {
     storage: Option<Error>,
     /// Children running in this window, from the first one started.
     children: Option<ChildWindow>,
+    spans: Vec<(usize, Span)>,
 }
 impl Window {
     fn new(reserved_ms: u64) -> Self {
@@ -1552,6 +1663,7 @@ impl Window {
             failure: None,
             storage: None,
             children: None,
+            spans: Vec::new(),
         }
     }
     /// Whether the operation at `index` can start in this window.
@@ -1587,6 +1699,23 @@ impl Window {
         let deadline = work_deadline(state, now, timeout_ms).min(work_end);
         (deadline > now).then_some(deadline)
     }
+    fn take_span(&mut self, index: usize) -> Span {
+        self.spans
+            .iter()
+            .position(|(i, _)| *i == index)
+            .map(|position| self.spans.swap_remove(position).1)
+            .unwrap_or_else(Span::none)
+    }
+    fn record_span(
+        &mut self,
+        op: &Operation,
+        index: usize,
+        call: telemetry::Call,
+        bytes: Option<usize>,
+    ) {
+        let span = self.take_span(index);
+        telemetry::record_operation(&span, op, call, bytes);
+    }
     fn record(&mut self, state: &mut RunState, finished: Finished) {
         let (index, outcome, cleanup) = match finished {
             Finished::Tool {
@@ -1594,13 +1723,31 @@ impl Window {
                 outcome,
                 cleanup,
             } => (index, outcome, cleanup),
-            Finished::Child { index, result } => return self.record_child(state, index, result),
+            Finished::Child { index, result } => {
+                self.record_span(
+                    &state.operations[index],
+                    index,
+                    telemetry::Call::tool(state, index),
+                    None,
+                );
+                return self.record_child(state, index, result);
+            }
         };
         if matches!(outcome, WorkOutcome::Interrupted) {
             self.interrupted = true;
         }
+        let call = telemetry::Call::tool(state, index);
+        let span = self.take_span(index);
         let op = &mut state.operations[index];
-        op.status = outcome_status(op, outcome, cleanup, state.limits.max_tool_output_bytes);
+        let (status, bytes) = outcome_status(
+            op,
+            outcome,
+            cleanup,
+            state.limits.max_tool_output_bytes,
+            !span.is_disabled(),
+        );
+        op.status = status;
+        telemetry::record_operation(&span, op, call, bytes);
         if self.interrupted || stops_dispatch(&op.status) {
             self.open = false;
         }
@@ -1703,20 +1850,93 @@ enum Finished {
     /// A child's execution returned: it settled, it is blocked, or it was stopped.
     Child { index: usize, result: Result<()> },
 }
-/// Executes one admitted operation, then always runs its cleanup.
-async fn execute(
+struct ToolExecution<'a> {
     index: usize,
     tool: Arc<dyn Tool>,
     deadline: Instant,
     arguments: Value,
     context: ToolContext,
-    control: &RunControl,
+    control: &'a RunControl,
     cleanup_ms: u64,
-) -> Finished {
+}
+trait ExecutionTrace: Send {
+    type Cleanup<F: Future + Send>: Future<Output = F::Output> + Send;
+    fn finished(&self, outcome: &WorkOutcome<ToolOutput<Value>>, spec: &ToolSpec);
+    fn cleanup<F: Future + Send>(&mut self, future: F) -> Self::Cleanup<F>;
+    fn cleaned(
+        &self,
+        result: &std::result::Result<Result<()>, tokio::time::error::Elapsed>,
+        spec: &ToolSpec,
+        timeout_ms: u64,
+    );
+}
+struct Untraced;
+impl ExecutionTrace for Untraced {
+    type Cleanup<F: Future + Send> = F;
+    fn finished(&self, _: &WorkOutcome<ToolOutput<Value>>, _: &ToolSpec) {}
+    fn cleanup<F: Future + Send>(&mut self, future: F) -> F {
+        future
+    }
+    fn cleaned(
+        &self,
+        _: &std::result::Result<Result<()>, tokio::time::error::Elapsed>,
+        _: &ToolSpec,
+        _: u64,
+    ) {
+    }
+}
+struct Traced {
+    call: telemetry::Call,
+    cleanup: Span,
+}
+impl ExecutionTrace for Traced {
+    type Cleanup<F: Future + Send> = tracing::instrument::Instrumented<F>;
+    fn finished(&self, outcome: &WorkOutcome<ToolOutput<Value>>, spec: &ToolSpec) {
+        if matches!(outcome, WorkOutcome::TimedOut) {
+            self.call.timed_out("execute_tool", Some(&spec.name));
+        }
+    }
+    fn cleanup<F: Future + Send>(&mut self, future: F) -> Self::Cleanup<F> {
+        self.cleanup = tracing::debug_span!("tool_cleanup", outcome = Empty, error.type = Empty);
+        future.instrument(self.cleanup.clone())
+    }
+    fn cleaned(
+        &self,
+        result: &std::result::Result<Result<()>, tokio::time::error::Elapsed>,
+        spec: &ToolSpec,
+        timeout_ms: u64,
+    ) {
+        telemetry::record_cleanup(
+            &self.cleanup,
+            self.call,
+            Some(&spec.name),
+            timeout_ms,
+            result,
+        );
+    }
+}
+/// Executes one admitted operation, then always runs its cleanup. Only the observer varies;
+/// the zero-sized observer keeps the untraced future's allocation layout compact.
+async fn execute(work: ToolExecution<'_>, mut trace: impl ExecutionTrace) -> Finished {
+    let ToolExecution {
+        index,
+        tool,
+        deadline,
+        arguments,
+        context,
+        control,
+        cleanup_ms,
+    } = work;
     let outcome = run_work(tool.execute(arguments, context.clone()), deadline, control).await;
+    trace.finished(&outcome, tool.spec());
     context.cancel.cancel();
-    let cleanup =
-        tokio::time::timeout(Duration::from_millis(cleanup_ms), tool.cleanup(context)).await;
+    let cleanup = trace
+        .cleanup(tokio::time::timeout(
+            Duration::from_millis(cleanup_ms),
+            tool.cleanup(context),
+        ))
+        .await;
+    trace.cleaned(&cleanup, tool.spec(), cleanup_ms);
     Finished::Tool {
         index,
         outcome,
@@ -1751,7 +1971,8 @@ fn outcome_status(
     outcome: WorkOutcome<ToolOutput<Value>>,
     cleanup: std::result::Result<Result<()>, tokio::time::error::Elapsed>,
     max_bytes: usize,
-) -> OperationStatus {
+    record_bytes: bool,
+) -> (OperationStatus, Option<usize>) {
     let interrupted = matches!(outcome, WorkOutcome::Interrupted);
     let mut value = match outcome {
         WorkOutcome::Done(result) => result,
@@ -1764,16 +1985,23 @@ fn outcome_status(
     {
         value = Err(error);
     }
-    match value {
-        Ok(output) => output_status(op, output, max_bytes)
-            .unwrap_or_else(|message| failure_status(op, &message, max_bytes, false)),
+    let status = match value {
+        Ok(output) => match output_status(op, output, max_bytes) {
+            Ok((status, bytes)) => return (status, Some(bytes)),
+            Err(message) => failure_status(op, &message, max_bytes, false),
+        },
         Err(error) => failure_status(
             op,
             &error.to_string(),
             max_bytes,
             interrupted || matches!(error, Error::Interrupted),
         ),
-    }
+    };
+    let bytes = match &status {
+        OperationStatus::Complete(result) if record_bytes => Some(encoded_len(&result.value)),
+        _ => None,
+    };
+    (status, bytes)
 }
 
 /// Records a returned output, or explains why it cannot be recorded. Never returns early, so an
@@ -1782,10 +2010,10 @@ fn output_status(
     op: &Operation,
     output: ToolOutput<Value>,
     max_bytes: usize,
-) -> std::result::Result<OperationStatus, String> {
+) -> std::result::Result<(OperationStatus, usize), String> {
     let fits = |len: usize| {
         if len <= max_bytes {
-            Ok(())
+            Ok(len)
         } else {
             Err("tool output exceeds byte limit".to_owned())
         }
@@ -1799,16 +2027,16 @@ fn output_status(
     };
     Ok(match output {
         ToolOutput::Complete(value) => {
-            fits(encoded_len(&value))?;
-            result(value, false)
+            let bytes = fits(encoded_len(&value))?;
+            (result(value, false), bytes)
         }
         ToolOutput::Failed(value) => {
-            fits(encoded_len(&value))?;
-            result(value, true)
+            let bytes = fits(encoded_len(&value))?;
+            (result(value, true), bytes)
         }
         ToolOutput::Wait(wait) => {
-            fits(encoded_len(&wait))?;
-            OperationStatus::Waiting(wait)
+            let bytes = fits(encoded_len(&wait))?;
+            (OperationStatus::Waiting(wait), bytes)
         }
     })
 }
@@ -1833,11 +2061,20 @@ fn failure_status(
     }
 }
 fn uncertain_dispatched(state: &mut RunState, reason: &str) {
-    for op in &mut state.operations {
+    let call = telemetry::Call::model(state);
+    for (index, op) in state.operations.iter_mut().enumerate() {
         if matches!(op.status, OperationStatus::Dispatched) {
             op.status = OperationStatus::Unknown {
                 reason: reason.into(),
             };
+            telemetry::unknown(
+                &Span::none(),
+                op,
+                telemetry::Call {
+                    index: Some(index),
+                    ..call
+                },
+            );
         }
     }
 }
@@ -1949,48 +2186,54 @@ async fn commit(
     state: &mut RunState,
     control: &RunControl,
 ) -> Result<()> {
-    let (phase, history_len) = (std::mem::discriminant(&state.phase), state.history.len());
-    let children = children_len(state);
-    let steering = Boundary::of(state);
-    checkpoint
-        .commit(state)
-        .await
-        .map_err(|error| match error {
-            Error::Stale | Error::Storage(_) | Error::Incompatible(_) => error,
-            // Whatever else a checkpoint reports, the commit failed and the run is unchanged.
-            error => Error::storage(error),
-        })?;
-    // The one place the engine takes in what a commit changed, as `Checkpoint` lists it. Appended
-    // steering needs nothing more: context is assembled after the dispatch commit. A reopened
-    // settlement is handled by `settle`, which returns into the drive loop.
-    let allowed = match steering {
-        _ if state.history.len() < history_len || children_len(state) != children => false,
-        Boundary::Apply => {
-            std::mem::discriminant(&state.phase) == phase
-                && state.history[history_len..]
-                    .iter()
-                    .all(|entry| matches!(entry, HistoryEntry::Steering { .. }))
+    let span = tracing::debug_span!("commit", revision = Empty);
+    async {
+        let (phase, history_len) = (std::mem::discriminant(&state.phase), state.history.len());
+        let children = children_len(state);
+        let steering = Boundary::of(state);
+        checkpoint
+            .commit(state)
+            .await
+            .map_err(|error| match error {
+                Error::Stale | Error::Storage(_) | Error::Incompatible(_) => error,
+                // Whatever else a checkpoint reports, the commit failed and the run is unchanged.
+                error => Error::storage(error),
+            })?;
+        span.record("revision", state.revision);
+        // The one place the engine takes in what a commit changed, as `Checkpoint` lists it. Appended
+        // steering needs nothing more: context is assembled after the dispatch commit. A reopened
+        // settlement is handled by `settle`, which returns into the drive loop.
+        let allowed = match steering {
+            _ if state.history.len() < history_len || children_len(state) != children => false,
+            Boundary::Apply => {
+                std::mem::discriminant(&state.phase) == phase
+                    && state.history[history_len..]
+                        .iter()
+                        .all(|entry| matches!(entry, HistoryEntry::Steering { .. }))
+            }
+            Boundary::Reopen if matches!(state.phase, Phase::Ready) => {
+                state.history.len() == history_len
+            }
+            Boundary::Reopen | Boundary::None => {
+                std::mem::discriminant(&state.phase) == phase && state.history.len() == history_len
+            }
+        };
+        if !allowed {
+            return Err(Error::storage(
+                "checkpoint changed the run beyond what its contract allows",
+            ));
         }
-        Boundary::Reopen if matches!(state.phase, Phase::Ready) => {
-            state.history.len() == history_len
-        }
-        Boundary::Reopen | Boundary::None => {
-            std::mem::discriminant(&state.phase) == phase && state.history.len() == history_len
-        }
-    };
-    if !allowed {
-        return Err(Error::storage(
-            "checkpoint changed the run beyond what its contract allows",
-        ));
+        emit(
+            state,
+            control,
+            ProgressKind::Committed {
+                revision: state.revision,
+            },
+        );
+        Ok(())
     }
-    emit(
-        state,
-        control,
-        ProgressKind::Committed {
-            revision: state.revision,
-        },
-    );
-    Ok(())
+    .instrument(span.clone())
+    .await
 }
 /// How many children a run holds and how much history they hold together: no commit changes
 /// either, since a child's commits are applied to its root by the engine before the root commits.
@@ -1998,6 +2241,7 @@ fn children_len(state: &RunState) -> (usize, usize) {
     let history = (state.children.iter()).map(|child| child.state.history.len());
     (state.children.len(), history.sum())
 }
+#[tracing::instrument(level = "debug", skip_all)]
 async fn settle(
     checkpoint: &dyn Checkpoint,
     state: &mut RunState,
@@ -2036,5 +2280,144 @@ async fn run_work<T>(
         _ = control.shutdown.cancelled() => WorkOutcome::Interrupted,
         _ = tokio::time::sleep_until(deadline) => WorkOutcome::TimedOut,
         result = future => WorkOutcome::Done(result),
+    }
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::*;
+    #[test]
+    fn recorded_tool_output_is_encoded_once() {
+        for output in [
+            ToolOutput::Complete(json!("output")),
+            ToolOutput::Failed(json!("failure")),
+            ToolOutput::Wait(WaitRequest::Input {
+                prompt: "input".into(),
+            }),
+        ] {
+            let expected = match &output {
+                ToolOutput::Complete(value) | ToolOutput::Failed(value) => {
+                    serde_json::to_vec(value).unwrap().len()
+                }
+                ToolOutput::Wait(wait) => serde_json::to_vec(wait).unwrap().len(),
+            };
+            let agent = Agent::builder("encoding", Arc::new(crate::ScriptedModel::new(vec![])))
+                .build()
+                .unwrap();
+            let mut state = agent
+                .new_run("conversation", json!("input"), &[], None)
+                .unwrap();
+            let spec = ToolSpec::new("tool", "1");
+            state.operations.push(Operation {
+                call: ToolCall {
+                    id: "id".into(),
+                    name: "tool".into(),
+                    arguments: Value::Null,
+                },
+                spec,
+                idempotency_key: "key".into(),
+                status: OperationStatus::Dispatched,
+            });
+            let capture = crate::tracing_capture::Capture::default();
+            tracing::subscriber::with_default(capture.clone(), || {
+                let mut window = Window::new(0);
+                window.running = 1;
+                window.spans.push((
+                    0,
+                    telemetry::tool_span(&state.operations[0], telemetry::Call::tool(&state, 0)),
+                ));
+                let encodings = crate::context::count_encodings(|| {
+                    window.record(
+                        &mut state,
+                        Finished::Tool {
+                            index: 0,
+                            outcome: WorkOutcome::Done(Ok(output)),
+                            cleanup: Ok(Ok(())),
+                        },
+                    )
+                });
+                assert_eq!(encodings, 1, "recording output repeated its JSON encoding");
+            });
+            assert_eq!(
+                capture.0.lock().unwrap().spans[0].fields["output_bytes"],
+                expected.to_string()
+            );
+        }
+    }
+    #[test]
+    fn failed_tool_outputs_are_only_encoded_for_an_enabled_span() {
+        for traced in [false, true] {
+            for fault in 0..3 {
+                let agent = Agent::builder("encoding", Arc::new(crate::ScriptedModel::new(vec![])))
+                    .build()
+                    .unwrap();
+                let mut state = agent
+                    .new_run("conversation", json!("input"), &[], None)
+                    .unwrap();
+                state.operations.push(Operation {
+                    call: ToolCall {
+                        id: "id".into(),
+                        name: "tool".into(),
+                        arguments: Value::Null,
+                    },
+                    spec: ToolSpec::new("tool", "1").with_retry(RetryPolicy::ReadOnly),
+                    idempotency_key: "key".into(),
+                    status: OperationStatus::Dispatched,
+                });
+                let capture = crate::tracing_capture::Capture::default();
+                let dispatch = if traced {
+                    tracing::Dispatch::new(capture.clone())
+                } else {
+                    tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default())
+                };
+                tracing::dispatcher::with_default(&dispatch, || {
+                    let mut window = Window::new(0);
+                    window.running = 1;
+                    if traced {
+                        window.spans.push((
+                            0,
+                            telemetry::tool_span(
+                                &state.operations[0],
+                                telemetry::Call::tool(&state, 0),
+                            ),
+                        ));
+                    }
+                    let outcome = if fault == 0 {
+                        WorkOutcome::TimedOut
+                    } else if fault == 1 {
+                        WorkOutcome::Done(Err(Error::tool("failure")))
+                    } else {
+                        WorkOutcome::Done(Ok(ToolOutput::Complete(json!("result"))))
+                    };
+                    let cleanup = if fault == 2 {
+                        Ok(Err(Error::tool("cleanup")))
+                    } else {
+                        Ok(Ok(()))
+                    };
+                    let encodings = crate::context::count_encodings(|| {
+                        window.record(
+                            &mut state,
+                            Finished::Tool {
+                                index: 0,
+                                outcome,
+                                cleanup,
+                            },
+                        )
+                    });
+                    assert_eq!(
+                        encodings,
+                        usize::from(traced),
+                        "failure encoding must depend on a recorded span"
+                    );
+                });
+                if traced {
+                    assert!(
+                        capture.0.lock().unwrap().spans[0]
+                            .fields
+                            .contains_key("output_bytes")
+                    );
+                }
+            }
+        }
     }
 }

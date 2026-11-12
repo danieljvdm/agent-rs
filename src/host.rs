@@ -136,7 +136,7 @@ impl<S: DurableStore + ?Sized + 'static> Host<S> {
             let notify = notify.clone();
             let running = running.clone();
             let fatal_error = fatal_error.clone();
-            tokio::spawn(async move {
+            crate::telemetry::spawn(async move {
                 let _lease = lease;
                 schedule(store, agents, options, shutdown, notify, running)
                     .await
@@ -361,7 +361,7 @@ async fn schedule<S: DurableStore + ?Sized + 'static>(
                 shutdown: shutdown.clone(),
                 events: options.events.clone(),
             };
-            tasks.spawn(async move {
+            let work = async move {
                 let mut position = None;
                 let result = async {
                     position = Some(store.position(id).await?);
@@ -381,7 +381,8 @@ async fn schedule<S: DurableStore + ?Sized + 'static>(
                 }
                 .await;
                 (id, position, result)
-            });
+            };
+            crate::telemetry::spawn_in(&mut tasks, work);
         }
         tokio::select! {
             _ = shutdown.cancelled() => break,
