@@ -66,7 +66,7 @@ The tool functions and `console` are non-writable, non-configurable globals, and
 Two runtimes are included, and `tests/codemode.rs` runs the same conformance suite against both.
 
 - `QuickJs`, the default, runs the interpreter in the host's process, within a memory limit and an interrupt. A defect in the interpreter is a defect of the host.
-- `Subprocess` runs the same interpreter in a process of its own for each turn, so a crash or corruption of the interpreter ends that process and fails the turn, and cannot reach the host's memory. The process is killed when the turn's deadline passes, the run is cancelled, or the turn ends. Its program is the `agent-rs-quickjs` binary (`cargo install agent-rs --features codemode --bin agent-rs-quickjs`) or any binary of yours that calls `codemode::serve`. It must be built from the same version of the crate: a process that reports a different interpreter fails the turn. Its path is not part of the binding.
+- `Subprocess` runs the same interpreter in a process of its own for each turn, so a crash or corruption of the interpreter ends that process and fails the turn, and cannot reach the host's memory. The process is killed when the turn's deadline passes, the run is cancelled, or the turn ends. Its program is the `agent-rs-quickjs` binary (`cargo install agent-rs --features codemode --bin agent-rs-quickjs`) or any binary of yours that calls `codemode::serve`. It must be built from the same version of the crate: a process that reports a different interpreter fails the turn. A bare name is looked up on the host's `PATH`; the process itself gets none of the host's environment unless passed with `Subprocess::env`. The program's path is not part of the binding.
 
 ```rust
 let code = CodeMode::new("code")

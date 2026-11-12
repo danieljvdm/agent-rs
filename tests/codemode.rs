@@ -580,6 +580,8 @@ fn a_script_process_inherits_none_of_the_hosts_environment() {
         "the test needs HOME set"
     );
     assert!(home(Subprocess::new("/bin/sh")).contains(r#"runs "home=""#));
+    // A bare name is found on the host's `PATH`, though the process gets no environment.
+    assert!(home(Subprocess::new("sh")).contains(r#"runs "home=""#));
     assert!(home(Subprocess::new("/bin/sh").env("HOME", "/kept")).contains(r#"runs "home=/kept""#));
 }
 

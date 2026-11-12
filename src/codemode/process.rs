@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use std::{
     ffi::OsString,
     io::{BufRead, BufReader, Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{Arc, Mutex, mpsc},
     thread::JoinHandle,
@@ -139,7 +139,9 @@ pub struct Subprocess {
     env: Vec<(OsString, OsString)>,
 }
 impl Subprocess {
-    /// A runtime that starts `program` with no arguments.
+    /// A runtime that starts `program` with no arguments. A bare name, such as
+    /// `agent-rs-quickjs` installed in `~/.cargo/bin`, is looked up on the host's `PATH` each
+    /// time a process starts, since the process itself gets no environment.
     pub fn new(program: impl Into<PathBuf>) -> Self {
         Self {
             program: program.into(),
@@ -189,6 +191,43 @@ impl ScriptRuntime for Subprocess {
     }
 }
 
+/// `program` as given if it names a path; a bare name, the first executable file of that name in
+/// the directories of `path`. The process's environment is cleared, and the lookup a `Command`
+/// makes uses the process's `PATH`, so it is done here with the host's instead. A name found
+/// nowhere is returned as given, for the spawn to report.
+fn resolve(program: &Path, path: Option<OsString>) -> PathBuf {
+    let bare = program.components().count() == 1 && !program.is_absolute();
+    let Some(path) = path.filter(|_| bare) else {
+        return program.to_path_buf();
+    };
+    let executable = |candidate: &Path| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            candidate
+                .metadata()
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        }
+        #[cfg(not(unix))]
+        {
+            candidate.is_file()
+        }
+    };
+    for directory in std::env::split_paths(&path) {
+        let candidate = directory.join(program);
+        if executable(&candidate) {
+            return candidate;
+        }
+        if cfg!(windows) && program.extension().is_none() {
+            let candidate = candidate.with_extension("exe");
+            if executable(&candidate) {
+                return candidate;
+            }
+        }
+    }
+    program.to_path_buf()
+}
+
 fn interrupted() -> Error {
     Error::provider("script interrupted: its turn ended")
 }
@@ -210,7 +249,8 @@ impl ProcessSession {
         limits: &ScriptLimits,
         cancel: CancellationToken,
     ) -> Result<Self> {
-        let mut child = Command::new(&runtime.program)
+        let program = resolve(&runtime.program, std::env::var_os("PATH"));
+        let mut child = Command::new(&program)
             .args(&runtime.args)
             .env_clear()
             .envs(runtime.env.iter().map(|(key, value)| (key, value)))
@@ -221,7 +261,7 @@ impl ProcessSession {
             .map_err(|error| {
                 Error::provider(format!(
                     "cannot start the script process {}: {error}",
-                    runtime.program.display()
+                    program.display()
                 ))
             })?;
         let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
@@ -317,5 +357,32 @@ impl Drop for ProcessSession {
         if let Some(watcher) = self.watcher.take() {
             let _ = watcher.join();
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::resolve;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn a_bare_name_is_found_on_the_given_path_and_a_path_is_kept() {
+        let path = || Some("/nonexistent:/bin".into());
+        assert_eq!(resolve(Path::new("sh"), path()), PathBuf::from("/bin/sh"));
+        assert_eq!(
+            resolve(Path::new("/bin/sh"), path()),
+            PathBuf::from("/bin/sh")
+        );
+        assert_eq!(resolve(Path::new("./sh"), path()), PathBuf::from("./sh"));
+        assert_eq!(
+            resolve(Path::new("missing-program"), path()),
+            PathBuf::from("missing-program")
+        );
+        assert_eq!(resolve(Path::new("sh"), None), PathBuf::from("sh"));
+        // A directory of the name is not a program.
+        assert_eq!(
+            resolve(Path::new("bin"), Some("/".into())),
+            PathBuf::from("bin")
+        );
     }
 }
