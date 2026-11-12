@@ -56,10 +56,12 @@ const SQLITE_RECORD_BYTES_PER_CHILD_TOOL_ROUND: u64 = 11_600;
 // turn costs what a child that answers at once costs.
 /// Record bytes (with headroom) for a script of one round. Includes the child's acceptance, whose
 /// binding carries the tool declarations.
+#[cfg_attr(not(feature = "codemode"), allow(dead_code))]
 const SQLITE_RECORD_BYTES_CODE_MODE_ONE_ROUND: u64 = 54_660;
 /// Record bytes (with headroom) each further round adds, the same from one round to four as from
 /// four to eight. About twice a child's own tool round: the parent's progress row, rewritten by
 /// each of the round's commits, holds the delegation's spec, whose description declares the tools.
+#[cfg_attr(not(feature = "codemode"), allow(dead_code))]
 const SQLITE_RECORD_BYTES_PER_CODE_MODE_ROUND: u64 = 22_420;
 
 // SQLite cost of interval automations, from `fire_due` (exact unless stated). Every constant
