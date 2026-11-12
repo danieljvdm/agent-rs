@@ -34,6 +34,18 @@ fn capturing_subscribers_recheck_each_instances_filter() {
     }
 }
 
+#[test]
+fn a_thread_without_a_subscriber_cannot_hide_a_callsite_from_a_capture() {
+    fn probe() -> bool {
+        !tracing::info_span!("capture_untraced_probe").is_disabled()
+    }
+    let capture = tracing::Dispatch::new(Capture::at(Level::INFO));
+    // An untraced thread reaches the callsite first, as a parallel test without a subscriber
+    // does. Its absent subscriber must not answer for this one.
+    assert!(!std::thread::spawn(probe).join().unwrap());
+    assert!(tracing::dispatcher::with_default(&capture, probe));
+}
+
 struct Context;
 #[async_trait]
 impl ContextPolicy for Context {
