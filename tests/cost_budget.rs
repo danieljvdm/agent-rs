@@ -1812,3 +1812,43 @@ async fn enabled_tracing_allocation_budgets() {
         .await;
     }
 }
+
+struct UninterestedSubscriber;
+impl tracing::Subscriber for UninterestedSubscriber {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        false
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        unreachable!()
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, _: &tracing::Event<'_>) {
+        unreachable!()
+    }
+    fn enter(&self, _: &tracing::span::Id) {
+        unreachable!()
+    }
+    fn exit(&self, _: &tracing::span::Id) {
+        unreachable!()
+    }
+}
+#[tokio::test]
+async fn uninterested_subscriber_keeps_untraced_allocations() {
+    use tracing::instrument::WithSubscriber;
+    let subscriber = tracing::Dispatch::new(UninterestedSubscriber);
+    let agent = agent(4, 1);
+    stable(
+        "uninterested_four_tool_rounds",
+        ALLOC_RUN_FOUR_TOOL_ROUNDS,
+        || {
+            async {
+                let mut conversation = Conversation::default();
+                let _: Value = agent.run(&mut conversation, "go").await.unwrap();
+                assert_completed(conversation.last_run.as_ref().unwrap(), 4, 1);
+            }
+            .with_subscriber(subscriber.clone())
+        },
+    )
+    .await;
+}

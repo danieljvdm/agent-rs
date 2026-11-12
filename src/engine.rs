@@ -751,20 +751,19 @@ impl std::fmt::Debug for ConversationId {
 }
 /// The state machine runs on the shared definition of the agent being driven.
 impl Definition {
-    #[tracing::instrument(name = "invoke_agent", level = "info", skip_all, fields(
-        otel.name = %format_args!("invoke_agent {}", self.id),
-        otel.kind = "internal", gen_ai.operation.name = "invoke_agent",
-        gen_ai.agent.id = %self.id, run_id = %state.id,
-        parent_run_id = state.parent.as_ref().map(|p| tracing::field::display(p.run_id)),
-        gen_ai.conversation.id = state.parent.is_none().then_some(state.conversation_id.as_str()),
-        outcome = Empty, error.type = Empty
-    ))]
     async fn drive(
         &self,
         state: &mut RunState,
         checkpoint: &dyn Checkpoint,
         control: RunControl,
     ) -> Result<()> {
+        let span = tracing::info_span!("invoke_agent",
+            otel.name = %format_args!("invoke_agent {}", self.id), otel.kind = "internal",
+            gen_ai.operation.name = "invoke_agent", gen_ai.agent.id = %self.id, run_id = %state.id,
+            parent_run_id = state.parent.as_ref().map(|p| tracing::field::display(p.run_id)),
+            gen_ai.conversation.id = state.parent.is_none().then_some(state.conversation_id.as_str()),
+            outcome = Empty, error.type = Empty
+        );
         let result = async {
             // A run accepted by this definition shares its binding; a stored one compares by value.
             if state.version != STATE_VERSION
@@ -841,8 +840,9 @@ impl Definition {
                 }
             }
         }
+        .instrument(span.clone())
         .await;
-        telemetry::record_drive(&Span::current(), state, &result);
+        telemetry::record_drive(&span, state, &result);
         result
     }
 
@@ -851,19 +851,24 @@ impl Definition {
     fn recover(&self, state: &mut RunState) -> Result<bool> {
         let mut recovered = false;
         if matches!(state.phase, Phase::ModelInFlight) {
-            tracing::warn!(name: "work_recovered", run_id = %state.id, operation = "chat");
+            telemetry::Call::model(state).recovered(None);
             state.phase = Phase::Ready;
             recovered = true;
         }
-        for op in &mut state.operations {
+        let call = telemetry::Call::model(state);
+        for (index, op) in state.operations.iter_mut().enumerate() {
             if matches!(op.status, OperationStatus::Dispatched) {
                 self.recorded(op)?;
-                tracing::warn!(name: "work_recovered", run_id = %state.id, operation = "execute_tool", gen_ai.tool.name = %op.call.name, gen_ai.tool.call.id = %op.call.id);
                 if op.spec.retry == RetryPolicy::Never {
                     op.status = OperationStatus::Unknown {
                         reason: "execution ended after dispatch without a recorded outcome".into(),
                     };
-                    telemetry::unknown(&Span::current(), op);
+                    let call = telemetry::Call {
+                        index: Some(index),
+                        ..call
+                    };
+                    call.recovered(Some(&op.spec.name));
+                    telemetry::unknown(&Span::none(), op, call);
                     recovered = true;
                 }
                 // Keep retryable uncertain work Dispatched until it really retries. This
@@ -872,19 +877,20 @@ impl Definition {
         }
         Ok(recovered)
     }
-    #[tracing::instrument(name = "chat", level = "info", skip_all, fields(
-        otel.name = %format_args!("chat {}", self.config.model), otel.kind = "client",
-        gen_ai.operation.name = "chat", gen_ai.request.model = %self.config.model,
-        turn = state.usage.model_calls.saturating_sub(state.child_usage.model_calls) + 1,
-        gen_ai.usage.input_tokens = Empty, gen_ai.usage.output_tokens = Empty,
-        response_bytes = Empty, time_to_first_delta_ms = Empty, outcome = Empty, error.type = Empty
-    ))]
     async fn model_turn(
         &self,
         state: &mut RunState,
         checkpoint: &dyn Checkpoint,
         control: &RunControl,
     ) -> Result<()> {
+        let span = tracing::info_span!("chat",
+            otel.name = %format_args!("chat {}", self.config.model), otel.kind = "client",
+            gen_ai.operation.name = "chat", gen_ai.request.model = %self.config.model,
+            turn = state.usage.model_calls.saturating_sub(state.child_usage.model_calls) + 1,
+            gen_ai.usage.input_tokens = Empty, gen_ai.usage.output_tokens = Empty,
+            response_bytes = Empty, time_to_first_delta_ms = Empty, outcome = Empty, error.type = Empty
+        );
+        // Reported usage survives rejection, interruption, timeout, and cleanup failure.
         let mut usage = crate::TokenUsage::default();
         let mut bytes = 0_usize;
         let mut response_bytes = 0_usize;
@@ -898,8 +904,6 @@ impl Definition {
             commit(checkpoint, state, control).await?;
             let started = Instant::now();
             let operation_cancel = CancellationToken::new();
-            // The attempt's reported usage, outside the operation so it is charged however that ends.
-
             let outcome = {
                 let future = async {
                     // Assemble context after the dispatch checkpoint and inside the operation's
@@ -931,7 +935,6 @@ impl Definition {
                         .await
                         .map_err(provider_error)?;
                     let mut response = None;
-
                     let mut events = 0_usize;
                     while let Some(event) = stream.next().await {
                         events += 1;
@@ -983,27 +986,32 @@ impl Definition {
             match &outcome {
                 WorkOutcome::TimedOut => {
                     outcome_name = "timed_out";
-                    tracing::warn!(name: "operation_timed_out", operation = "chat");
+                    telemetry::Call::model(state).timed_out("chat", None);
                 }
                 WorkOutcome::Interrupted => outcome_name = "interrupted",
                 WorkOutcome::Done(Ok(_)) => outcome_name = "done",
                 WorkOutcome::Done(Err(_)) => {}
             }
             operation_cancel.cancel();
-            let cleanup = telemetry::cleanup("chat", state.limits.cleanup_timeout_ms, async {
-                let model = self.model.cleanup(state.id);
-                match &self.context_policy {
-                    None => model.await,
-                    Some((policy, _)) => {
-                        let context = policy
-                            .cleanup(state.id)
-                            .instrument(tracing::debug_span!("context_cleanup"));
-                        let (model, context) = tokio::join!(model, context);
-                        model.and(context)
+            let cleanup = telemetry::cleanup(
+                tracing::debug_span!("model_cleanup", outcome = Empty, error.type = Empty),
+                telemetry::Call::model(state),
+                None,
+                state.limits.cleanup_timeout_ms,
+                async {
+                    let model = self.model.cleanup(state.id);
+                    match &self.context_policy {
+                        None => model.await,
+                        Some((policy, _)) => {
+                            let context = policy
+                                .cleanup(state.id)
+                                .instrument(tracing::debug_span!("context_cleanup"));
+                            let (model, context) = tokio::join!(model, context);
+                            model.and(context)
+                        }
                     }
-                }
-            })
-            .instrument(tracing::debug_span!("model_cleanup", outcome = Empty, error.type = Empty))
+                },
+            )
             .await;
             refund(state, reservation, started.elapsed());
             state.phase = Phase::Ready;
@@ -1094,8 +1102,8 @@ impl Definition {
             state.phase = Phase::Tools;
             commit(checkpoint, state, control).await
         }
+        .instrument(span.clone())
         .await;
-        let span = Span::current();
         span.record("gen_ai.usage.input_tokens", usage.input);
         span.record("gen_ai.usage.output_tokens", usage.output);
         span.record("response_bytes", response_bytes.max(bytes));
@@ -1269,6 +1277,10 @@ impl Definition {
             }
             for admission in admitted {
                 let op = &state.operations[admission.index];
+                let call = telemetry::Call::tool(state, admission.index);
+                if matches!(admission.previous, OperationStatus::Dispatched) {
+                    call.recovered(Some(&op.spec.name));
+                }
                 let tool = match admission.start {
                     Start::Tool(tool) => tool,
                     Start::Child(child) => {
@@ -1285,33 +1297,33 @@ impl Definition {
                     idempotency_key: op.idempotency_key.clone(),
                     cancel: CancellationToken::new(),
                 };
-                let span = telemetry::tool_span(op);
-                if !telemetry::is_disabled() {
+                let span = telemetry::tool_span(op, call);
+                if !span.is_disabled() {
                     window.spans.push((admission.index, span.clone()));
-                    let future: subagent::ChildFuture<'_> = Box::pin(
-                        execute_traced(
-                            admission.index,
-                            tool,
-                            admission.deadline,
-                            op.call.arguments.clone(),
-                            context,
-                            control,
-                            state.limits.cleanup_timeout_ms,
-                        )
-                        .instrument(span),
-                    );
-                    in_flight.push(Either::Right(future));
-                } else {
-                    in_flight.push(Either::Left(execute(
-                        admission.index,
-                        tool,
-                        admission.deadline,
-                        op.call.arguments.clone(),
-                        context,
-                        control,
-                        state.limits.cleanup_timeout_ms,
-                    )));
                 }
+                let work = ToolExecution {
+                    index: admission.index,
+                    tool,
+                    deadline: admission.deadline,
+                    arguments: op.call.arguments.clone(),
+                    context,
+                    control,
+                    cleanup_ms: state.limits.cleanup_timeout_ms,
+                };
+                in_flight.push(telemetry::instrument(
+                    span,
+                    (work, call),
+                    |(work, _)| execute(work, Untraced),
+                    |(work, call)| {
+                        execute(
+                            work,
+                            Traced {
+                                call,
+                                cleanup: Span::none(),
+                            },
+                        )
+                    },
+                ));
                 window.running += 1;
             }
             // A storage failure never drops other live children. Drain and clean all of them first.
@@ -1428,7 +1440,7 @@ impl Definition {
         }
         let name = &state.operations[index].call.name;
         if matches!(authorization, WorkOutcome::TimedOut) {
-            tracing::warn!(name: "operation_timed_out", operation = "authorize_tool", gen_ai.tool.name = %name, gen_ai.tool.call.id = %state.operations[index].call.id);
+            telemetry::Call::tool(state, index).timed_out("authorize_tool", Some(name));
         }
         match authorization {
             WorkOutcome::Done(Ok(true)) => {}
@@ -1687,14 +1699,20 @@ impl Window {
         let deadline = work_deadline(state, now, timeout_ms).min(work_end);
         (deadline > now).then_some(deadline)
     }
-    fn record_span(&mut self, op: &Operation, index: usize) {
+    fn record_span(
+        &mut self,
+        op: &Operation,
+        index: usize,
+        call: telemetry::Call,
+        bytes: Option<usize>,
+    ) {
         let span = self
             .spans
             .iter()
             .position(|(i, _)| *i == index)
             .map(|position| self.spans.swap_remove(position).1)
             .unwrap_or_else(Span::none);
-        telemetry::record_operation(&span, op);
+        telemetry::record_operation(&span, op, call, bytes);
     }
     fn record(&mut self, state: &mut RunState, finished: Finished) {
         let (index, outcome, cleanup) = match finished {
@@ -1704,16 +1722,24 @@ impl Window {
                 cleanup,
             } => (index, outcome, cleanup),
             Finished::Child { index, result } => {
-                self.record_span(&state.operations[index], index);
+                self.record_span(
+                    &state.operations[index],
+                    index,
+                    telemetry::Call::tool(state, index),
+                    None,
+                );
                 return self.record_child(state, index, result);
             }
         };
         if matches!(outcome, WorkOutcome::Interrupted) {
             self.interrupted = true;
         }
+        let call = telemetry::Call::tool(state, index);
         let op = &mut state.operations[index];
-        op.status = outcome_status(op, outcome, cleanup, state.limits.max_tool_output_bytes);
-        self.record_span(op, index);
+        let (status, bytes) =
+            outcome_status(op, outcome, cleanup, state.limits.max_tool_output_bytes);
+        op.status = status;
+        self.record_span(op, index, call, bytes);
         if self.interrupted || stops_dispatch(&op.status) {
             self.open = false;
         }
@@ -1816,44 +1842,93 @@ enum Finished {
     /// A child's execution returned: it settled, it is blocked, or it was stopped.
     Child { index: usize, result: Result<()> },
 }
-/// Executes one admitted operation, then always runs its cleanup.
-async fn execute(
+struct ToolExecution<'a> {
     index: usize,
     tool: Arc<dyn Tool>,
     deadline: Instant,
     arguments: Value,
     context: ToolContext,
-    control: &RunControl,
+    control: &'a RunControl,
     cleanup_ms: u64,
-) -> Finished {
-    let outcome = run_work(tool.execute(arguments, context.clone()), deadline, control).await;
-    context.cancel.cancel();
-    let cleanup =
-        tokio::time::timeout(Duration::from_millis(cleanup_ms), tool.cleanup(context)).await;
-    Finished::Tool {
-        index,
-        outcome,
-        cleanup,
+}
+trait ExecutionTrace: Send {
+    type Cleanup<F: Future + Send>: Future<Output = F::Output> + Send;
+    fn finished(&self, outcome: &WorkOutcome<ToolOutput<Value>>, spec: &ToolSpec);
+    fn cleanup<F: Future + Send>(&mut self, future: F) -> Self::Cleanup<F>;
+    fn cleaned(
+        &self,
+        result: &std::result::Result<Result<()>, tokio::time::error::Elapsed>,
+        spec: &ToolSpec,
+        timeout_ms: u64,
+    );
+}
+struct Untraced;
+impl ExecutionTrace for Untraced {
+    type Cleanup<F: Future + Send> = F;
+    fn finished(&self, _: &WorkOutcome<ToolOutput<Value>>, _: &ToolSpec) {}
+    fn cleanup<F: Future + Send>(&mut self, future: F) -> F {
+        future
+    }
+    fn cleaned(
+        &self,
+        _: &std::result::Result<Result<()>, tokio::time::error::Elapsed>,
+        _: &ToolSpec,
+        _: u64,
+    ) {
     }
 }
-// Keep the disabled path's future layout unchanged: FuturesUnordered allocates each node.
-async fn execute_traced(
-    index: usize,
-    tool: Arc<dyn Tool>,
-    deadline: Instant,
-    arguments: Value,
-    context: ToolContext,
-    control: &RunControl,
-    cleanup_ms: u64,
-) -> Finished {
-    let outcome = run_work(tool.execute(arguments, context.clone()), deadline, control).await;
-    if matches!(outcome, WorkOutcome::TimedOut) {
-        tracing::warn!(name: "operation_timed_out", operation = "execute_tool");
+struct Traced {
+    call: telemetry::Call,
+    cleanup: Span,
+}
+impl ExecutionTrace for Traced {
+    type Cleanup<F: Future + Send> = tracing::instrument::Instrumented<F>;
+    fn finished(&self, outcome: &WorkOutcome<ToolOutput<Value>>, spec: &ToolSpec) {
+        if matches!(outcome, WorkOutcome::TimedOut) {
+            self.call.timed_out("execute_tool", Some(&spec.name));
+        }
     }
+    fn cleanup<F: Future + Send>(&mut self, future: F) -> Self::Cleanup<F> {
+        self.cleanup = tracing::debug_span!("tool_cleanup", outcome = Empty, error.type = Empty);
+        future.instrument(self.cleanup.clone())
+    }
+    fn cleaned(
+        &self,
+        result: &std::result::Result<Result<()>, tokio::time::error::Elapsed>,
+        spec: &ToolSpec,
+        timeout_ms: u64,
+    ) {
+        telemetry::record_cleanup(
+            &self.cleanup,
+            self.call,
+            Some(&spec.name),
+            timeout_ms,
+            result,
+        );
+    }
+}
+/// Executes one admitted operation, then always runs its cleanup. Only the observer varies;
+/// the zero-sized observer keeps the untraced future's allocation layout compact.
+async fn execute(work: ToolExecution<'_>, mut trace: impl ExecutionTrace) -> Finished {
+    let ToolExecution {
+        index,
+        tool,
+        deadline,
+        arguments,
+        context,
+        control,
+        cleanup_ms,
+    } = work;
+    let outcome = run_work(tool.execute(arguments, context.clone()), deadline, control).await;
+    trace.finished(&outcome, tool.spec());
     context.cancel.cancel();
-    let cleanup = telemetry::cleanup("execute_tool", cleanup_ms, tool.cleanup(context))
-        .instrument(tracing::debug_span!("tool_cleanup", outcome = Empty, error.type = Empty))
+    let cleanup = trace
+        .cleanup(tokio::time::timeout(
+            Duration::from_millis(cleanup_ms),
+            tool.cleanup(context),
+        ))
         .await;
+    trace.cleaned(&cleanup, tool.spec(), cleanup_ms);
     Finished::Tool {
         index,
         outcome,
@@ -1888,7 +1963,7 @@ fn outcome_status(
     outcome: WorkOutcome<ToolOutput<Value>>,
     cleanup: std::result::Result<Result<()>, tokio::time::error::Elapsed>,
     max_bytes: usize,
-) -> OperationStatus {
+) -> (OperationStatus, Option<usize>) {
     let interrupted = matches!(outcome, WorkOutcome::Interrupted);
     let mut value = match outcome {
         WorkOutcome::Done(result) => result,
@@ -1901,16 +1976,23 @@ fn outcome_status(
     {
         value = Err(error);
     }
-    match value {
-        Ok(output) => output_status(op, output, max_bytes)
-            .unwrap_or_else(|message| failure_status(op, &message, max_bytes, false)),
+    let status = match value {
+        Ok(output) => match output_status(op, output, max_bytes) {
+            Ok((status, bytes)) => return (status, Some(bytes)),
+            Err(message) => failure_status(op, &message, max_bytes, false),
+        },
         Err(error) => failure_status(
             op,
             &error.to_string(),
             max_bytes,
             interrupted || matches!(error, Error::Interrupted),
         ),
-    }
+    };
+    let bytes = match &status {
+        OperationStatus::Complete(result) => Some(encoded_len(&result.value)),
+        _ => None,
+    };
+    (status, bytes)
 }
 
 /// Records a returned output, or explains why it cannot be recorded. Never returns early, so an
@@ -1919,10 +2001,10 @@ fn output_status(
     op: &Operation,
     output: ToolOutput<Value>,
     max_bytes: usize,
-) -> std::result::Result<OperationStatus, String> {
+) -> std::result::Result<(OperationStatus, usize), String> {
     let fits = |len: usize| {
         if len <= max_bytes {
-            Ok(())
+            Ok(len)
         } else {
             Err("tool output exceeds byte limit".to_owned())
         }
@@ -1936,16 +2018,16 @@ fn output_status(
     };
     Ok(match output {
         ToolOutput::Complete(value) => {
-            fits(encoded_len(&value))?;
-            result(value, false)
+            let bytes = fits(encoded_len(&value))?;
+            (result(value, false), bytes)
         }
         ToolOutput::Failed(value) => {
-            fits(encoded_len(&value))?;
-            result(value, true)
+            let bytes = fits(encoded_len(&value))?;
+            (result(value, true), bytes)
         }
         ToolOutput::Wait(wait) => {
-            fits(encoded_len(&wait))?;
-            OperationStatus::Waiting(wait)
+            let bytes = fits(encoded_len(&wait))?;
+            (OperationStatus::Waiting(wait), bytes)
         }
     })
 }
@@ -1970,12 +2052,20 @@ fn failure_status(
     }
 }
 fn uncertain_dispatched(state: &mut RunState, reason: &str) {
-    for op in &mut state.operations {
+    let call = telemetry::Call::model(state);
+    for (index, op) in state.operations.iter_mut().enumerate() {
         if matches!(op.status, OperationStatus::Dispatched) {
             op.status = OperationStatus::Unknown {
                 reason: reason.into(),
             };
-            telemetry::unknown(&Span::current(), op);
+            telemetry::unknown(
+                &Span::none(),
+                op,
+                telemetry::Call {
+                    index: Some(index),
+                    ..call
+                },
+            );
         }
     }
 }
@@ -2082,55 +2172,59 @@ fn emit(state: &RunState, control: &RunControl, kind: ProgressKind) {
         });
     }
 }
-#[tracing::instrument(level = "debug", skip_all, fields(revision = Empty))]
 async fn commit(
     checkpoint: &dyn Checkpoint,
     state: &mut RunState,
     control: &RunControl,
 ) -> Result<()> {
-    let (phase, history_len) = (std::mem::discriminant(&state.phase), state.history.len());
-    let children = children_len(state);
-    let steering = Boundary::of(state);
-    checkpoint
-        .commit(state)
-        .await
-        .map_err(|error| match error {
-            Error::Stale | Error::Storage(_) | Error::Incompatible(_) => error,
-            // Whatever else a checkpoint reports, the commit failed and the run is unchanged.
-            error => Error::storage(error),
-        })?;
-    Span::current().record("revision", state.revision);
-    // The one place the engine takes in what a commit changed, as `Checkpoint` lists it. Appended
-    // steering needs nothing more: context is assembled after the dispatch commit. A reopened
-    // settlement is handled by `settle`, which returns into the drive loop.
-    let allowed = match steering {
-        _ if state.history.len() < history_len || children_len(state) != children => false,
-        Boundary::Apply => {
-            std::mem::discriminant(&state.phase) == phase
-                && state.history[history_len..]
-                    .iter()
-                    .all(|entry| matches!(entry, HistoryEntry::Steering { .. }))
+    let span = tracing::debug_span!("commit", revision = Empty);
+    async {
+        let (phase, history_len) = (std::mem::discriminant(&state.phase), state.history.len());
+        let children = children_len(state);
+        let steering = Boundary::of(state);
+        checkpoint
+            .commit(state)
+            .await
+            .map_err(|error| match error {
+                Error::Stale | Error::Storage(_) | Error::Incompatible(_) => error,
+                // Whatever else a checkpoint reports, the commit failed and the run is unchanged.
+                error => Error::storage(error),
+            })?;
+        span.record("revision", state.revision);
+        // The one place the engine takes in what a commit changed, as `Checkpoint` lists it. Appended
+        // steering needs nothing more: context is assembled after the dispatch commit. A reopened
+        // settlement is handled by `settle`, which returns into the drive loop.
+        let allowed = match steering {
+            _ if state.history.len() < history_len || children_len(state) != children => false,
+            Boundary::Apply => {
+                std::mem::discriminant(&state.phase) == phase
+                    && state.history[history_len..]
+                        .iter()
+                        .all(|entry| matches!(entry, HistoryEntry::Steering { .. }))
+            }
+            Boundary::Reopen if matches!(state.phase, Phase::Ready) => {
+                state.history.len() == history_len
+            }
+            Boundary::Reopen | Boundary::None => {
+                std::mem::discriminant(&state.phase) == phase && state.history.len() == history_len
+            }
+        };
+        if !allowed {
+            return Err(Error::storage(
+                "checkpoint changed the run beyond what its contract allows",
+            ));
         }
-        Boundary::Reopen if matches!(state.phase, Phase::Ready) => {
-            state.history.len() == history_len
-        }
-        Boundary::Reopen | Boundary::None => {
-            std::mem::discriminant(&state.phase) == phase && state.history.len() == history_len
-        }
-    };
-    if !allowed {
-        return Err(Error::storage(
-            "checkpoint changed the run beyond what its contract allows",
-        ));
+        emit(
+            state,
+            control,
+            ProgressKind::Committed {
+                revision: state.revision,
+            },
+        );
+        Ok(())
     }
-    emit(
-        state,
-        control,
-        ProgressKind::Committed {
-            revision: state.revision,
-        },
-    );
-    Ok(())
+    .instrument(span.clone())
+    .await
 }
 /// How many children a run holds and how much history they hold together: no commit changes
 /// either, since a child's commits are applied to its root by the engine before the root commits.
@@ -2177,5 +2271,68 @@ async fn run_work<T>(
         _ = control.shutdown.cancelled() => WorkOutcome::Interrupted,
         _ = tokio::time::sleep_until(deadline) => WorkOutcome::TimedOut,
         result = future => WorkOutcome::Done(result),
+    }
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::*;
+    #[test]
+    fn recorded_tool_output_is_encoded_once() {
+        for output in [
+            ToolOutput::Complete(json!("output")),
+            ToolOutput::Failed(json!("failure")),
+            ToolOutput::Wait(WaitRequest::Input {
+                prompt: "input".into(),
+            }),
+        ] {
+            let expected = match &output {
+                ToolOutput::Complete(value) | ToolOutput::Failed(value) => {
+                    serde_json::to_vec(value).unwrap().len()
+                }
+                ToolOutput::Wait(wait) => serde_json::to_vec(wait).unwrap().len(),
+            };
+            let agent = Agent::builder("encoding", Arc::new(crate::ScriptedModel::new(vec![])))
+                .build()
+                .unwrap();
+            let mut state = agent
+                .new_run("conversation", json!("input"), &[], None)
+                .unwrap();
+            let spec = ToolSpec::new("tool", "1");
+            state.operations.push(Operation {
+                call: ToolCall {
+                    id: "id".into(),
+                    name: "tool".into(),
+                    arguments: Value::Null,
+                },
+                spec,
+                idempotency_key: "key".into(),
+                status: OperationStatus::Dispatched,
+            });
+            let capture = crate::tracing_capture::Capture::default();
+            tracing::subscriber::with_default(capture.clone(), || {
+                let mut window = Window::new(0);
+                window.running = 1;
+                window.spans.push((
+                    0,
+                    telemetry::tool_span(&state.operations[0], telemetry::Call::tool(&state, 0)),
+                ));
+                let encodings = crate::context::count_encodings(|| {
+                    window.record(
+                        &mut state,
+                        Finished::Tool {
+                            index: 0,
+                            outcome: WorkOutcome::Done(Ok(output)),
+                            cleanup: Ok(Ok(())),
+                        },
+                    )
+                });
+                assert_eq!(encodings, 1, "recording output repeated its JSON encoding");
+            });
+            assert_eq!(
+                capture.0.lock().unwrap().spans[0].fields["output_bytes"],
+                expected.to_string()
+            );
+        }
     }
 }

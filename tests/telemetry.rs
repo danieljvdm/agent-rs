@@ -4,111 +4,16 @@ use async_trait::async_trait;
 use futures::{StreamExt, stream};
 use serde_json::json;
 use std::{
-    collections::BTreeMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
 use tokio_util::sync::CancellationToken;
+use tracing::Level;
 use tracing::instrument::WithSubscriber;
-use tracing::{
-    Level, Metadata, Subscriber,
-    field::{Field, Visit},
-    span::{Attributes, Id, Record},
-};
-use tracing_core::span::Current;
 
-#[derive(Clone, Debug)]
-struct Captured {
-    metadata: &'static Metadata<'static>,
-    parent: Option<usize>,
-    fields: BTreeMap<String, String>,
-}
-#[derive(Default)]
-struct CaptureState {
-    spans: Vec<Captured>,
-    events: Vec<Captured>,
-    stack: Vec<usize>,
-}
-#[derive(Clone, Default)]
-struct Capture(Arc<Mutex<CaptureState>>);
-struct Fields<'a>(&'a mut BTreeMap<String, String>);
-impl Visit for Fields<'_> {
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        self.0.insert(field.name().into(), format!("{value:?}"));
-    }
-    fn record_str(&mut self, field: &Field, value: &str) {
-        self.0.insert(field.name().into(), value.into());
-    }
-}
-impl Subscriber for Capture {
-    fn enabled(&self, _: &Metadata<'_>) -> bool {
-        true
-    }
-    fn new_span(&self, attrs: &Attributes<'_>) -> Id {
-        let mut state = self.0.lock().unwrap();
-        let parent = attrs
-            .parent()
-            .map(|id| id.into_u64() as usize - 1)
-            .or_else(|| {
-                attrs
-                    .is_contextual()
-                    .then(|| state.stack.last().copied())
-                    .flatten()
-            });
-        let mut fields = BTreeMap::new();
-        attrs.record(&mut Fields(&mut fields));
-        state.spans.push(Captured {
-            metadata: attrs.metadata(),
-            parent,
-            fields,
-        });
-        Id::from_u64(state.spans.len() as u64)
-    }
-    fn record(&self, id: &Id, record: &Record<'_>) {
-        record.record(&mut Fields(
-            &mut self.0.lock().unwrap().spans[id.into_u64() as usize - 1].fields,
-        ));
-    }
-    fn record_follows_from(&self, _: &Id, _: &Id) {}
-    fn event(&self, event: &tracing::Event<'_>) {
-        let mut state = self.0.lock().unwrap();
-        let parent = event
-            .parent()
-            .map(|id| id.into_u64() as usize - 1)
-            .or_else(|| {
-                event
-                    .is_contextual()
-                    .then(|| state.stack.last().copied())
-                    .flatten()
-            });
-        let mut fields = BTreeMap::new();
-        event.record(&mut Fields(&mut fields));
-        state.events.push(Captured {
-            metadata: event.metadata(),
-            parent,
-            fields,
-        });
-    }
-    fn enter(&self, id: &Id) {
-        self.0
-            .lock()
-            .unwrap()
-            .stack
-            .push(id.into_u64() as usize - 1);
-    }
-    fn exit(&self, id: &Id) {
-        assert_eq!(
-            self.0.lock().unwrap().stack.pop(),
-            Some(id.into_u64() as usize - 1)
-        );
-    }
-    fn current_span(&self) -> Current {
-        let state = self.0.lock().unwrap();
-        state.stack.last().map_or_else(Current::none, |&index| {
-            Current::new(Id::from_u64(index as u64 + 1), state.spans[index].metadata)
-        })
-    }
-}
+#[path = "../src/tracing_test.rs"]
+mod tracing_capture;
+use tracing_capture::{Capture, CaptureState, Captured};
 
 struct Context;
 #[async_trait]
@@ -270,7 +175,9 @@ async fn scripted_run_has_nested_content_free_spans() {
         &[
             ("gen_ai.operation.name", "execute_tool"),
             ("gen_ai.tool.name", "echo"),
-            ("gen_ai.tool.call.id", "call-echo"),
+            ("run_id", &run.id.to_string()),
+            ("turn", "1"),
+            ("tool_call_index", "0"),
             ("operation.status", "complete"),
             (
                 "output_bytes",
@@ -559,7 +466,9 @@ async fn uncertain_tools_and_recovery_warn_without_content() {
             event_named(&state, "work_recovered"),
             &[
                 ("operation", "execute_tool"),
-                ("gen_ai.tool.call.id", "call-danger"),
+                ("run_id", &run.id.to_string()),
+                ("turn", "1"),
+                ("tool_call_index", "0"),
             ],
         );
         event_named(&state, "operation_unknown");
@@ -605,35 +514,37 @@ async fn model_recovery_and_output_validation_are_visible() {
 }
 
 #[tokio::test]
-async fn host_tasks_inherit_the_callers_trace() {
+async fn host_tasks_keep_the_subscriber_without_retaining_startup_spans() {
     use tracing::Instrument;
     let capture = Capture::default();
     async {
-        let parent = tracing::info_span!("application");
-        async {
+        let mut host = async {
             let agent = Agent::builder(
                 "hosted",
                 script(vec![ModelResponse::final_output(json!(ANSWER))]),
             )
             .build()
             .unwrap();
-            let mut host =
-                Host::start(Arc::new(MemoryStore::new()), agent, HostOptions::default()).unwrap();
-            let id = host
-                .submit("conversation", "key", json!(INPUT), None)
-                .await
-                .unwrap();
-            tokio::time::timeout(Duration::from_secs(5), async {
-                while !host.status(id).await.unwrap().is_terminal() {
-                    tokio::task::yield_now().await;
-                }
-            })
+            Host::start(Arc::new(MemoryStore::new()), agent, HostOptions::default()).unwrap()
+        }
+        .instrument(tracing::info_span!("startup"))
+        .await;
+        assert!(
+            capture.0.lock().unwrap().closed.contains(&0),
+            "host retained the startup span"
+        );
+        let id = host
+            .submit("conversation", "key", json!(INPUT), None)
             .await
             .unwrap();
-            host.shutdown().await.unwrap();
-        }
-        .instrument(parent)
-        .await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !host.status(id).await.unwrap().is_terminal() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        host.shutdown().await.unwrap();
     }
     .with_subscriber(capture.clone())
     .await;
@@ -643,6 +554,412 @@ async fn host_tasks_inherit_the_callers_trace() {
         .iter()
         .position(|s| s.metadata.name() == "invoke_agent")
         .expect("spawn lost the subscriber");
-    assert_eq!(state.spans[root].parent, Some(0));
+    assert_eq!(state.spans[root].parent, None);
     assert_private(&state);
+}
+
+#[tokio::test(start_paused = true)]
+async fn filtered_spans_never_record_on_the_application_span() {
+    use tracing::Instrument;
+    for level in [Level::INFO, Level::WARN] {
+        for fault in [Fault::Rejected, Fault::CleanupError, Fault::CleanupTimeout] {
+            let capture = Capture::at(level);
+            let shutdown = CancellationToken::new();
+            let agent = Agent::builder("filtered", Arc::new(FaultModel { fault, shutdown }))
+                .limits(small_limits())
+                .build()
+                .unwrap();
+            let mut run = agent
+                .new_run("conversation", json!(INPUT), &[], None)
+                .unwrap();
+            async {
+                let application = tracing::warn_span!("application", outcome = "untouched", error.type = "untouched", revision = 777);
+                agent.drive(&mut run, &MemoryCheckpoint, RunControl::default()).instrument(application).await.unwrap();
+            }.with_subscriber(capture.clone()).await;
+            let state = capture.0.lock().unwrap();
+            assert_fields(
+                &state.spans[0],
+                &[
+                    ("outcome", "untouched"),
+                    ("error.type", "untouched"),
+                    ("revision", "777"),
+                ],
+            );
+            assert!(
+                !state.records.iter().any(|(index, _)| *index == 0),
+                "engine wrote to its caller's span"
+            );
+            if level == Level::INFO {
+                let chat = state
+                    .spans
+                    .iter()
+                    .position(|span| span.metadata.name() == "chat")
+                    .unwrap();
+                let outcomes: Vec<_> = state
+                    .records
+                    .iter()
+                    .filter(|(index, _)| *index == chat)
+                    .filter_map(|(_, fields)| fields.get("outcome").map(String::as_str))
+                    .collect();
+                assert_eq!(outcomes, ["rejected"], "cleanup wrote a chat outcome");
+            }
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn model_controlled_call_ids_never_enter_telemetry() {
+    for level in [Level::DEBUG, Level::WARN] {
+        let capture = Capture::at(level);
+        let tool = Arc::new(FaultTool {
+            spec: ToolSpec::new("danger", "1"),
+            fault: Fault::Timeout,
+        });
+        let mut call = call("danger");
+        call.id = INPUT.into();
+        let agent = Agent::builder("privacy", script(vec![ModelResponse::tools(vec![call])]))
+            .limits(small_limits())
+            .tools([tool as Arc<dyn Tool>])
+            .build()
+            .unwrap();
+        let mut run = agent
+            .new_run("conversation", json!(INPUT), &[], None)
+            .unwrap();
+        agent
+            .drive(&mut run, &MemoryCheckpoint, RunControl::default())
+            .with_subscriber(capture.clone())
+            .await
+            .unwrap();
+        let state = capture.0.lock().unwrap();
+        assert_private(&state);
+        for item in state.spans.iter().chain(&state.events) {
+            assert!(!item.fields.contains_key("gen_ai.tool.call.id"));
+        }
+        for event in &state.events {
+            assert_fields(
+                event,
+                &[
+                    ("run_id", &run.id.to_string()),
+                    ("turn", "1"),
+                    ("tool_call_index", "0"),
+                    ("gen_ai.tool.name", "danger"),
+                ],
+            );
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn warn_only_model_diagnostics_identify_the_run() {
+    for fault in [Fault::Timeout, Fault::CleanupError, Fault::CleanupTimeout] {
+        let capture = Capture::at(Level::WARN);
+        let agent = Agent::builder(
+            "warnings",
+            Arc::new(FaultModel {
+                fault,
+                shutdown: CancellationToken::new(),
+            }),
+        )
+        .limits(small_limits())
+        .build()
+        .unwrap();
+        let mut run = agent
+            .new_run("conversation", json!(INPUT), &[], None)
+            .unwrap();
+        agent
+            .drive(&mut run, &MemoryCheckpoint, RunControl::default())
+            .with_subscriber(capture.clone())
+            .await
+            .unwrap();
+        let state = capture.0.lock().unwrap();
+        assert!(!state.events.is_empty());
+        for event in &state.events {
+            assert_fields(event, &[("run_id", &run.id.to_string()), ("turn", "1")]);
+        }
+        assert_private(&state);
+    }
+}
+
+#[derive(Default)]
+struct DispatchSnapshot {
+    child: bool,
+    saved: Mutex<Option<RunState>>,
+}
+#[async_trait]
+impl Checkpoint for DispatchSnapshot {
+    async fn commit(&self, state: &mut RunState) -> Result<()> {
+        state.revision += 1;
+        let target = if self.child {
+            state.children.first().map(|child| &*child.state)
+        } else {
+            Some(&*state)
+        };
+        if target.is_some_and(|run| {
+            run.operations
+                .iter()
+                .any(|op| matches!(op.status, OperationStatus::Dispatched))
+        }) {
+            let mut saved = self.saved.lock().unwrap();
+            if saved.is_none() {
+                *saved = Some(state.clone());
+            }
+        }
+        Ok(())
+    }
+}
+fn completed_tool(name: &str, retry: RetryPolicy) -> Arc<dyn Tool> {
+    typed_tool::<String, String, _, _>(ToolSpec::new(name, "1").with_retry(retry), |_, _| async {
+        Ok(ToolOutput::Complete(OUTPUT.into()))
+    })
+}
+#[tokio::test(start_paused = true)]
+async fn recovery_is_reported_once_when_a_blocked_retry_really_resumes() {
+    let agent = Agent::builder(
+        "recover",
+        script(vec![
+            ModelResponse::tools(vec![call("retry"), call("unknown")]),
+            ModelResponse::final_output(json!(ANSWER)),
+        ]),
+    )
+    .tools([
+        completed_tool("retry", RetryPolicy::ReadOnly),
+        completed_tool("unknown", RetryPolicy::Never),
+    ])
+    .build()
+    .unwrap();
+    let snapshot = DispatchSnapshot::default();
+    let mut run = agent
+        .new_run("conversation", json!(INPUT), &[], None)
+        .unwrap();
+    agent
+        .drive(&mut run, &snapshot, RunControl::default())
+        .await
+        .unwrap();
+    let mut run = snapshot.saved.lock().unwrap().take().unwrap();
+    run.operations[1].status = OperationStatus::Unknown {
+        reason: "effect needs reconciliation".into(),
+    };
+    let capture = Capture::at(Level::WARN);
+    for _ in 0..2 {
+        agent
+            .drive(&mut run, &MemoryCheckpoint, RunControl::default())
+            .with_subscriber(capture.clone())
+            .await
+            .unwrap();
+    }
+    assert!(
+        capture.0.lock().unwrap().events.is_empty(),
+        "a blocked retry is not yet recovered"
+    );
+    run.resolve(
+        "call-unknown",
+        Resolution::Reconcile(ToolResult {
+            call_id: "call-unknown".into(),
+            value: json!(OUTPUT),
+            is_error: false,
+        }),
+    )
+    .unwrap();
+    agent
+        .drive(&mut run, &MemoryCheckpoint, RunControl::default())
+        .with_subscriber(capture.clone())
+        .await
+        .unwrap();
+    assert!(run.is_terminal());
+    let state = capture.0.lock().unwrap();
+    assert_eq!(
+        state
+            .events
+            .iter()
+            .filter(|e| e.metadata.name() == "work_recovered")
+            .count(),
+        1
+    );
+    assert_private(&state);
+}
+#[tokio::test(start_paused = true)]
+async fn an_attached_child_reports_its_recovered_retry_once() {
+    let child = Agent::builder(
+        "child",
+        script(vec![
+            ModelResponse::tools(vec![call("retry")]),
+            ModelResponse::final_output(json!(ANSWER)),
+        ]),
+    )
+    .limits(
+        small_limits()
+            .with_max_model_calls(4)
+            .with_max_tool_calls(4)
+            .with_max_tokens(100)
+            .with_active_budget(Duration::from_secs(2)),
+    )
+    .tools([completed_tool("retry", RetryPolicy::ReadOnly)])
+    .build()
+    .unwrap();
+    let parent = Agent::builder(
+        "parent",
+        script(vec![
+            ModelResponse::tools(vec![call("delegate")]),
+            ModelResponse::final_output(json!(ANSWER)),
+        ]),
+    )
+    .subagents(1, [Subagent::new("delegate", "child", child)])
+    .build()
+    .unwrap();
+    let snapshot = DispatchSnapshot {
+        child: true,
+        saved: Mutex::default(),
+    };
+    let mut run = parent
+        .new_run("conversation", json!(INPUT), &[], None)
+        .unwrap();
+    parent
+        .drive(&mut run, &snapshot, RunControl::default())
+        .await
+        .unwrap();
+    let mut run = snapshot.saved.lock().unwrap().take().unwrap();
+    let capture = Capture::at(Level::WARN);
+    parent
+        .drive(&mut run, &MemoryCheckpoint, RunControl::default())
+        .with_subscriber(capture.clone())
+        .await
+        .unwrap();
+    assert!(run.is_terminal());
+    let state = capture.0.lock().unwrap();
+    assert_eq!(
+        state
+            .events
+            .iter()
+            .filter(|e| e.metadata.name() == "work_recovered")
+            .count(),
+        1
+    );
+    assert_private(&state);
+}
+
+struct ProtocolTool {
+    inner: FaultTool,
+    shutdown: CancellationToken,
+}
+#[async_trait]
+impl Tool for ProtocolTool {
+    fn spec(&self) -> &ToolSpec {
+        self.inner.spec()
+    }
+    fn validate(&self, args: &serde_json::Value) -> Result<()> {
+        self.inner.validate(args)
+    }
+    async fn execute(
+        &self,
+        args: serde_json::Value,
+        context: ToolContext,
+    ) -> Result<ToolOutput<serde_json::Value>> {
+        if matches!(self.inner.fault, Fault::Interrupted) {
+            self.shutdown.cancel();
+            std::future::pending().await
+        } else {
+            self.inner.execute(args, context).await
+        }
+    }
+    async fn cleanup(&self, context: ToolContext) -> Result<()> {
+        self.inner.cleanup(context).await
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn tool_protocol_agrees_with_and_without_tracing() {
+    for fault in [
+        Fault::Timeout,
+        Fault::Interrupted,
+        Fault::CleanupError,
+        Fault::CleanupTimeout,
+    ] {
+        let mut outcomes = Vec::new();
+        for traced in [false, true] {
+            let shutdown = CancellationToken::new();
+            let tool = Arc::new(ProtocolTool {
+                inner: FaultTool {
+                    spec: ToolSpec::new("tool", "1").with_retry(RetryPolicy::ReadOnly),
+                    fault,
+                },
+                shutdown: shutdown.clone(),
+            });
+            let agent = Agent::builder(
+                "protocol",
+                script(vec![
+                    ModelResponse::tools(vec![call("tool")]),
+                    ModelResponse::final_output(json!(ANSWER)),
+                ]),
+            )
+            .limits(small_limits())
+            .tools([tool as Arc<dyn Tool>])
+            .build()
+            .unwrap();
+            let mut run = agent
+                .new_run("conversation", json!(INPUT), &[], None)
+                .unwrap();
+            let capture = Capture::default();
+            let dispatch = if traced {
+                tracing::Dispatch::new(capture.clone())
+            } else {
+                tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default())
+            };
+            let result = agent
+                .drive(
+                    &mut run,
+                    &MemoryCheckpoint,
+                    RunControl::default().with_shutdown(shutdown),
+                )
+                .with_subscriber(dispatch)
+                .await;
+            outcomes.push((
+                result.is_err(),
+                run.phase,
+                run.operations
+                    .into_iter()
+                    .map(|op| op.status)
+                    .collect::<Vec<_>>(),
+            ));
+            assert_private(&capture.0.lock().unwrap());
+        }
+        assert_eq!(outcomes[0], outcomes[1]);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn filters_for_individual_tool_diagnostics_still_enable_their_work() {
+    for name in ["tool_cleanup", "cleanup_failed", "operation_timed_out"] {
+        let capture = Capture::named(name);
+        let fault = if name == "operation_timed_out" {
+            Fault::Timeout
+        } else {
+            Fault::CleanupError
+        };
+        let tool = Arc::new(FaultTool {
+            spec: ToolSpec::new("tool", "1"),
+            fault,
+        });
+        let agent = Agent::builder(
+            "filtered",
+            script(vec![ModelResponse::tools(vec![call("tool")])]),
+        )
+        .limits(small_limits())
+        .tools([tool as Arc<dyn Tool>])
+        .build()
+        .unwrap();
+        let mut run = agent
+            .new_run("conversation", json!(INPUT), &[], None)
+            .unwrap();
+        agent
+            .drive(&mut run, &MemoryCheckpoint, RunControl::default())
+            .with_subscriber(capture.clone())
+            .await
+            .unwrap();
+        let state = capture.0.lock().unwrap();
+        assert_eq!(
+            state.spans.len() + state.events.len(),
+            1,
+            "missing selected diagnostic {name}"
+        );
+        assert_private(&state);
+    }
 }

@@ -86,3 +86,7 @@ pub use types::{
 /// ```
 #[cfg(doctest)]
 struct PrivateHelpers;
+
+#[cfg(test)]
+#[path = "tracing_test.rs"]
+mod tracing_capture;

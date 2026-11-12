@@ -183,7 +183,8 @@ pub(crate) fn unreserve(parent: &mut RunState, limits: &Limits) {
 
 /// What [`settle`] changed in the parent, so a failed commit can restore it.
 pub(crate) struct Settled {
-    op: usize,
+    pub(crate) op: usize,
+    pub(crate) output_bytes: usize,
     status: OperationStatus,
     usage: Usage,
     child_usage: Usage,
@@ -206,24 +207,34 @@ pub(crate) fn settle(parent: &mut RunState, index: usize) -> Option<Settled> {
         .iter()
         .position(|op| matches!(op.status, OperationStatus::Child { run_id } if run_id == id))?;
     let max_bytes = parent.limits.max_tool_output_bytes;
-    let (value, is_error) = match child.result::<Value>() {
+    let error_result = |message: &str| {
+        let value = error_value(message, max_bytes);
+        let bytes = encoded_len(&value);
+        (value, true, bytes)
+    };
+    let (value, is_error, output_bytes) = match child.result::<Value>() {
         Ok(result) => {
             let failed = !matches!(result.outcome, ChildOutcome::Completed(_));
             match serde_json::to_value(&result) {
-                Ok(value) if encoded_len(&value) <= max_bytes => (value, failed),
-                _ => (
-                    error_value("child result exceeds the tool output limit", max_bytes),
-                    true,
-                ),
+                Ok(value) => {
+                    let bytes = encoded_len(&value);
+                    if bytes <= max_bytes {
+                        (value, failed, bytes)
+                    } else {
+                        error_result("child result exceeds the tool output limit")
+                    }
+                }
+                Err(_) => error_result("child result exceeds the tool output limit"),
             }
         }
-        Err(error) => (error_value(&error.to_string(), max_bytes), true),
+        Err(error) => error_result(&error.to_string()),
     };
     let used = child.state.usage.clone();
     let reserved = allocation(&child.state.limits);
     let call_id = child.call_id.clone();
     let undo = Settled {
         op,
+        output_bytes,
         status: std::mem::replace(
             &mut parent.operations[op].status,
             OperationStatus::Complete(ToolResult {

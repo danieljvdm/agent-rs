@@ -16,7 +16,6 @@ use tokio::{
     task::{JoinHandle, JoinSet},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, instrument::WithSubscriber};
 
 /// How a [`Host`] schedules runs. Start from [`HostOptions::default`] and change what differs:
 ///
@@ -383,11 +382,7 @@ async fn schedule<S: DurableStore + ?Sized + 'static>(
                 .await;
                 (id, position, result)
             };
-            if crate::telemetry::is_disabled() {
-                tasks.spawn(work);
-            } else {
-                tasks.spawn(work.in_current_span().with_current_subscriber());
-            }
+            crate::telemetry::spawn_in(&mut tasks, work);
         }
         tokio::select! {
             _ = shutdown.cancelled() => break,

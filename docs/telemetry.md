@@ -20,7 +20,7 @@ Other fields below are engine-specific.
 | --- | --- | --- |
 | `invoke_agent` | INFO | `otel.name` = `invoke_agent {agent id}`, `otel.kind` = `internal`, `gen_ai.operation.name` = `invoke_agent`, `gen_ai.agent.id`, `run_id`, optional `parent_run_id`, optional `gen_ai.conversation.id`, `outcome`, optional `error.type` |
 | `chat` | INFO | `otel.name` = `chat {model}`, `otel.kind` = `client`, `gen_ai.operation.name` = `chat`, `gen_ai.request.model`, `turn`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `response_bytes`, optional `time_to_first_delta_ms`, `outcome`, optional `error.type` |
-| `execute_tool` | INFO | `otel.name` = `execute_tool {tool name}`, `otel.kind` = `internal`, `gen_ai.operation.name` = `execute_tool`, `gen_ai.tool.name`, `gen_ai.tool.call.id`, `operation.status`, optional `output_bytes` |
+| `execute_tool` | INFO | `otel.name` = `execute_tool {tool name}`, `otel.kind` = `internal`, `gen_ai.operation.name` = `execute_tool`, `gen_ai.tool.name`, `run_id`, `turn`, `tool_call_index`, `operation.status`, optional `output_bytes` |
 | `tool_window` | DEBUG | None |
 | `commit` | DEBUG | `revision` after the checkpoint returns successfully |
 | `assemble_context` | DEBUG | None |
@@ -32,7 +32,8 @@ Other fields below are engine-specific.
 An invocation covers one drive, including its commits and settlement. A waiting
 or interrupted run gets another invocation when driven again. Conversation IDs
 are recorded for root runs; attached children have a parent run ID instead of a
-synthetic conversation ID.
+synthetic conversation ID. Hosted runs start root spans; an application span around
+`Host::start` is not their parent.
 
 `chat` covers dispatch, context assembly, streaming, cleanup, validation and the
 resulting commit. `turn` is one-based and counts this run's attempts across
@@ -53,6 +54,12 @@ recorded output. `operation.status` is `complete`, `waiting`, `unknown`,
 may represent a reported tool failure. Awaiting approval and undispatched calls
 do not have execution spans.
 
+Tool identity is the tuple (`run_id`, `turn`, `tool_call_index`), where the index
+is the call's zero-based position in the model response. It stays the same when
+that call is retried. Model-supplied call IDs are never recorded, including in
+warnings, because they may contain message text. `gen_ai.tool.name` comes from
+the registered tool specification.
+
 An attached child's `invoke_agent` is nested under its parent's `execute_tool`.
 Its `chat` and other spans nest normally. Concurrent tools are sibling spans under
 `tool_window`, with separate cleanup children. `model_cleanup` includes model
@@ -70,11 +77,17 @@ a dropped drive can leave them empty.
 
 | Name | Level | Fields and trigger |
 | --- | --- | --- |
-| `operation_timed_out` | WARN | `operation`: `chat`, `execute_tool`, or `authorize_tool`; authorization also includes `gen_ai.tool.name` and `gen_ai.tool.call.id`. The work deadline elapsed. |
+| `operation_timed_out` | WARN | `operation`: `chat`, `execute_tool`, or `authorize_tool`. The work deadline elapsed. |
 | `cleanup_timed_out` | WARN | `operation`: `chat` or `execute_tool`, `timeout_ms`. Cleanup exceeded its allowance. |
 | `cleanup_failed` | WARN | `operation`: `chat` or `execute_tool`, `error.type`. Cleanup returned an error. |
-| `operation_unknown` | WARN | `gen_ai.tool.name`, `gen_ai.tool.call.id`. A dispatched operation became unknown, including recovery and settlement. |
-| `work_recovered` | WARN | `run_id`, `operation`: `chat` or `execute_tool`; tools also include `gen_ai.tool.name` and `gen_ai.tool.call.id`. A drive found work left in flight, including retryable dispatched calls and work in attached children. |
+| `operation_unknown` | WARN | A dispatched operation became unknown, including recovery and settlement. |
+| `work_recovered` | WARN | `operation`: `chat` or `execute_tool`. An in-flight model attempt was recovered, an unretryable call became unknown, or a retryable dispatched call actually restarted. |
+
+Every warning includes `run_id` and `turn`. Warnings about tools additionally
+include `gen_ai.tool.name` and `tool_call_index`; they are identifiable even with
+WARN-only filtering and without printed span context. Retryable operations that
+are blocked by another unresolved operation do not emit recovery warnings until
+they restart. Recovering an attached child does not double-report its retries.
 
 `error.type` is a fixed classification, never an error's display/debug text:
 `config`, `input`, `model_output`, `provider`, `tool`, `authorization`, `context`,
@@ -85,16 +98,22 @@ a dropped drive can leave them empty.
 ## Privacy and overhead
 
 No messages, instructions, arguments, output values, schemas, or error text are
-recorded, even on failures. IDs and configured agent/model/tool names are
+recorded, even on failures. Model-supplied tool call IDs are also excluded.
+Application-owned run/conversation/agent IDs and configured model/tool names are
 recorded as supplied: applications should keep content out of those identifiers.
 The application or provider may emit its own telemetry separately.
 
-Host tasks inherit the current span and subscriber. SQLite and PostgreSQL jobs
-carry the submitting caller's context, rather than attributing every job to the
-store's startup span. Long-lived connection tasks retain their startup context.
-The SQLite thread join does no run work and needs no run span.
+Background host, PostgreSQL connection/worker, and MCP transport tasks retain
+the subscriber without retaining the span of the call that started them. Hosted
+runs have root spans. SQLite and PostgreSQL jobs do not propagate spans or
+subscribers while the stores have no instrumentation of their own. The SQLite
+thread join does no run work and needs no run span.
 
-Without a subscriber, the original tool execution and queued-job allocation
-layouts are retained. Existing no-subscriber allocation budgets are unchanged.
+End fields are recorded through their owning span handles. Disabling a span
+cannot redirect its fields into an enabled ancestor or application span.
+
+Tool execution has one generic protocol with a zero-sized observer when tracing
+is disabled. Uninterested subscribers also use that compact path. Existing
+no-subscriber allocation budgets are unchanged.
 `tests/cost_budget.rs` also pins deterministic costs with a minimal enabled
 subscriber; a real subscriber or exporter can allocate additional memory.
