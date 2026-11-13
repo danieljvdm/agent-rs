@@ -38,12 +38,13 @@ const SLIDING_COLD_REQUESTS: usize = 15;
 const WINDOW_TOKENS: u64 = (MAX_CONTEXT_BYTES / BYTES_PER_TOKEN) as u64;
 // With a context window the conversation is compacted when a prompt would leave less than the
 // window's reserve. Every prompt extends the one before it except the first after a compaction,
-// which starts from the summary: five summary requests buy a 74% cut in bytes evaluated again.
-const COMPACTIONS: usize = 5;
-const COMPACTED_REQUESTS: usize = 53;
-const COMPACTED_SENT_BYTES: usize = 389_492;
-const COMPACTED_COLD_BYTES: usize = 62_791;
-const COMPACTED_LARGEST_REQUEST_BYTES: usize = 11_649;
+// which starts from the summary: three summary requests buy an 81% cut in bytes evaluated again.
+// (Keeping 30% of the window through a compaction instead of 15% made it five, and 62,791 bytes.)
+const COMPACTIONS: usize = 3;
+const COMPACTED_REQUESTS: usize = 51;
+const COMPACTED_SENT_BYTES: usize = 338_053;
+const COMPACTED_COLD_BYTES: usize = 45_854;
+const COMPACTED_LARGEST_REQUEST_BYTES: usize = 11_675;
 
 /// The summary the scripted model writes when it is asked for one.
 const SUMMARY: &str = "## Goal\nRead the schedule.\n\n## Requirements\n(none)\n\n## Progress\nPages were read and answered.\n\n## Open items\n(none)\n\n## Key details\nThe schedule is on the pages.";
@@ -656,7 +657,7 @@ fn a_context_window_is_checked_and_bound() {
     let build = |window: ContextWindow| builder(Script::new(reader)).context_window(window).build();
     assert_eq!(
         build(ContextWindow::new(4_096)).unwrap().binding()["context_window"],
-        json!({"tokens": 4096, "reserve_tokens": 1024, "keep_recent_tokens": 1228, "summary_tokens": 204})
+        json!({"tokens": 4096, "reserve_tokens": 1024, "keep_recent_tokens": 614, "summary_tokens": 204})
     );
     let custom = window().with_summary_instructions("List the people named.");
     assert_eq!(
@@ -804,13 +805,14 @@ async fn a_dense_prompt_makes_what_follows_count_for_more() {
 
 #[tokio::test]
 async fn a_compaction_that_would_free_little_waits_for_the_provider_to_object() {
-    // One earlier run, then a run whose single read is most of the window: over the threshold,
-    // but all a compaction could cover is the earlier run, an eighth of the context.
+    // One earlier run, then a run whose single read is most of the window, and as much as one
+    // turn may record: over the threshold, but all a compaction could cover is the earlier run,
+    // an eighth of the context.
     let big_read = |n: usize| {
         ModelResponse::tools(vec![ToolCall {
             id: format!("read-{n}"),
             name: "read".into(),
-            arguments: json!(11_000),
+            arguments: json!(10_700),
         }])
     };
     let prior = earlier_runs(1);
@@ -861,4 +863,70 @@ async fn a_compaction_that_would_free_little_waits_for_the_provider_to_object() 
     ));
     let asked: Vec<_> = model.requests().iter().map(asks_for_summary).collect();
     assert_eq!(asked, [false, false, true, false]);
+}
+
+#[tokio::test]
+async fn results_that_one_turn_cannot_hold_are_refused_in_call_order() {
+    // Three reads in one turn. The window has room for about 11,000 bytes of results beside the
+    // instructions, the tool, the question and a summary of anything earlier.
+    let reads = || {
+        let call = |id: &str, bytes: usize| ToolCall {
+            id: id.into(),
+            name: "read".into(),
+            arguments: json!(bytes),
+        };
+        ModelResponse::tools(vec![
+            call("first", 6_000),
+            call("second", 6_000),
+            call("third", 2_000),
+        ])
+    };
+    let results = |window: Option<ContextWindow>| async move {
+        let model = Script::new(move |request, _| {
+            Ok(match request.history.last() {
+                Some(HistoryEntry::Exchange { .. }) => answer(),
+                _ => reads(),
+            })
+        });
+        let mut agent = builder(model.clone());
+        if let Some(window) = window {
+            agent = agent.context_window(window);
+        }
+        let agent = agent.build().unwrap();
+        let mut state = agent.new_run("c", json!("Read three"), &[], None).unwrap();
+        drive(&agent, &mut state).await;
+        assert!(matches!(
+            state.phase,
+            Phase::Settled(Settlement::Completed(_))
+        ));
+        // The model was sent exactly what was recorded.
+        let requests = model.requests();
+        assert_eq!(requests[1].history.last(), Some(&state.history[1]));
+        match &state.history[1] {
+            HistoryEntry::Exchange { results, .. } => results.clone(),
+            other => panic!("not an exchange: {other:?}"),
+        }
+    };
+
+    let bounded = results(Some(window())).await;
+    let kept: Vec<_> = bounded.iter().map(|result| !result.is_error).collect();
+    // The second does not fit beside the first; the third still does.
+    assert_eq!(kept, [true, false, true]);
+    assert_eq!(bounded[0].value.as_str().unwrap().len(), 6_000);
+    assert_eq!(bounded[2].value.as_str().unwrap().len(), 2_000);
+    let refusal = bounded[1].value.as_str().unwrap();
+    assert!(
+        refusal.contains("output of 6002 bytes was not kept"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("Ask for less at a time"), "{refusal}");
+    // What was kept fits the window below its reserve, at the engine's three bytes a token.
+    let recorded: usize = (bounded.iter())
+        .map(|result| serde_json::to_vec(&result.value).unwrap().len())
+        .sum();
+    assert!(recorded / BYTES_PER_TOKEN < (window().tokens - window().reserve_tokens) as usize);
+
+    // Without a context window nothing is known about room, and every result is recorded.
+    let unbounded = results(None).await;
+    assert!(unbounded.iter().all(|result| !result.is_error));
 }

@@ -23,13 +23,18 @@ const FALLBACK_MESSAGE_BYTES: usize = 400;
 /// the model to summarize the conversation, records the summary as a
 /// [`HistoryEntry::Compaction`], and from then on sends that summary with the newest
 /// [`keep_recent_tokens`](Self::keep_recent_tokens) of entries in place of everything older.
-/// Stored history is never rewritten. `docs/context-compaction.md` describes the whole contract.
+/// Stored history is never rewritten.
+///
+/// The results of one turn's tool calls are always sent together, so they must fit the window
+/// on their own. A result that does not fit beside the ones before it is recorded as a tool
+/// error that tells the model to ask for less. `docs/context-compaction.md` describes the whole
+/// contract.
 ///
 /// ```
 /// # use agent_rs::ContextWindow;
 /// let window = ContextWindow::new(32_768);
 /// assert_eq!(window.reserve_tokens, 4_915);
-/// assert_eq!(window.keep_recent_tokens, 9_830);
+/// assert_eq!(window.keep_recent_tokens, 4_915);
 /// assert_eq!(window.summary_tokens, 1_638);
 /// ```
 ///
@@ -47,7 +52,7 @@ pub struct ContextWindow {
     /// of the window, at least 4,096 (or a quarter of a smaller window) and at most 16,384.
     pub reserve_tokens: u64,
     /// How much of the newest context a compaction keeps as recorded. The newest entry and the
-    /// run's latest exchange are kept whatever their size. Defaults to 30% of the window, at
+    /// run's latest exchange are kept whatever their size. Defaults to 15% of the window, at
     /// most 20,000.
     pub keep_recent_tokens: u64,
     /// The size the model is asked to keep its summary within. An answer over twice this is
@@ -65,7 +70,7 @@ impl ContextWindow {
         Self {
             tokens,
             reserve_tokens: percent(15).clamp((tokens / 4).min(4_096), 16_384),
-            keep_recent_tokens: percent(30).min(20_000),
+            keep_recent_tokens: percent(15).min(20_000),
             summary_tokens: (tokens / 20).min(4_096),
             summary_instructions: None,
         }
@@ -132,6 +137,15 @@ impl ContextWindow {
         let answer = self.summary_tokens.saturating_mul(2);
         let room = (density.bytes(self.tokens.saturating_sub(answer))).saturating_sub(overhead);
         (room / if forced { 2 } else { 1 }).max(2)
+    }
+    /// Bytes of tool results one exchange may add to the context, beside `fixed` bytes that
+    /// every request of the run sends: what the window holds below its reserve once a summary
+    /// stands in for everything earlier. An exchange within this still fits after a compaction.
+    pub(crate) fn exchange_bytes(&self, density: Density, fixed: usize) -> usize {
+        let tokens = (self.tokens)
+            .saturating_sub(self.reserve_tokens)
+            .saturating_sub(self.summary_tokens);
+        density.bytes(tokens).saturating_sub(fixed)
     }
     /// The longest summary that is used, in bytes.
     pub(crate) fn summary_max_bytes(&self) -> usize {

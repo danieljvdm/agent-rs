@@ -1,5 +1,5 @@
 use crate::compaction::{self, ContextWindow};
-use crate::context::{PriorContext, assemble, encoded_len, suffix_start};
+use crate::context::{PriorContext, assemble, encoded_len, pins, suffix_start};
 use crate::steering::Boundary;
 use crate::types::{STATE_VERSION, now_ms};
 use crate::{
@@ -531,7 +531,9 @@ impl<I, O> AgentBuilder<I, O> {
     }
     /// The model's context window. With one, the engine keeps every conversation inside it: it
     /// compacts the conversation into a summary before a turn that would not fit, and compacts
-    /// and retries once when the provider rejects a turn as too large. See [`ContextWindow`].
+    /// and retries once when the provider rejects a turn as too large. It also refuses a tool
+    /// result that one turn has no room for, with an error the model can act on. See
+    /// [`ContextWindow`].
     /// Defaults to none, which leaves `max_context_bytes` as the only bound.
     pub fn context_window(mut self, window: ContextWindow) -> Self {
         self.context_window = Some(window);
@@ -1056,6 +1058,21 @@ impl Definition {
             && exhausted(state, true, 0).is_none()
             && self.cut(state, forced).is_some()
     }
+    /// Bytes of results the batch's exchange may record, with a context window: what the window
+    /// has room for beside the instructions, tools, the batch's own calls and the entries the run
+    /// always sends.
+    fn result_budget(&self, state: &RunState) -> Option<usize> {
+        let window = self.context_window.as_ref()?;
+        let pinned = |entry: &HistoryEntry| self.pinned(entry);
+        // The exchange being recorded becomes the latest, so the one before it is not pinned.
+        let always: usize = (0..state.history.len())
+            .filter(|&index| pins(&state.history, index, None, &pinned))
+            .map(|index| encoded_len(&state.history[index]) + 1)
+            .sum();
+        let calls = state.pending_response.as_ref().map_or(0, encoded_len);
+        let fixed = self.overhead_bytes() + always + calls;
+        Some(window.exchange_bytes(self.estimate(state).density, fixed))
+    }
     /// Whether the next turn's prompt is estimated to leave less than the window's reserve, and
     /// a compaction can be made first.
     fn compaction_due(&self, state: &RunState) -> bool {
@@ -1557,7 +1574,8 @@ impl Definition {
                 return Ok(());
             }
         }
-        finish_tool_batch(state, checkpoint, control).await
+        let budget = self.result_budget(state);
+        finish_tool_batch(state, checkpoint, control, budget).await
     }
     /// Runs runnable operations in declaration order through a sliding window of at most
     /// `max_parallel_tools` slots: the next operation starts as soon as a slot frees. Returns once
@@ -1866,10 +1884,17 @@ async fn complete_due_waits(
     Ok(())
 }
 /// Once every operation is complete, appends the exchange to history and returns to the model.
+/// Records the batch as an exchange once every operation has a result.
+///
+/// `budget` is the bytes of results the context window has room for. Results are recorded in
+/// call order while they fit; one that does not is recorded as an error that tells the model how
+/// much room there is, since an exchange is always sent whole and one larger than the window
+/// could never be sent at all.
 async fn finish_tool_batch(
     state: &mut RunState,
     checkpoint: &dyn Checkpoint,
     control: &RunControl,
+    budget: Option<usize>,
 ) -> Result<()> {
     if !state
         .operations
@@ -1878,12 +1903,30 @@ async fn finish_tool_batch(
     {
         return Ok(());
     }
-    let results = state
-        .operations
-        .iter()
-        .map(|op| match &op.status {
-            OperationStatus::Complete(result) => result.clone(),
-            _ => unreachable!(),
+    let results = state.operations.iter().map(|op| match &op.status {
+        OperationStatus::Complete(result) => result,
+        _ => unreachable!(),
+    });
+    let mut left = budget;
+    let results = results
+        .map(|result| {
+            let (Some(budget), Some(left)) = (budget, left.as_mut()) else {
+                return result.clone();
+            };
+            let bytes = encoded_len(&result.value);
+            if bytes <= *left {
+                *left -= bytes;
+                return result.clone();
+            }
+            ToolResult {
+                call_id: result.call_id.clone(),
+                value: Value::String(format!(
+                    "the call finished, but its output of {bytes} bytes was not kept: the tool \
+                     outputs of one turn may total {budget} bytes in this context window, and \
+                     {left} bytes were left. Ask for less at a time."
+                )),
+                is_error: true,
+            }
         })
         .collect();
     let response = state

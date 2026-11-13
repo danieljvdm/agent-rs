@@ -28,10 +28,10 @@ So the context is append-only between compactions, and every change to earlier c
 
 | | Byte limit only | Context window |
 | --- | --- | --- |
-| Requests | 48 | 53, five of them summary requests |
-| Bytes sent | 598,867 | 389,492 |
-| Bytes after the prefix shared with the previous request | 244,387 | 62,791 |
-| Requests that reuse under a quarter of the prompt before them | 15 | 5, each the first after a compaction |
+| Requests | 48 | 51, three of them summary requests |
+| Bytes sent | 598,867 | 338,053 |
+| Bytes after the prefix shared with the previous request | 244,387 | 45,854 |
+| Requests that reuse under a quarter of the prompt before them | 15 | 3, each the first after a compaction |
 
 The scripted model does no inference, so these are bytes, not seconds. The bytes after the shared prefix are what a prefix cache evaluates again.
 
@@ -64,15 +64,27 @@ The quarter is there because a compaction is not free: it is a model call, and t
 | --- | --- | --- |
 | `tokens` | required | The model's context window. |
 | `reserve_tokens` | 15% of the window, 4,096 to 16,384 | Room kept for the answer and for estimate error. At least twice `summary_tokens`. |
-| `keep_recent_tokens` | 30% of the window, at most 20,000 | The newest entries kept as recorded. |
+| `keep_recent_tokens` | 15% of the window, at most 20,000 | The newest entries kept as recorded. |
 | `summary_tokens` | 5% of the window, at most 4,096 | The size the summary is asked to stay within. An answer over twice this is not used. |
 | `summary_instructions` | built in | Replaces the summary instruction. |
 
-A 32,768-token window compacts at 27,853 tokens, keeps 9,830, and asks for a summary of 1,638, so the context after a compaction is about a third of the window and the conversation then appends for the rest. The defaults scale down to a 1,024-token window: fixed thresholds of 16,000 and 20,000 tokens, common elsewhere, leave nothing to cut below a 36,000-token window. `AgentBuilder::build` rejects thresholds that do not fit their window.
+A 32,768-token window compacts at 27,853 tokens, keeps 4,915, and asks for a summary of 1,638, so the context after a compaction is about a fifth of the window and the conversation then appends for the rest.
+
+What a compaction keeps is evaluated again, because the summary before it is new, and it is room the compaction did not free. Keeping 30% of the window made the guard conversation above compact five times instead of three and evaluate 37% more bytes again. Below 15% nothing more was saved there. Raise `keep_recent_tokens` when what the model needs is the recent messages word for word, and expect to pay for it on a slow model. The defaults scale down to a 1,024-token window: fixed thresholds of 16,000 and 20,000 tokens, common elsewhere, leave nothing to cut below a 36,000-token window. `AgentBuilder::build` rejects thresholds that do not fit their window.
 
 Reasoning that a model reports apart from its answer is generated inside the reserve too. Raise `reserve_tokens` for a model that thinks at length, or its summaries and answers will run out of room.
 
-The newest entry and the run's latest exchange are always kept, whatever their size, because the model cannot continue without the results it just asked for. Set `Limits::max_tool_output_bytes` well below the window in bytes; a larger output is recorded as a tool error the model can react to.
+The newest entry and the run's latest exchange are always kept, whatever their size, because the model cannot continue without the results it just asked for.
+
+## What one turn's tools may return
+
+An exchange is sent whole or not at all, so the results of one turn must fit the window on their own. No compaction can make room for them: they are the part it keeps.
+
+With a context window, the engine therefore bounds what one exchange records. The bound is what the window holds below its reserve, less a summary of everything earlier, the instructions and tools, the calls themselves and the entries the run always sends. Results are recorded in the order the model made the calls while they fit. One that does not fit is recorded as a tool error that gives its size, the bound and what was left, and tells the model to ask for less at a time. A model that asks for five pages at once gets the first few and asks again for the rest; by then the earlier pages can be compacted.
+
+The tool has still run. Give a tool whose output can be large a way to return less, such as a page size, and say so in its description. `Limits::max_tool_output_bytes` remains the limit on a single output, with or without a window.
+
+The bound is in bytes at the estimated density, so it is as wrong as that estimate is. The reserve absorbs results up to a fifth denser than estimated.
 
 ## The summary call
 
@@ -108,10 +120,22 @@ These are llama.cpp's defaults at the time of writing, read from its source; mea
 - **A smaller window is also a latency bound.** After a compaction, a model reload or a switch between conversations the prompt is cold, and a model that evaluates a few hundred tokens a second takes about a minute per 15,000 tokens.
 - **Other requests evict the cache.** A second conversation, a subagent or a title request on the same server replaces the slot's cache unless the server has a slot to spare.
 
+### Measured
+
+One model on one machine: Gemma 4 31B at four bits a weight, llama-server 0.9.0, an M4 Max. It evaluated about 165 prompt tokens a second and generated about 18. The conversations were a reader agent with five tools over a synthetic message store.
+
+- **Time is tokens evaluated for the first time, and most of those are tool results.** With an append-only context, prompt evaluation was 85% of a conversation's wall time, and 86% of the tokens evaluated were tool results seen for the first time. Nothing in the engine can make that cheaper; the tool can. A page of 20 message records was 4,400 tokens, 27 seconds. The same page without fields at their defaults, without a timestamp in two formats, and with each thread's participants listed once was 1,470 tokens, 9 seconds. Over a 14-turn conversation that was 38% fewer tokens evaluated, less than a page saves because the model read more pages. A model tuned on one format may answer worse in another: measure that too.
+- **Memory after use is context checkpoints.** A model with sliding-window attention cannot drop the end of its cache, so the server keeps snapshots to roll back to, 32 a slot by default. One conversation grew the server from 22 GiB to 51 GiB, or to 43 GiB with `--parallel 1 --cache-ram 0`. Adding `--ctx-checkpoints 8` held it to 25 GiB with nothing evaluated twice. `--ctx-checkpoints 2` held it to 21 GiB, but evaluated 70% more tokens.
+- **A policy that rewrites earlier results needs those checkpoints.** `ContextPolicy::prior_result` changes the previous run's results when the next run is accepted, so the server rolls back to before them. Eight checkpoints were enough for runs of up to four model calls; two were not, and most runs then started with a cold prompt.
+- **`--swa-full` is the other way to roll back,** and costs memory up front instead: 11 GiB more at load for a 16,384-token context.
+- **The context itself is cheap** for this model, about 76 KiB a token: 2.5 GiB at 32,768 tokens. `--parallel 1` saved another 2.3 GiB at load.
+- **An adapter applied at load slowed prompt evaluation by about 15%.** A larger batch size changed nothing.
+
 ## Not built yet
 
-- **Clearing tool results inside a run.** `ContextPolicy::prior_result` replaces earlier runs' results at acceptance. A long run still compacts by summary only; a step that replaces its own old results without a model call would be cheaper.
-- **Bounding tool results in the context** while history keeps them whole. Today the bound is `max_tool_output_bytes`, which rejects one output and does not see an exchange of several. Against a real model with an 8,192-token window, two pages of messages fetched in parallel were one exchange of 8,500 tokens: the newest exchange is always kept, so no compaction makes it fit, and the run fails. A small window needs this more than it needs summaries.
+- **Clearing tool results inside a run.** `ContextPolicy::prior_result` replaces earlier runs' results at acceptance. A long run still compacts by summary only; a step that replaces its own old results without a model call would be cheaper. It matters most where the window holds about one result: a run that read page after page at 8,192 tokens made a compaction for each page, 24 summary calls in 14 turns, and one run lost track of which pages it had read.
+- **Clipping a result instead of refusing it.** A result that does not fit its turn is replaced by an error, and the model asks again. Sending the part that fits would save that round trip, at the cost of a result the model cannot tell is whole.
 - **Derived context ahead of history.** Adapters send derived items before the conversation, so a change in them re-evaluates everything after. They belong beside the newest input.
+- **Reusing what a compaction keeps.** The entries a compaction keeps are evaluated again, because the summary before them is new. `--cache-reuse` lets llama-server shift cached tokens to a new position instead, but only when the request deletes from the middle of the previous one, so the summary would have to follow the kept entries. It does not work at all on a sliding-window model without `--swa-full`.
 - **Cache measurements.** `prompt_tokens_details.cached_tokens` and llama-server's `timings` are not read. They would let a consumer see a cold prompt.
 - **Counting tokens exactly.** llama-server's `/v1/chat/completions/input_tokens` could replace the estimate when it is close to the threshold.
