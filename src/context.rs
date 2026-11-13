@@ -477,17 +477,17 @@ fn fit_derived(items: &mut Vec<Value>, cap: usize, room: usize) -> usize {
 
 /// History and derived context for one model turn. Without a policy this is the default context:
 /// a bounded suffix of complete exchanges that always holds the current input.
-///
-/// `max_bytes` is the run's `max_context_bytes`, or less for a compaction's summary call, whose
-/// context must leave the window room for the summary.
 #[tracing::instrument(name = "assemble_context", level = "debug", skip_all)]
 pub(crate) async fn assemble(
     state: &RunState,
-    max_bytes: usize,
     policy: Option<&(Arc<dyn ContextPolicy>, usize)>,
     cancel: &CancellationToken,
 ) -> Result<(Vec<HistoryEntry>, Vec<Value>)> {
-    let (prior, history) = (&state.prior_context, &state.history);
+    let (prior, history, max_bytes) = (
+        &state.prior_context,
+        &state.history,
+        state.limits.max_context_bytes,
+    );
     let Some((policy, max_derived_bytes)) = policy else {
         let history = select_history(prior, history, max_bytes, &mut Vec::new(), 0, |_| false)?;
         return Ok((history, Vec::new()));

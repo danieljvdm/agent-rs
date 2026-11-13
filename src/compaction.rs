@@ -9,9 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt::Write;
 
-/// Estimated bytes of encoded context per token. Providers report the real count after each
-/// turn; this covers what was recorded since.
-const BYTES_PER_TOKEN: u64 = 4;
+/// Bytes of a model's own prose per token, for the size of a summary.
+const PROSE_BYTES_PER_TOKEN: u64 = 4;
 /// Bytes of one earlier message in a summary the engine builds itself.
 const FALLBACK_MESSAGE_BYTES: usize = 400;
 
@@ -119,19 +118,25 @@ impl ContextWindow {
     }
     /// Bytes of recent context a compaction keeps: half as much once the provider has rejected
     /// a request, since the estimate that allowed it was too low.
-    pub(crate) fn keep_bytes(&self, forced: bool) -> usize {
-        bytes(self.keep_recent_tokens) / if forced { 2 } else { 1 }
+    pub(crate) fn keep_bytes(&self, density: Density, forced: bool) -> usize {
+        density.bytes(self.keep_recent_tokens) / if forced { 2 } else { 1 }
     }
     /// Bytes of context a summary call may send beside `overhead` bytes of instructions, tools
     /// and the summary instruction, leaving the window room for the largest usable summary.
-    pub(crate) fn summary_context_bytes(&self, overhead: usize, forced: bool) -> usize {
+    pub(crate) fn summary_context_bytes(
+        &self,
+        density: Density,
+        overhead: usize,
+        forced: bool,
+    ) -> usize {
         let answer = self.summary_tokens.saturating_mul(2);
-        let room = bytes(self.tokens.saturating_sub(answer)).saturating_sub(overhead);
+        let room = (density.bytes(self.tokens.saturating_sub(answer))).saturating_sub(overhead);
         (room / if forced { 2 } else { 1 }).max(2)
     }
     /// The longest summary that is used, in bytes.
     pub(crate) fn summary_max_bytes(&self) -> usize {
-        bytes(self.summary_tokens.saturating_mul(2))
+        let bytes = (self.summary_tokens.saturating_mul(2)).saturating_mul(PROSE_BYTES_PER_TOKEN);
+        usize::try_from(bytes).unwrap_or(usize::MAX)
     }
     /// Tokens left in the window beside a prompt of `prompt_tokens`, and never zero: a provider
     /// rejects a request it cannot answer, which the engine can act on.
@@ -150,7 +155,7 @@ impl ContextWindow {
     }
 }
 
-const SUMMARY_INSTRUCTION: &str = "Stop here and write a checkpoint summary of the conversation above. Another model will continue the conversation from your summary and the most recent messages, without the rest.
+const SUMMARY_INSTRUCTION: &str = "Stop here and write a checkpoint summary of the conversation above. Another model will continue the conversation from your summary and from more recent messages that are kept beside it, without anything above.
 
 Use exactly these sections, and write \"(none)\" in a section that does not apply:
 
@@ -175,42 +180,66 @@ Rules:
 - Write at most about {words} words.
 - Do not answer the user, do not call a tool, and write nothing outside the sections.";
 
-/// Bytes of encoded context estimated to make `tokens`.
-fn bytes(tokens: u64) -> usize {
-    usize::try_from(tokens.saturating_mul(BYTES_PER_TOKEN)).unwrap_or(usize::MAX)
-}
-/// Tokens estimated for `bytes` of encoded context.
-pub(crate) fn tokens(bytes: usize) -> u64 {
-    (bytes as u64).div_ceil(BYTES_PER_TOKEN)
+/// How many bytes of encoded context make a token, in thousandths.
+///
+/// Nothing but the provider knows. Text runs near four bytes a token, and JSON tool results,
+/// with their punctuation, numbers and identifiers, nearer two and a half, so the estimate
+/// starts at three and is corrected downwards by what the provider reported for the run's
+/// latest prompt. Erring low makes a compaction early; erring high makes a request the provider
+/// rejects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Density(u64);
+impl Density {
+    const DEFAULT: Self = Self(3_000);
+    const DENSEST: u64 = 1_500;
+    /// The density of a prompt of `bytes` that the provider counted as `tokens`, no sparser
+    /// than the default: what comes next is more often tool results than prose.
+    fn measured(bytes: usize, tokens: u64) -> Self {
+        let per_thousand = (bytes as u64).saturating_mul(1_000) / tokens.max(1);
+        Self(per_thousand.clamp(Self::DENSEST, Self::DEFAULT.0))
+    }
+    /// Tokens estimated for `bytes` of encoded context.
+    pub(crate) fn tokens(self, bytes: usize) -> u64 {
+        (bytes as u64).saturating_mul(1_000).div_ceil(self.0)
+    }
+    /// Bytes of encoded context estimated to make `tokens`.
+    fn bytes(self, tokens: u64) -> usize {
+        usize::try_from(tokens.saturating_mul(self.0) / 1_000).unwrap_or(usize::MAX)
+    }
 }
 
-/// Estimated prompt tokens of the run's next model turn.
+/// What the run's next model turn is estimated to send.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Estimate {
+    /// Prompt tokens.
+    pub tokens: u64,
+    /// The density the estimate used, for sizing what a compaction keeps and sends.
+    pub density: Density,
+}
+
+/// Estimates the prompt of the run's next model turn.
 ///
 /// The run's latest exchange since its latest compaction says what its prompt and answer really
-/// came to, if the provider reported usage; only what was recorded after it is estimated from
-/// bytes. Otherwise everything is: `overhead` bytes of instructions, tools, output schema and
-/// derived-context cap, and the context the turn would send.
+/// came to, if the provider reported usage: only what was recorded after it is estimated from
+/// bytes, at the density that prompt had. Otherwise everything is estimated at the default
+/// density: `overhead` bytes of instructions, tools, output schema and derived-context cap, and
+/// the context the turn would send.
 pub(crate) fn estimate(
     prior: &[HistoryEntry],
     history: &[HistoryEntry],
     overhead: usize,
     pinned: &impl Fn(&HistoryEntry) -> bool,
-) -> u64 {
-    let mut since = 0;
-    for entry in history.iter().rev() {
-        match entry {
-            HistoryEntry::Compaction { .. } => break,
-            HistoryEntry::Exchange { response, results } if response.usage.input > 0 => {
-                let reported = response.usage.input.saturating_add(response.usage.output);
-                return reported.saturating_add(tokens(since + encoded_len(results)));
-            }
-            entry => since += encoded_len(entry),
-        }
-    }
+) -> Estimate {
+    // The exchange whose usage anchors the estimate, by its index in the run's history.
+    let anchor = (history.iter().enumerate().rev())
+        .take_while(|(_, entry)| !matches!(entry, HistoryEntry::Compaction { .. }))
+        .find(|(_, entry)| matches!(entry, HistoryEntry::Exchange { response, .. } if response.usage.input > 0))
+        .map(|(index, _)| index);
     let compacted = compacted(prior, history);
     let floor = compacted.map_or(0, |compacted| compacted.floor);
     let latest_exchange = latest_exchange(history);
-    let mut sent = overhead;
+    // Bytes sent before the anchor's response, and bytes recorded from it on.
+    let (mut before, mut since) = (overhead, 0);
     for (index, entry) in prior.iter().chain(history).enumerate() {
         let own = index.checked_sub(prior.len());
         let send = match entry {
@@ -219,23 +248,55 @@ pub(crate) fn estimate(
                 index >= floor || own.is_some_and(|own| pins(history, own, latest_exchange, pinned))
             }
         };
-        if send {
-            sent += encoded_len(entry) + 1;
+        if !send {
+            continue;
+        }
+        match (anchor, own, entry) {
+            // The anchor's own response is in what the provider counted; its results are not.
+            (Some(anchor), Some(own), HistoryEntry::Exchange { results, .. }) if own == anchor => {
+                since += encoded_len(results);
+            }
+            (Some(anchor), Some(own), _) if own > anchor => since += encoded_len(entry) + 1,
+            _ => before += encoded_len(entry) + 1,
         }
     }
-    tokens(sent)
+    let reported = anchor.and_then(|anchor| match &history[anchor] {
+        HistoryEntry::Exchange { response, .. } => Some(&response.usage),
+        _ => None,
+    });
+    match reported {
+        Some(usage) => {
+            let density = Density::measured(before, usage.input);
+            Estimate {
+                tokens: (usage.input.saturating_add(usage.output))
+                    .saturating_add(density.tokens(since)),
+                density,
+            }
+        }
+        None => Estimate {
+            tokens: Density::DEFAULT.tokens(before + since),
+            density: Density::DEFAULT,
+        },
+    }
 }
 
 /// Where a compaction of `prior ++ history` would cut: the index of the first entry it keeps,
-/// or `None` when it would cover nothing that is not already covered or pinned.
+/// or `None` when it would not cover enough to be worth making.
 ///
 /// Entries are kept newest first while they fit `keep_bytes`. The newest entry and everything
 /// from the run's latest exchange on are kept whatever their size: the model cannot continue
 /// without the results it just asked for.
+///
+/// A compaction costs a model call, and the prompt after it is evaluated from its start. So one
+/// made on the engine's own estimate must cover at least a quarter of the context: when the
+/// entries that must be kept are most of it, summarizing the rest frees too little, and the
+/// turn is made as it is. One `forced` by the provider's rejection only has to cover something
+/// that is not already covered or pinned.
 pub(crate) fn cut(
     prior: &[HistoryEntry],
     history: &[HistoryEntry],
     keep_bytes: usize,
+    forced: bool,
     pinned: &impl Fn(&HistoryEntry) -> bool,
 ) -> Option<usize> {
     let total = prior.len() + history.len();
@@ -259,13 +320,20 @@ pub(crate) fn cut(
         kept += size;
         floor = index;
     }
-    (covered..floor)
-        .any(|index| {
+    let freed: usize = (covered..floor)
+        .filter(|&index| {
             let own = index.checked_sub(prior.len());
             !matches!(entry(index), HistoryEntry::Compaction { .. })
                 && !own.is_some_and(|own| pins(history, own, latest_exchange, pinned))
         })
-        .then_some(floor)
+        .map(|index| encoded_len(entry(index)) + 1)
+        .sum();
+    let enough = if forced {
+        freed > 0
+    } else {
+        freed > 0 && freed.saturating_mul(4) >= freed + kept
+    };
+    enough.then_some(floor)
 }
 
 /// The model's answer to a summary request as a usable summary: non-empty text within

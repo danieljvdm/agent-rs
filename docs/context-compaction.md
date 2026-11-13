@@ -24,14 +24,14 @@ The design follows from how a local model spends time. llama-server reuses its c
 
 So the context is append-only between compactions, and every change to earlier content happens in one step that frees a large part of the window at once.
 
-`tests/context_window.rs` holds this as a cost guard on the messages `LlamaModel` sends over one scripted conversation of 24 runs, each a question, a 1,200-byte tool result and an answer, with a 4,096-token window or the same size as a byte limit:
+`tests/context_window.rs` holds this as a cost guard on the messages `LlamaModel` sends over one scripted conversation of 24 runs, each a question, a 1,200-byte tool result and an answer, with a 16,384-byte limit or a window of the same size in tokens (5,461):
 
 | | Byte limit only | Context window |
 | --- | --- | --- |
 | Requests | 48 | 53, five of them summary requests |
-| Bytes sent | 598,867 | 412,165 |
-| Bytes after the prefix shared with the previous request | 244,387 | 68,507 |
-| Requests that changed what the previous one sent | 15 | 5, each the first after a compaction |
+| Bytes sent | 598,867 | 389,492 |
+| Bytes after the prefix shared with the previous request | 244,387 | 62,791 |
+| Requests that reuse under a quarter of the prompt before them | 15 | 5, each the first after a compaction |
 
 The scripted model does no inference, so these are bytes, not seconds. The bytes after the shared prefix are what a prefix cache evaluates again.
 
@@ -51,10 +51,14 @@ A later run of the conversation is accepted with the same view. Acceptance reads
 
 Before each model turn the engine estimates the turn's prompt in tokens:
 
-- the prompt and output tokens the provider reported for the run's latest exchange, plus a quarter of the encoded bytes of everything recorded since;
-- or, when no exchange since the latest compaction reported usage, a quarter of the encoded bytes of the instructions, tool specs, output schema, derived-context cap and the context itself.
+- the prompt and output tokens the provider reported for the run's latest exchange, plus an estimate from the encoded bytes of everything recorded since;
+- or, when no exchange since the latest compaction reported usage, an estimate from the encoded bytes of the instructions, tool specs, output schema, derived-context cap and the context itself.
 
-It compacts when that estimate reaches `tokens - reserve_tokens`, there is something older than the recent part to cover, and the run has at least two model calls left.
+Bytes become tokens at three bytes a token, or fewer when the provider's count for the run's latest prompt shows the context is denser than that. Prose runs near four bytes a token, but tool results are JSON: against Gemma 4 31B, pages of message records came to 2.5. An estimate that assumes prose lets such a turn through to the provider, which rejects it. The same density sizes what a compaction keeps and what its summary request sends.
+
+It compacts when that estimate reaches `tokens - reserve_tokens`, the compaction would cover at least a quarter of the context, and the run has at least two model calls left.
+
+The quarter is there because a compaction is not free: it is a model call, and the prompt after it is evaluated from its start. When the entries that must be kept are most of the context, such as one tool result that fills half a small window, summarizing the rest frees little and the next result puts the run over the threshold again. The turn is then made as it is, inside the reserve, and the engine compacts only if the provider rejects it.
 
 | `ContextWindow` field | Default | Meaning |
 | --- | --- | --- |
@@ -74,7 +78,7 @@ The newest entry and the run's latest exchange are always kept, whatever their s
 
 A compaction is one model call, made under the same protocol as any other: its intent is committed first, it is charged to the run's model calls, tokens and active time, and a crash before its result is committed makes it again.
 
-The request is the turn's context as it stands, with the same instructions and tools, followed by one user message asking for the summary. `ModelRequest::allow_tool_calls` is false, which the OpenAI-protocol adapters send as `tool_choice: "none"`: the tools stay in the prompt, so the prefix is unchanged, and the model cannot call them. The answer is plain text. Its deltas are not forwarded as progress; `ProgressKind::CompactionStarted` and `ProgressKind::Compacted` are. If the context is larger than the window less twice the summary budget, its oldest entries are left out of the request, and so out of the summary.
+The request is the part of the turn's context the compaction will cover, with the same instructions and tools, followed by one user message asking for the summary. The recent entries the compaction keeps are not in it: they are sent as recorded afterwards, and leaving them out is what lets a compaction work when the kept entries alone fill most of the window. What is sent is the start of the turn's own context, so a provider's prefix cache still serves it. `ModelRequest::allow_tool_calls` is false, which the OpenAI-protocol adapters send as `tool_choice: "none"`: the tools stay in the prompt, so the prefix is unchanged, and the model cannot call them. The answer is plain text. Its deltas are not forwarded as progress; `ProgressKind::CompactionStarted` and `ProgressKind::Compacted` are. If what the compaction covers is larger than the window less twice the summary budget, its oldest entries are left out of the request, and so out of the summary.
 
 The built-in instruction asks for five sections (goal, requirements, progress, open items, key details), tells the model to carry forward an earlier summary where newer messages do not contradict it, and gives a word budget. An application whose conversations have a different shape replaces it with `ContextWindow::with_summary_instructions`.
 
@@ -84,7 +88,7 @@ A summary call that fails does not fail the run. If the model calls a tool, answ
 
 Estimates can be wrong, and a server can be restarted with a smaller window. `Error::ContextOverflow` is what an adapter returns when the provider rejects a request for its size: `LlamaModel` for llama-server's `exceed_context_size_error`, the OpenAI adapters for `context_length_exceeded`.
 
-With a context window configured, the engine answers the first such error on a turn by compacting with half the usual recent part, and makes the turn again. The estimate that allowed the turn was too low, so the summary call's own context is cut, oldest first, to half of what the window would hold. A second overflow on the same turn fails the run, as does any overflow without a context window or with nothing left to cover.
+With a context window configured, the engine answers the first such error on a turn by compacting with half the usual recent part, and makes the turn again. The estimate that allowed the turn was too low, so the summary request may send only half of what the window would otherwise hold. A second overflow on the same turn fails the run, as does any overflow without a context window or with nothing left to cover.
 
 Every request's output allowance, `ModelRequest::remaining_tokens`, is also capped at the room the estimate leaves in the window, so a provider is not asked for more output than could fit.
 
@@ -107,7 +111,7 @@ These are llama.cpp's defaults at the time of writing, read from its source; mea
 ## Not built yet
 
 - **Clearing tool results inside a run.** `ContextPolicy::prior_result` replaces earlier runs' results at acceptance. A long run still compacts by summary only; a step that replaces its own old results without a model call would be cheaper.
-- **Truncating a large tool result in the context** while history keeps it whole. Today the bound is `max_tool_output_bytes`, which rejects.
+- **Bounding tool results in the context** while history keeps them whole. Today the bound is `max_tool_output_bytes`, which rejects one output and does not see an exchange of several. Against a real model with an 8,192-token window, two pages of messages fetched in parallel were one exchange of 8,500 tokens: the newest exchange is always kept, so no compaction makes it fit, and the run fails. A small window needs this more than it needs summaries.
 - **Derived context ahead of history.** Adapters send derived items before the conversation, so a change in them re-evaluates everything after. They belong beside the newest input.
 - **Cache measurements.** `prompt_tokens_details.cached_tokens` and llama-server's `timings` are not read. They would let a consumer see a cold prompt.
 - **Counting tokens exactly.** llama-server's `/v1/chat/completions/input_tokens` could replace the estimate when it is close to the threshold.

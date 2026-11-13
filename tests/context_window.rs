@@ -18,8 +18,10 @@ use tokio_util::sync::CancellationToken;
 const RUNS: usize = 24;
 /// Bytes of text the `read` tool returns.
 const TOOL_RESULT_BYTES: usize = 1_200;
-/// The byte limit of the conversation without a context window: 4,096 tokens at four bytes each.
+/// The byte limit of the conversation without a context window.
 const MAX_CONTEXT_BYTES: usize = 16_384;
+/// Bytes of context the engine takes for a token until a provider reports usage.
+const BYTES_PER_TOKEN: usize = 3;
 
 // Without a context window the engine drops the oldest entries that do not fit
 // `max_context_bytes`. Once the conversation is over the limit, each new run starts later in the
@@ -29,19 +31,19 @@ const SLIDING_REQUESTS: usize = 48;
 const SLIDING_SENT_BYTES: usize = 598_867;
 const SLIDING_COLD_BYTES: usize = 244_387;
 const SLIDING_LARGEST_REQUEST_BYTES: usize = 15_582;
-/// Requests whose prompt does not extend the previous one.
+/// Requests that reuse less than a quarter of the prompt before them.
 const SLIDING_COLD_REQUESTS: usize = 15;
 
-/// The same conversation's context window, in tokens: the byte limit above at four bytes each.
-const WINDOW_TOKENS: u64 = 4_096;
+/// The same conversation's context window, in tokens: the byte limit above at three bytes each.
+const WINDOW_TOKENS: u64 = (MAX_CONTEXT_BYTES / BYTES_PER_TOKEN) as u64;
 // With a context window the conversation is compacted when a prompt would leave less than the
 // window's reserve. Every prompt extends the one before it except the first after a compaction,
-// which starts from the summary: five summary requests buy a 72% cut in bytes evaluated again.
+// which starts from the summary: five summary requests buy a 74% cut in bytes evaluated again.
 const COMPACTIONS: usize = 5;
 const COMPACTED_REQUESTS: usize = 53;
-const COMPACTED_SENT_BYTES: usize = 412_165;
-const COMPACTED_COLD_BYTES: usize = 68_507;
-const COMPACTED_LARGEST_REQUEST_BYTES: usize = 13_325;
+const COMPACTED_SENT_BYTES: usize = 389_492;
+const COMPACTED_COLD_BYTES: usize = 62_791;
+const COMPACTED_LARGEST_REQUEST_BYTES: usize = 11_649;
 
 /// The summary the scripted model writes when it is asked for one.
 const SUMMARY: &str = "## Goal\nRead the schedule.\n\n## Requirements\n(none)\n\n## Progress\nPages were read and answered.\n\n## Open items\n(none)\n\n## Key details\nThe schedule is on the pages.";
@@ -124,14 +126,20 @@ struct Cost {
     /// Bytes of messages after the prefix each request shares with the one before it.
     cold_bytes: usize,
     largest_request_bytes: usize,
-    /// Requests that changed or dropped something the previous request sent.
+    /// Requests that reuse less than a quarter of the prompt before them.
     cold_requests: usize,
 }
-/// The requests, counted from zero, that changed or dropped something the one before sent.
+/// The requests, counted from zero, that lose the prompt before them: less than a quarter of it
+/// is still a prefix of theirs. A summary request is not one of them, since it is the start of
+/// the prompt before it with one instruction added.
 fn cold_requests(messages: &[Vec<u8>]) -> Vec<usize> {
-    let extends = |pair: &[Vec<u8>]| pair[1].starts_with(&pair[0][..pair[0].len() - 1]);
+    let shared = |pair: &[Vec<u8>]| {
+        (pair[0].iter().zip(&pair[1]))
+            .take_while(|(a, b)| a == b)
+            .count()
+    };
     (messages.windows(2).enumerate())
-        .filter(|(_, pair)| !extends(pair))
+        .filter(|(_, pair)| shared(pair) * 4 < pair[0].len())
         .map(|(index, _)| index + 1)
         .collect()
 }
@@ -142,19 +150,16 @@ fn cost(messages: &[Vec<u8>]) -> Cost {
         sent_bytes: 0,
         cold_bytes: 0,
         largest_request_bytes: 0,
-        cold_requests: 0,
+        cold_requests: cold_requests(messages).len(),
     };
     let mut previous: &[u8] = b"[]";
     for request in messages {
-        // The array's closing bracket is not part of what the next request extends.
-        let extendable = previous.len() - 1;
         let shared = (previous.iter().zip(request))
             .take_while(|(a, b)| a == b)
             .count();
         cost.sent_bytes += request.len();
         cost.cold_bytes += request.len() - shared;
         cost.largest_request_bytes = cost.largest_request_bytes.max(request.len());
-        cost.cold_requests += usize::from(shared < extendable);
         previous = request;
     }
     cost
@@ -323,8 +328,10 @@ async fn a_long_run_is_compacted_and_keeps_its_input_and_recent_entries() {
     // The summary request is the turn's own context, then the instruction, with the tools
     // still listed and a text answer.
     let summary_request = &requests[asked];
+    // It sends what the compaction covers, which is the start of the turn's context, and not
+    // the entries it keeps.
     let context = &summary_request.history[..summary_request.history.len() - 1];
-    assert!(context.starts_with(&requests[asked - 1].history));
+    assert!(!context.is_empty() && requests[asked - 1].history.starts_with(context));
     assert!(matches!(summary_request.history.last(),
         Some(HistoryEntry::Steering { instruction, .. }) if instruction.contains("checkpoint summary")));
     assert_eq!(summary_request.tools.len(), 1);
@@ -353,12 +360,15 @@ async fn a_long_run_is_compacted_and_keeps_its_input_and_recent_entries() {
     assert_eq!(next[0], state.history[at]);
     assert_eq!(next[1], state.history[0]);
     assert_eq!(next[2..], state.history[at - kept..at]);
-    // About the newest `keep_recent_tokens` are kept: four bytes a token.
+    // About the newest `keep_recent_tokens` are kept.
     let kept_bytes: usize = (next[2..].iter())
         .map(|entry| serde_json::to_vec(entry).unwrap().len())
         .sum();
-    assert!(kept_bytes <= 4 * window().keep_recent_tokens as usize);
-    assert!(kept_bytes + TOOL_RESULT_BYTES + 200 > 4 * window().keep_recent_tokens as usize);
+    let keep_bytes = BYTES_PER_TOKEN * window().keep_recent_tokens as usize;
+    assert!(kept_bytes <= keep_bytes);
+    assert!(kept_bytes + TOOL_RESULT_BYTES + 200 > keep_bytes);
+    // The summary request left exactly those out.
+    assert_eq!(context.len() + kept, requests[asked - 1].history.len() + 1);
 
     // The summary's text is not progress; the compaction is.
     let summarized = (events.iter())
@@ -512,8 +522,8 @@ async fn a_second_compaction_carries_the_first_summary_forward() {
 
 #[tokio::test]
 async fn reported_usage_decides_when_to_compact() {
-    // Six earlier runs are about 2,300 tokens by their bytes, under the 3,072 that compacts.
-    for reported in [None, Some(TokenUsage::new(3_000, 20))] {
+    // Six earlier runs are about 3,100 tokens by their bytes, under the 4,096 that compacts.
+    for reported in [None, Some(TokenUsage::new(4_000, 20))] {
         let usage = reported.clone();
         let model = Script::new(move |request, n| {
             let response = match request.history.last() {
@@ -569,12 +579,15 @@ async fn a_rejected_turn_is_compacted_and_made_again_once() {
     let asked: Vec<_> = requests.iter().map(asks_for_summary).collect();
     assert_eq!(asked, [false, true, false]);
     assert_eq!(state.usage.model_calls, 3);
-    // It keeps half the usual recent context, and the summary request's own context is cut to
-    // half of what the window would hold.
+    // It keeps half the usual recent context, and the summary request sends only what that
+    // covers.
     let kept: usize = (requests[2].history[1..].iter())
         .map(|entry| serde_json::to_vec(entry).unwrap().len())
         .sum();
-    assert!(kept <= 2 * window().keep_recent_tokens as usize, "{kept}");
+    assert!(
+        kept <= BYTES_PER_TOKEN * window().keep_recent_tokens as usize / 2,
+        "{kept}"
+    );
     assert!(requests[1].history.len() < requests[0].history.len());
 
     // A second rejection of the same turn fails the run.
@@ -623,8 +636,8 @@ async fn output_is_capped_at_the_room_the_prompt_leaves() {
     let sent = |request: &ModelRequest| serde_json::to_vec(&request.history).unwrap().len() as u64;
     for request in &requests {
         // The estimate counts the context and what comes with every request.
-        assert!(request.remaining_tokens < WINDOW_TOKENS - sent(request) / 4);
-        assert!(request.remaining_tokens > WINDOW_TOKENS - sent(request) / 4 - 200);
+        assert!(request.remaining_tokens < WINDOW_TOKENS - sent(request) / 3);
+        assert!(request.remaining_tokens > WINDOW_TOKENS - sent(request) / 3 - 300);
     }
     // The run's own allowance still applies when it is the smaller.
     let model = Script::new(reader);
@@ -642,7 +655,7 @@ async fn output_is_capped_at_the_room_the_prompt_leaves() {
 fn a_context_window_is_checked_and_bound() {
     let build = |window: ContextWindow| builder(Script::new(reader)).context_window(window).build();
     assert_eq!(
-        build(window()).unwrap().binding()["context_window"],
+        build(ContextWindow::new(4_096)).unwrap().binding()["context_window"],
         json!({"tokens": 4096, "reserve_tokens": 1024, "keep_recent_tokens": 1228, "summary_tokens": 204})
     );
     let custom = window().with_summary_instructions("List the people named.");
@@ -653,6 +666,7 @@ fn a_context_window_is_checked_and_bound() {
     // An agent without one is bound as it was before.
     let plain = builder(Script::new(reader)).build().unwrap();
     assert!(plain.binding().get("context_window").is_none());
+    let window = || ContextWindow::new(4_096);
     for invalid in [
         ContextWindow::new(1_000),
         window().with_reserve_tokens(300),
@@ -741,4 +755,110 @@ async fn an_interrupted_compaction_is_made_again() {
     let asked: Vec<_> = script.requests().iter().map(asks_for_summary).collect();
     assert_eq!(asked, [true, false, false]);
     assert_eq!(state.usage.model_calls, 4);
+}
+
+#[tokio::test]
+async fn a_dense_prompt_makes_what_follows_count_for_more() {
+    // What the engine adds to the provider's own count for a tool result recorded since, when
+    // the provider counted the prompt at `bytes_per_token`.
+    async fn added_tokens(bytes_per_token: usize) -> (u64, u64) {
+        let model = Script::new(move |request, n| {
+            let sent = serde_json::to_vec(&request.history).unwrap().len();
+            let usage = TokenUsage::new((sent / bytes_per_token) as u64, 10);
+            Ok(match request.history.last() {
+                Some(HistoryEntry::Exchange { .. }) => answer(),
+                _ => read(n),
+            }
+            .with_usage(usage))
+        });
+        let agent = builder(model.clone())
+            .context_window(ContextWindow::new(32_768))
+            .limits(Limits::default().with_max_tokens(1_000_000))
+            .build()
+            .unwrap();
+        let prior = earlier_runs(4);
+        let mut state = agent.new_run("c", json!("And now?"), &prior, None).unwrap();
+        drive(&agent, &mut state).await;
+        let requests = model.requests();
+        let HistoryEntry::Exchange { response, results } = &state.history[1] else {
+            unreachable!()
+        };
+        let reported = response.usage.input + response.usage.output;
+        let estimate = 32_768 - requests[1].remaining_tokens;
+        let recorded = serde_json::to_vec(results).unwrap().len() as u64;
+        (estimate - reported, recorded)
+    }
+    // JSON at two bytes a token: the result recorded since is counted at about that density.
+    // (A little under, because the engine also counts the instructions and tools as sent.)
+    let (added, recorded) = added_tokens(2).await;
+    assert!(
+        added > recorded * 45 / 100 && added <= recorded / 2,
+        "{added} of {recorded}"
+    );
+    // Prose at four or five: no sparser than three, since what follows is a tool result.
+    for sparse in [4, 5] {
+        let (added, recorded) = added_tokens(sparse).await;
+        assert_eq!(added, recorded.div_ceil(3), "{sparse} bytes a token");
+    }
+}
+
+#[tokio::test]
+async fn a_compaction_that_would_free_little_waits_for_the_provider_to_object() {
+    // One earlier run, then a run whose single read is most of the window: over the threshold,
+    // but all a compaction could cover is the earlier run, an eighth of the context.
+    let big_read = |n: usize| {
+        ModelResponse::tools(vec![ToolCall {
+            id: format!("read-{n}"),
+            name: "read".into(),
+            arguments: json!(11_000),
+        }])
+    };
+    let prior = earlier_runs(1);
+    let model = Script::new(move |request, n| {
+        Ok(match request.history.last() {
+            _ if asks_for_summary(request) => ModelResponse::final_output(json!(SUMMARY)),
+            Some(HistoryEntry::Exchange { .. }) => answer(),
+            _ => big_read(n),
+        })
+    });
+    let agent = builder(model.clone())
+        .context_window(window())
+        .build()
+        .unwrap();
+    let mut state = agent
+        .new_run("c", json!("Read the long one"), &prior, None)
+        .unwrap();
+    drive(&agent, &mut state).await;
+    assert!(matches!(
+        state.phase,
+        Phase::Settled(Settlement::Completed(_))
+    ));
+    // The turn is made as it is: a summary would cost a model call and a cold prompt to free
+    // an eighth of it.
+    let requests = model.requests();
+    assert_eq!(requests.iter().filter(|r| asks_for_summary(r)).count(), 0);
+    let sent = serde_json::to_vec(&requests[1].history).unwrap().len();
+    assert!(sent / BYTES_PER_TOKEN > window().tokens as usize - window().reserve_tokens as usize);
+
+    // If the provider rejects that turn, the little there is to cover is covered.
+    let model = Script::new(move |request, n| match request.history.last() {
+        _ if asks_for_summary(request) => Ok(ModelResponse::final_output(json!(SUMMARY))),
+        Some(HistoryEntry::Exchange { .. }) if n == 2 => Err(Error::context_overflow("too large")),
+        Some(HistoryEntry::Exchange { .. }) => Ok(answer()),
+        _ => Ok(big_read(n)),
+    });
+    let agent = builder(model.clone())
+        .context_window(window())
+        .build()
+        .unwrap();
+    let mut state = agent
+        .new_run("c", json!("Read the long one"), &prior, None)
+        .unwrap();
+    drive(&agent, &mut state).await;
+    assert!(matches!(
+        state.phase,
+        Phase::Settled(Settlement::Completed(_))
+    ));
+    let asked: Vec<_> = model.requests().iter().map(asks_for_summary).collect();
+    assert_eq!(asked, [false, false, true, false]);
 }

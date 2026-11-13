@@ -1020,8 +1020,8 @@ impl Definition {
             + encoded_len(&*self.output_schema)
             + self.context_policy.as_ref().map_or(0, |(_, max)| *max)
     }
-    /// Estimated prompt tokens of the run's next model turn.
-    fn estimate(&self, state: &RunState) -> u64 {
+    /// The estimated prompt of the run's next model turn.
+    fn estimate(&self, state: &RunState) -> compaction::Estimate {
         let pinned = |entry: &HistoryEntry| self.pinned(entry);
         compaction::estimate(
             &state.prior_context,
@@ -1040,7 +1040,8 @@ impl Definition {
         compaction::cut(
             &state.prior_context,
             &state.history,
-            window.keep_bytes(forced),
+            window.keep_bytes(self.estimate(state).density, forced),
+            forced,
             &pinned,
         )
     }
@@ -1059,7 +1060,7 @@ impl Definition {
     /// a compaction can be made first.
     fn compaction_due(&self, state: &RunState) -> bool {
         (self.context_window.as_ref()).is_some_and(|window| {
-            self.estimate(state) >= window.compact_at() && self.can_compact(state, false)
+            self.estimate(state).tokens >= window.compact_at() && self.can_compact(state, false)
         })
     }
 
@@ -1116,32 +1117,47 @@ impl Definition {
             let outcome = {
                 let future = async {
                     let window = self.context_window.as_ref();
-                    // What a summary request sends: its instruction, and a context cut to leave
-                    // the window room for the answer.
+                    let estimate = self.estimate(state);
+                    // Assemble context after the dispatch checkpoint and inside the operation's
+                    // deadline, so the checkpoint can contribute history and preparation is bounded.
+                    let (mut history, derived_context) =
+                        assemble(state, self.context_policy.as_ref(), &operation_cancel).await?;
+                    // A summary request sends what the compaction will cover and its instruction,
+                    // not the recent entries it keeps: those are sent as recorded afterwards.
+                    // What it sends is the start of the turn's own context, so a provider's
+                    // prefix cache serves it.
                     let summary = match (turn, window) {
                         (Turn::Compact(forced), Some(window)) => {
+                            let floor = (self.cut(state, forced))
+                                .ok_or_else(|| Error::context("nothing is left to compact"))?;
+                            let kept = (state.prior_context.iter().chain(&state.history))
+                                .skip(floor)
+                                .filter(|entry| !matches!(entry, HistoryEntry::Compaction { .. }))
+                                .count();
+                            history.truncate(history.len().saturating_sub(kept));
                             let instruction = window.instruction();
                             let overhead = self.overhead_bytes() + instruction.len();
-                            Some((instruction, window.summary_context_bytes(overhead, forced)))
+                            let max_bytes =
+                                window.summary_context_bytes(estimate.density, overhead, forced);
+                            // Its oldest entries are left out if even that does not fit, after
+                            // the earlier summary it must carry forward.
+                            let first = usize::from(matches!(
+                                history.first(),
+                                Some(HistoryEntry::Compaction { .. })
+                            ));
+                            while history.len() > first + 1 && encoded_len(&history) > max_bytes {
+                                history.remove(first);
+                            }
+                            if history.len() <= first {
+                                return Err(Error::context("nothing to summarize"));
+                            }
+                            Some(instruction)
                         }
                         (Turn::Compact(_), None) => {
                             return Err(Error::context("compaction needs a context window"));
                         }
                         (Turn::Chat, _) => None,
                     };
-                    let max_bytes = (summary.as_ref())
-                        .map_or(state.limits.max_context_bytes, |(_, max_bytes)| {
-                            state.limits.max_context_bytes.min(*max_bytes)
-                        });
-                    // Assemble context after the dispatch checkpoint and inside the operation's
-                    // deadline, so the checkpoint can contribute history and preparation is bounded.
-                    let (mut history, derived_context) = assemble(
-                        state,
-                        max_bytes,
-                        self.context_policy.as_ref(),
-                        &operation_cancel,
-                    )
-                    .await?;
                     let mut remaining_tokens = state.limits.max_tokens.saturating_sub(
                         state
                             .usage
@@ -1149,7 +1165,7 @@ impl Definition {
                             .saturating_add(state.usage.output_tokens),
                     );
                     let mut output_schema = self.output_schema.clone();
-                    if let Some((instruction, _)) = summary {
+                    if let Some(instruction) = summary {
                         // Sent as a steering instruction is: the user's words, as written.
                         history.push(HistoryEntry::Steering {
                             id: crate::SteeringId::nil(),
@@ -1161,10 +1177,9 @@ impl Definition {
                         // A summary request's context may have been cut, so it is measured as
                         // sent; a turn's is estimated as the check before it was.
                         let prompt = match turn {
-                            Turn::Chat => self.estimate(state),
-                            Turn::Compact(_) => {
-                                compaction::tokens(self.overhead_bytes() + encoded_len(&history))
-                            }
+                            Turn::Chat => estimate.tokens,
+                            Turn::Compact(_) => (estimate.density)
+                                .tokens(self.overhead_bytes() + encoded_len(&history)),
                         };
                         remaining_tokens = remaining_tokens.min(window.room(prompt));
                     }
