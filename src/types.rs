@@ -266,6 +266,17 @@ pub enum HistoryEntry {
         /// One result per call of `response.tools`, in call order; empty for a final output.
         results: Vec<ToolResult>,
     },
+    /// A compaction of the conversation, recorded by an agent with a
+    /// [`ContextWindow`](crate::ContextWindow) when a turn would not fit. From here on a turn
+    /// sends the summary in place of every entry before the kept ones. Stored history keeps
+    /// those entries; only what is sent changes.
+    Compaction {
+        /// What stands in for the entries the compaction covers: the model's summary, or one
+        /// the engine built from them when the model's could not be used.
+        summary: String,
+        /// How many entries immediately before this one are still sent as recorded.
+        kept: u32,
+    },
 }
 /// What may happen when a call's outcome is not known: after an error, a timeout, an interrupted
 /// execution or a crash after dispatch.
@@ -762,6 +773,16 @@ pub enum ProgressKind {
     },
     /// The run's settlement was committed; it is terminal.
     Settled,
+    /// A compaction's model call was reserved in place of a turn's; its intent is committed
+    /// next. The summary's text is not delivered as deltas.
+    CompactionStarted,
+    /// A [`HistoryEntry::Compaction`] was recorded; its commit follows.
+    #[non_exhaustive]
+    Compacted {
+        /// Whether the model wrote the summary. `false` when its answer could not be used and
+        /// the engine built the summary from the covered entries instead.
+        summarized: bool,
+    },
 }
 pub(crate) fn now_ms() -> u64 {
     SystemTime::now()

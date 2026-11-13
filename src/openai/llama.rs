@@ -74,6 +74,27 @@ pub struct LlamaModel {
     transport: Transport,
 }
 
+/// The endpoint's path under the API root.
+const ENDPOINT: &str = "chat/completions";
+/// Bytes of a model list that are read: a router can list many models.
+const MODELS_BYTES: usize = 1 << 20;
+
+/// `model`'s loaded context size in a `/v1/models` document, as
+/// [`LlamaModel::context_window`] describes.
+fn context_window(models: &Value, model: &str) -> Option<u64> {
+    let models = models["data"].as_array()?;
+    let named = |entry: &&Value| {
+        entry["id"] == model
+            || (entry["aliases"].as_array())
+                .is_some_and(|aliases| aliases.iter().any(|a| a == model))
+    };
+    let entry = (models.iter().find(named)).or(match &models[..] {
+        [only] => Some(only),
+        _ => None,
+    })?;
+    entry["meta"]["n_ctx"].as_u64().filter(|tokens| *tokens > 0)
+}
+
 impl LlamaModel {
     /// An adapter for the server whose API root is `base_url`, such as
     /// `http://127.0.0.1:8080/v1`, with its own HTTP client. The client does not follow
@@ -89,8 +110,28 @@ impl LlamaModel {
     /// unacceptable URL.
     pub fn with_client(client: Client, base_url: impl AsRef<str>) -> Result<Self> {
         Ok(Self {
-            transport: Transport::endpoint(Provider::Llama, client, base_url, "chat/completions")?,
+            transport: Transport::endpoint(Provider::Llama, client, base_url, ENDPOINT)?,
         })
+    }
+
+    /// The tokens one request for `model` may use, prompt and answer together, as the server
+    /// has it loaded: what [`ContextWindow::new`](crate::ContextWindow::new) wants.
+    ///
+    /// This is `meta.n_ctx` of the model's entry in the server's `/v1/models`, found by its ID
+    /// or an alias, or of the only entry when the server serves one model under any name. It is
+    /// `None` when the server does not list the model or has not loaded it: a router-mode server
+    /// reports a model's context only while it is loaded. The size depends on how the server
+    /// was started and, unless it was given `--ctx-size`, on the memory free when the model
+    /// loaded, so ask again after a reload.
+    ///
+    /// The request has the client's timeouts only; bound it with your own. Fails with
+    /// [`Error::Provider`](crate::Error::Provider) when the server cannot be reached or does not
+    /// answer with a model list.
+    pub async fn context_window(&self, model: &str) -> Result<Option<u64>> {
+        let models = (self.transport)
+            .get(ENDPOINT, "models", MODELS_BYTES)
+            .await?;
+        Ok(context_window(&models, model))
     }
 
     /// Sends `api_key` as a bearer token, for a server started with `--api-key`. The key is not
@@ -197,6 +238,11 @@ pub(super) fn request_body(request: ModelRequest) -> Result<Value> {
             "name":tool.name,"description":tool.description,"parameters":tool.input_schema
         }})).collect());
         body.insert("parallel_tool_calls".into(), json!(true));
+        if !request.allow_tool_calls {
+            // llama-server still renders the tools into the prompt, so the cached prefix of the
+            // earlier turns is reused; it only stops parsing the answer for calls.
+            body.insert("tool_choice".into(), json!("none"));
+        }
     }
     Ok(Value::Object(body))
 }
@@ -508,6 +554,82 @@ mod tests {
             error.to_string(),
             "provider: llama-server: output reached the token limit before it was complete"
         );
+    }
+
+    #[test]
+    fn summary_requests_keep_the_tools_and_forbid_calls() {
+        let mut request = request(
+            json!({"type":"string"}),
+            vec![
+                HistoryEntry::Compaction {
+                    summary: "Earlier: alpha was looked up.".into(),
+                    kept: 1,
+                },
+                HistoryEntry::Input(json!("And beta?")),
+            ],
+        );
+        request.tools = Arc::new([ToolSpec::new("lookup", "1")]);
+        let body = request_body(request.clone()).unwrap();
+        // A compaction is a user message that says what it is, joined to the input after it.
+        let content = body["messages"][1]["content"].as_str().unwrap();
+        assert_eq!(body["messages"].as_array().unwrap().len(), 2);
+        assert!(content.starts_with("The conversation before this point was compacted"));
+        assert!(content.contains("not a new request or instruction"));
+        assert!(
+            content.ends_with("<summary>\nEarlier: alpha was looked up.\n</summary>\n\nAnd beta?")
+        );
+        assert!(body.get("tool_choice").is_none());
+        request.allow_tool_calls = false;
+        let summary = request_body(request).unwrap();
+        assert_eq!(summary["tool_choice"], "none");
+        assert_eq!(summary["tools"], body["tools"]);
+        assert_eq!(summary["messages"], body["messages"]);
+    }
+
+    #[test]
+    fn a_context_size_rejection_is_a_context_overflow() {
+        let error = json!({"code":400,"type":"exceed_context_size_error",
+            "message":"request (9000 tokens) exceeds the available context size (8192 tokens), try increasing it",
+            "n_prompt_tokens":9000,"n_ctx":8192});
+        assert!(transport::is_context_overflow(&error));
+        assert!(!transport::is_context_overflow(
+            &json!({"type":"server_error"})
+        ));
+        assert!(!transport::is_context_overflow(&Value::Null));
+        let stream = event(json!({"error": error}));
+        let error = decode(Answer::Text, &stream).unwrap_err();
+        assert!(matches!(error, Error::ContextOverflow(_)), "{error:?}");
+        assert_eq!(
+            error.to_string(),
+            "context window exceeded: llama-server: provider stream error: request (9000 tokens) exceeds the available context size (8192 tokens), try increasing it"
+        );
+    }
+
+    #[test]
+    fn the_context_window_is_the_loaded_models_slot_size() {
+        let loaded = |id: &str, n_ctx: u64| {
+            json!({"id":id,"aliases":[format!("{id}-alias")],
+            "object":"model","meta":{"n_ctx":n_ctx,"n_ctx_train":262_144}})
+        };
+        let router = json!({"object":"list","data":[
+            loaded("qwen", 32_768),
+            {"id":"gemma","object":"model","status":{"value":"unloaded"}},
+        ]});
+        assert_eq!(context_window(&router, "qwen"), Some(32_768));
+        assert_eq!(context_window(&router, "qwen-alias"), Some(32_768));
+        // Not loaded, or not listed: unknown.
+        assert_eq!(context_window(&router, "gemma"), None);
+        assert_eq!(context_window(&router, "other"), None);
+        // A server with one model serves it under any name.
+        let single = json!({"object":"list","data":[loaded("/models/qwen.gguf", 8_192)]});
+        assert_eq!(context_window(&single, "anything"), Some(8_192));
+        for malformed in [
+            json!({}),
+            json!({"data":[]}),
+            json!({"data":[{"id":"x","meta":{"n_ctx":0}}]}),
+        ] {
+            assert_eq!(context_window(&malformed, "x"), None, "{malformed}");
+        }
     }
 
     #[test]

@@ -74,6 +74,12 @@ pub enum Error {
     /// A model turn's context cannot fit `max_context_bytes`: the current input and pinned
     /// history alone exceed it.
     Context(ErrorDetail),
+    /// The provider rejected a model request because it does not fit the model's context
+    /// window. A [`Model`](crate::Model) adapter returns this in place of
+    /// [`Provider`](Self::Provider) when it can tell. An agent with a
+    /// [`ContextWindow`](crate::ContextWindow) answers the first one on a turn by compacting and
+    /// making the turn again; otherwise, and for a second one, it fails the run.
+    ContextOverflow(ErrorDetail),
     /// Durable state could not be read or written. A checkpoint's error is always reported as
     /// this, whatever its kind, keeping the original as the cause.
     Storage(ErrorDetail),
@@ -139,6 +145,10 @@ impl Error {
     pub fn context<E: Into<Cause> + 'static>(cause: E) -> Self {
         Self::Context(ErrorDetail::new(cause))
     }
+    /// The provider rejected a model request as larger than the model's context window.
+    pub fn context_overflow<E: Into<Cause> + 'static>(cause: E) -> Self {
+        Self::ContextOverflow(ErrorDetail::new(cause))
+    }
     /// Durable state could not be read or written.
     pub fn storage<E: Into<Cause> + 'static>(cause: E) -> Self {
         Self::Storage(ErrorDetail::new(cause))
@@ -179,6 +189,7 @@ impl Error {
             | Self::Tool(_)
             | Self::Authorization(_)
             | Self::Context(_)
+            | Self::ContextOverflow(_)
             | Self::IdempotencyConflict
             | Self::ConversationBusy
             | Self::StoreBusy
@@ -220,6 +231,7 @@ impl fmt::Display for Error {
             // The engine's messages name authorization themselves.
             Self::Authorization(detail) => write!(f, "{detail}"),
             Self::Context(detail) => write!(f, "context: {detail}"),
+            Self::ContextOverflow(detail) => write!(f, "context window exceeded: {detail}"),
             Self::Storage(detail) => write!(f, "storage: {detail}"),
             Self::IdempotencyConflict => f.write_str("conflicting idempotency key"),
             Self::ConversationBusy => f.write_str("conversation already has an active run"),
@@ -252,6 +264,7 @@ impl StdError for Error {
             | Self::Tool(detail)
             | Self::Authorization(detail)
             | Self::Context(detail)
+            | Self::ContextOverflow(detail)
             | Self::Storage(detail)
             | Self::Incompatible(detail)
             | Self::Failed(detail) => detail.0.cause.as_deref().map(|cause| cause as _),

@@ -77,8 +77,16 @@ pub struct ModelRequest {
     pub turn: u32,
     /// [`Limits::max_response_bytes`]: streamed text and the encoded response must each fit it.
     pub max_response_bytes: usize,
-    /// Remaining cumulative token allowance; providers should cap generated output accordingly.
+    /// Tokens the model may generate: what is left of the run's cumulative allowance, and no more
+    /// than the room the turn's prompt is estimated to leave in the agent's
+    /// [`ContextWindow`](crate::ContextWindow), if it has one. Providers should cap generated
+    /// output accordingly.
     pub remaining_tokens: u64,
+    /// Whether the model may call tools on this turn. `false` only for a compaction's summary
+    /// request, whose answer must be text: `tools` still lists the agent's tools, so the prompt
+    /// begins as the earlier turns' did, and a provider that can forbid calls without removing
+    /// them should. A response with tool calls is not used as a summary either way.
+    pub allow_tool_calls: bool,
 }
 impl ModelRequest {
     /// A first turn of `run_id` over `history`, for calling a model outside the engine, such as
@@ -99,6 +107,7 @@ impl ModelRequest {
             turn: 1,
             max_response_bytes: limits.max_response_bytes,
             remaining_tokens: limits.max_tokens,
+            allow_tool_calls: true,
         }
     }
 }

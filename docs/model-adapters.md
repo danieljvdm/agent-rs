@@ -48,6 +48,20 @@ reference data, then the items as one user-role JSON document, ahead of history.
 [Steering](steering.md) instructions are rendered the same way in both APIs
 too: a user message with the instruction as written, in its place in history.
 
+A [compaction](context-compaction.md) is a user message as well, in every
+adapter: a notice that what follows is a record of the earlier conversation and
+not a request, then the summary between `<summary>` tags. A compaction's summary
+request has `ModelRequest::allow_tool_calls` false, which all three adapters
+send as `tool_choice: "none"` beside the unchanged tool list, so the prompt
+begins as the earlier turns did. A custom provider that cannot forbid calls may
+ignore the field: the engine does not use an answer that calls a tool.
+
+A request the provider rejects for its size is `Error::ContextOverflow`, not
+`Error::Provider`: a failed status or stream error whose `error.code` is
+`context_length_exceeded` (OpenAI) or whose `error.type` is
+`exceed_context_size_error` (llama-server). The error body is read to tell,
+whatever the provider; what an error may quote from it is unchanged.
+
 The parser requires `response.completed`, final usage, completed output items,
 and agreement between streamed deltas and the final text and arguments. It
 rejects incomplete or failed responses, refusals, malformed JSON, missing or
@@ -93,6 +107,11 @@ stops a local model after its first token. Against Gemma 4 26B-A4B, asking
 "What is 6 times 7?" with an `integer` root schema answered `6` every time
 (the model began "6 times 7…" and the grammar ended the number), while the
 envelope answered `{"value": 42}`.
+
+`LlamaModel::context_window(model)` reads what one request may use from the
+server's `/v1/models` (`meta.n_ctx`), for
+[`ContextWindow::new`](context-compaction.md#finding-the-window). It is `None`
+until the model is loaded.
 
 Reasoning is streamed, never retained, never replayed on later turns, and
 counts against `Limits::max_response_bytes` with the answer. The engine passes

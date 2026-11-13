@@ -6,9 +6,9 @@
 //! - <https://developers.openai.com/api/docs/guides/migrate-to-responses>
 
 use super::{
-    Provider, output_schema, output_value, protocol, protocol_caused_by, push_derived_context,
-    steering_message,
-    transport::{EventParser, Transport},
+    Provider, compaction_message, output_schema, output_value, protocol, protocol_caused_by,
+    push_derived_context, steering_message,
+    transport::{EventParser, Transport, is_context_overflow},
     validate_request,
 };
 use crate::{
@@ -126,6 +126,7 @@ pub(super) fn request_body(request: ModelRequest) -> Result<Value> {
             HistoryEntry::Steering { instruction, .. } => {
                 input.push(steering_message(instruction));
             }
+            HistoryEntry::Compaction { summary, .. } => input.push(compaction_message(&summary)),
             HistoryEntry::Exchange { response, results } => {
                 if response.tools.is_empty() {
                     let output = response
@@ -185,6 +186,9 @@ pub(super) fn request_body(request: ModelRequest) -> Result<Value> {
             })
             .collect();
         body["parallel_tool_calls"] = json!(true);
+        if !request.allow_tool_calls {
+            body["tool_choice"] = json!("none");
+        }
     }
     Ok(body)
 }
@@ -624,7 +628,11 @@ impl EventParser for Parser {
             "response.incomplete" => return Err(protocol("Responses: incomplete response")),
             // The provider's error message is server content, so it is not quoted.
             "response.failed" | "error" => {
-                return Err(protocol("Responses: provider stream failed"));
+                let message = "Responses: provider stream failed";
+                return Err(match is_context_overflow(&event.response["error"]) {
+                    true => Provider::OpenAi.context_overflow(message),
+                    false => protocol(message),
+                });
             }
             "response.refusal.delta" | "response.refusal.done" => {
                 return Err(protocol("model refused the request"));

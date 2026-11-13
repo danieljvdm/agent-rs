@@ -235,10 +235,11 @@ async fn http_errors_report_the_servers_message_but_never_the_url_or_key() {
     )
     .await;
     let error = failure(&state);
+    // llama-server names this failure, so the engine can tell it from any other.
     assert_eq!(
         error,
-        "provider: llama-server: HTTP status 400: request (12015 tokens) exceeds the available \
-         context size (8192 tokens), try increasing it"
+        "context window exceeded: llama-server: HTTP status 400: request (12015 tokens) exceeds \
+         the available context size (8192 tokens), try increasing it"
     );
     assert!(!error.contains(&base) && !error.contains("local-test-key"));
     assert_eq!(server.join().unwrap().len(), 1);
@@ -251,6 +252,60 @@ async fn http_errors_report_the_servers_message_but_never_the_url_or_key() {
         assert_eq!(failure(&state), "provider: llama-server: HTTP status 502");
         assert_eq!(server.join().unwrap().len(), 1);
     }
+}
+
+/// Serves `body` once to a `GET` of `path`, and returns the request's first line.
+fn serve_get(path: &'static str, body: String) -> (String, std::thread::JoinHandle<String>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let thread = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut bytes = Vec::new();
+        while !bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+            let mut buffer = [0; 4096];
+            let n = socket.read(&mut buffer).unwrap();
+            assert!(n > 0);
+            bytes.extend_from_slice(&buffer[..n]);
+        }
+        let request = String::from_utf8_lossy(&bytes);
+        let line = request.lines().next().unwrap().to_owned();
+        let status = if line.starts_with(&format!("GET {path} ")) {
+            "200 OK"
+        } else {
+            "404 Not Found"
+        };
+        write!(socket, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+        line
+    });
+    (format!("http://{address}/v1"), thread)
+}
+
+#[tokio::test]
+async fn the_context_window_is_read_from_the_servers_model_list() {
+    let models = json!({"object":"list","data":[
+        {"id":"gemma-4-26B-A4B-it-Q4_K_M","aliases":[],"object":"model",
+            "meta":{"n_ctx":32768,"n_ctx_train":262144}},
+        {"id":"qwen","object":"model","status":{"value":"unloaded"}},
+    ]});
+    let (base, server) = serve_get("/v1/models", models.to_string());
+    let window = model(&base)
+        .context_window("gemma-4-26B-A4B-it-Q4_K_M")
+        .await;
+    assert_eq!(window.unwrap(), Some(32_768));
+    assert_eq!(server.join().unwrap(), "GET /v1/models HTTP/1.1");
+    // A model that is listed but not loaded has no context yet.
+    let (base, server) = serve_get("/v1/models", models.to_string());
+    assert_eq!(model(&base).context_window("qwen").await.unwrap(), None);
+    server.join().unwrap();
+    // A server that does not answer with a model list is an error, without its URL.
+    let (base, server) = serve_get("/v1/models", "not json".into());
+    let error = model(&base).context_window("qwen").await.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "provider: llama-server: malformed JSON response"
+    );
+    server.join().unwrap();
 }
 
 #[test]

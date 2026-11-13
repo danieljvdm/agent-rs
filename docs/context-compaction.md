@@ -1,6 +1,6 @@
 # Context windows and compaction
 
-An agent that names its model's context window keeps every conversation inside it. When the next model turn would not fit, the engine replaces the oldest part of the context with a summary the model writes, keeps the recent part as recorded, and carries on. Stored history is never rewritten. Without a context window nothing here applies, and an agent behaves as it did before.
+An agent that names its model's context window keeps every conversation inside it. When the next model turn would not fit, the engine replaces the oldest part of the context with a summary the model writes, keeps the recent part as recorded, and carries on. Stored history is never rewritten. Without a context window the engine never compacts, and an agent behaves as it did before; it still sends a compaction another agent recorded, and still reports a request the provider rejects for its size as `Error::ContextOverflow`.
 
 ```rust
 use std::sync::Arc;
@@ -22,7 +22,18 @@ let agent = Agent::builder("reader-v1", Arc::new(model))
 
 The design follows from how a local model spends time. llama-server reuses its cache for the longest token prefix a request shares with the previous one, and evaluates everything after the first difference again. A request that appends to the last one costs only the new tokens; a request that changes anything near the front costs the whole prompt. Dropping the oldest entry on every turn, which is all a byte limit can do, therefore makes every turn a cold prompt exactly when the context is largest.
 
-So the context is append-only between compactions, and every change to earlier content happens in one step that frees a large part of the window at once. `tests/context_window.rs` pins both properties on the bytes `LlamaModel` sends.
+So the context is append-only between compactions, and every change to earlier content happens in one step that frees a large part of the window at once.
+
+`tests/context_window.rs` holds this as a cost guard on the messages `LlamaModel` sends over one scripted conversation of 24 runs, each a question, a 1,200-byte tool result and an answer, with a 4,096-token window or the same size as a byte limit:
+
+| | Byte limit only | Context window |
+| --- | --- | --- |
+| Requests | 48 | 53, five of them summary requests |
+| Bytes sent | 598,867 | 412,165 |
+| Bytes after the prefix shared with the previous request | 244,387 | 68,507 |
+| Requests that changed what the previous one sent | 15 | 5, each the first after a compaction |
+
+The scripted model does no inference, so these are bytes, not seconds. The bytes after the shared prefix are what a prefix cache evaluates again.
 
 Other harnesses were read for this design: pi, Yielded Agent, opencode and Codex. All four keep an append-only log and derive the context from it, anchor their token estimate on the provider's last reported usage, check before every model call, and compact and retry once when the provider rejects a request as too large. opencode and Codex ask for the summary by appending one instruction to the conversation as it stands, which reuses the provider's cached prefix; pi and Yielded Agent send a fresh transcript, which a local model must evaluate from the start. This engine does the former.
 
@@ -30,15 +41,11 @@ Other harnesses were read for this design: pi, Yielded Agent, opencode and Codex
 
 `HistoryEntry::Compaction { summary, kept }` records one compaction. It is appended to the run's history like any other entry, and it says that the `kept` entries immediately before it are still sent as recorded while everything older is covered by `summary`.
 
-With a compaction in the run's prior context or its own history, a turn sends, in order:
-
-1. the latest compaction's summary, as a user message that says it is a record and not an instruction;
-2. the run's input and its steering instructions, wherever they fall, since those are always pinned;
-3. the entries the compaction kept, and every entry after it.
+With a compaction in the run's prior context or its own history, a turn sends the latest compaction's summary first, as a user message that says it is a record and not a request. After it come, in their recorded order, the entries the compaction kept, every entry after it, and whatever the run always sends: its input, its steering instructions and what its `ContextPolicy` pins, even where the compaction covered them.
 
 Earlier compactions are never sent: each summary carries forward what the one before it held. `max_context_bytes` still bounds the whole, as [`ContextPolicy`](../src/context.rs) describes, and should be several times the window in bytes so that it never moves the start of the context on its own.
 
-A later run of the conversation is accepted with the same view. Acceptance reads history newest first, and stops after the latest compaction and the entries it kept, so a compaction carries across runs and restarts. `ContextPolicy::prior_result` still replaces the earlier runs' tool results among them.
+A later run of the conversation is accepted with the same view. Acceptance reads history newest first, and stops after the latest compaction and the entries it kept, so a compaction carries across runs and restarts, whether or not the accepting agent has a context window. `ContextPolicy::prior_result` still replaces the earlier runs' tool results among them. A run's input and instructions are pinned for that run only: if a compaction in the middle of a long run covered its input, the next run sends the summary without it, and that run's first prompt is cold.
 
 ## When the engine compacts
 
@@ -52,12 +59,14 @@ It compacts when that estimate reaches `tokens - reserve_tokens`, there is somet
 | `ContextWindow` field | Default | Meaning |
 | --- | --- | --- |
 | `tokens` | required | The model's context window. |
-| `reserve_tokens` | 15% of the window, 4,096 to 16,384 | Room kept for the answer and for estimate error. |
+| `reserve_tokens` | 15% of the window, 4,096 to 16,384 | Room kept for the answer and for estimate error. At least twice `summary_tokens`. |
 | `keep_recent_tokens` | 30% of the window, at most 20,000 | The newest entries kept as recorded. |
-| `summary_tokens` | 10% of the window, at most 4,096 | The size the summary is asked to stay within. |
+| `summary_tokens` | 5% of the window, at most 4,096 | The size the summary is asked to stay within. An answer over twice this is not used. |
 | `summary_instructions` | built in | Replaces the summary instruction. |
 
-A 32,768-token window compacts at about 27,850 tokens, keeps about 9,830, and asks for a summary of about 3,270, so the context after a compaction is under half the window and the conversation then appends for the other half. The defaults scale down: fixed thresholds of 16,000 and 20,000 tokens, common elsewhere, leave nothing to cut below a 36,000-token window.
+A 32,768-token window compacts at 27,853 tokens, keeps 9,830, and asks for a summary of 1,638, so the context after a compaction is about a third of the window and the conversation then appends for the rest. The defaults scale down to a 1,024-token window: fixed thresholds of 16,000 and 20,000 tokens, common elsewhere, leave nothing to cut below a 36,000-token window. `AgentBuilder::build` rejects thresholds that do not fit their window.
+
+Reasoning that a model reports apart from its answer is generated inside the reserve too. Raise `reserve_tokens` for a model that thinks at length, or its summaries and answers will run out of room.
 
 The newest entry and the run's latest exchange are always kept, whatever their size, because the model cannot continue without the results it just asked for. Set `Limits::max_tool_output_bytes` well below the window in bytes; a larger output is recorded as a tool error the model can react to.
 
@@ -65,7 +74,7 @@ The newest entry and the run's latest exchange are always kept, whatever their s
 
 A compaction is one model call, made under the same protocol as any other: its intent is committed first, it is charged to the run's model calls, tokens and active time, and a crash before its result is committed makes it again.
 
-The request is the turn's context as it stands, with the same instructions and tools, followed by one user message asking for the summary. `ModelRequest::allow_tool_calls` is false, which the OpenAI-protocol adapters send as `tool_choice: "none"`: the tools stay in the prompt, so the prefix is unchanged, and the model cannot call them. The answer is plain text. Its deltas are not forwarded as progress; `ProgressKind::CompactionStarted` and `ProgressKind::Compacted` are.
+The request is the turn's context as it stands, with the same instructions and tools, followed by one user message asking for the summary. `ModelRequest::allow_tool_calls` is false, which the OpenAI-protocol adapters send as `tool_choice: "none"`: the tools stay in the prompt, so the prefix is unchanged, and the model cannot call them. The answer is plain text. Its deltas are not forwarded as progress; `ProgressKind::CompactionStarted` and `ProgressKind::Compacted` are. If the context is larger than the window less twice the summary budget, its oldest entries are left out of the request, and so out of the summary.
 
 The built-in instruction asks for five sections (goal, requirements, progress, open items, key details), tells the model to carry forward an earlier summary where newer messages do not contradict it, and gives a word budget. An application whose conversations have a different shape replaces it with `ContextWindow::with_summary_instructions`.
 
@@ -75,7 +84,7 @@ A summary call that fails does not fail the run. If the model calls a tool, answ
 
 Estimates can be wrong, and a server can be restarted with a smaller window. `Error::ContextOverflow` is what an adapter returns when the provider rejects a request for its size: `LlamaModel` for llama-server's `exceed_context_size_error`, the OpenAI adapters for `context_length_exceeded`.
 
-With a context window configured, the engine answers the first such error on a turn by compacting with half the usual recent part, and makes the turn again. The summary call's own context is cut, oldest first, to what the window can hold. A second overflow on the same turn fails the run, as does any overflow without a context window.
+With a context window configured, the engine answers the first such error on a turn by compacting with half the usual recent part, and makes the turn again. The estimate that allowed the turn was too low, so the summary call's own context is cut, oldest first, to half of what the window would hold. A second overflow on the same turn fails the run, as does any overflow without a context window or with nothing left to cover.
 
 Every request's output allowance, `ModelRequest::remaining_tokens`, is also capped at the room the estimate leaves in the window, so a provider is not asked for more output than could fit.
 
