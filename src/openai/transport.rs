@@ -49,6 +49,11 @@ impl Provider {
     pub fn error(self, message: &str) -> Error {
         Error::provider(format!("{}: {message}", self.label()))
     }
+    /// The provider's rejection of a request as larger than the model's context window,
+    /// prefixed with the provider's label.
+    pub fn context_overflow(self, message: &str) -> Error {
+        Error::context_overflow(format!("{}: {message}", self.label()))
+    }
     /// A protocol failure caused by `error`, which is kept as the source and shown in the
     /// message. Pass only causes whose text cannot quote server content or the request URL.
     pub fn error_caused_by(
@@ -171,6 +176,40 @@ impl Transport {
         json!({"provider":self.provider.binding_name(), "api":api, "version":1, "endpoint":self.endpoint.as_str()})
     }
 
+    /// The JSON document at `path` beside the endpoint, under the same API root: `models` for
+    /// an endpoint of `.../v1/chat/completions` is `.../v1/models`. At most `max_bytes` of body
+    /// are read. Errors keep the transport's privacy contract and quote nothing the server sent.
+    pub async fn get(&self, endpoint_path: &str, path: &str, max_bytes: usize) -> Result<Value> {
+        let provider = self.provider;
+        let root = (self.endpoint.as_str().strip_suffix(endpoint_path))
+            .ok_or_else(|| provider.error("endpoint has no API root"))?;
+        let url = Url::parse(&format!("{root}{path}"))
+            .map_err(|error| provider.error_caused_by("invalid request path", error))?;
+        let mut request = self.client.get(url).header("Accept", "application/json");
+        if let Some(authorization) = &self.authorization {
+            request = request.header(AUTHORIZATION, authorization.clone());
+        }
+        let mut response = request.send().await.map_err(|error| {
+            provider.error_caused_by("HTTP request failed", error.without_url())
+        })?;
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            return Err(provider.error(&format!("HTTP status {status}")));
+        }
+        let mut body = Vec::new();
+        loop {
+            let chunk = response.chunk().await.map_err(|error| {
+                provider.error_caused_by("HTTP response failed", error.without_url())
+            })?;
+            let Some(chunk) = chunk else { break };
+            if body.len() + chunk.len() > max_bytes {
+                return Err(provider.error("response exceeds byte limit"));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice(&body).map_err(|_| provider.error("malformed JSON response"))
+    }
+
     /// Posts `body` and streams the events `parser` reads from the SSE response.
     pub async fn stream<P: EventParser + Send + 'static>(
         &self,
@@ -196,18 +235,24 @@ impl Transport {
         };
         if !response.status().is_success() {
             let status = response.status().as_u16();
+            let error = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(Error::Interrupted),
+                error = error_body(response) => error,
+            };
             let message = match provider {
                 Provider::OpenAi => None,
-                Provider::Llama => tokio::select! {
-                    biased;
-                    _ = cancel.cancelled() => return Err(Error::Interrupted),
-                    message = error_message(response) => message,
-                },
+                Provider::Llama => error.get("message").and_then(server_message),
             };
-            return Err(provider.error(&match message {
+            let message = match message {
                 Some(message) => format!("HTTP status {status}: {message}"),
                 None => format!("HTTP status {status}"),
-            }));
+            };
+            // 413 is a request too large in bytes, which a smaller context also answers.
+            return Err(match status == 413 || is_context_overflow(&error) {
+                true => provider.context_overflow(&message),
+                false => provider.error(&message),
+            });
         }
         if !response
             .headers()
@@ -229,9 +274,10 @@ impl Transport {
     }
 }
 
-/// The `error.message` of a failed response's JSON body, read up to a bound, or `None` when the
-/// body has none.
-async fn error_message(mut response: Response) -> Option<String> {
+/// The `error` of a failed response's JSON body, read up to a bound, or null when the body has
+/// none. It is read for every provider, to tell what kind of failure it is; only
+/// [`server_message`] decides what an error may quote from it.
+async fn error_body(mut response: Response) -> Value {
     let mut body = Vec::new();
     while body.len() < ERROR_BODY_BYTES {
         match response.chunk().await {
@@ -239,8 +285,35 @@ async fn error_message(mut response: Response) -> Option<String> {
             _ => break,
         }
     }
-    let body: Value = serde_json::from_slice(&body).ok()?;
-    server_message(body.pointer("/error/message")?)
+    let body: Option<Value> = serde_json::from_slice(&body).ok();
+    body.map_or(Value::Null, |mut body| body["error"].take())
+}
+
+/// Whether a provider's `error` says the request does not fit the model's context window.
+///
+/// llama-server and OpenAI mark it, with an `exceed_context_size_error` type and a
+/// `context_length_exceeded` code. Other providers reached through an OpenAI-compatible
+/// endpoint say it only in the message, so the wording the larger ones use is recognised too.
+/// The message is read here and never quoted. Taking another error for this one costs a
+/// compaction; missing this one fails the run.
+pub(super) fn is_context_overflow(error: &Value) -> bool {
+    const WORDING: [&str; 8] = [
+        "context length",
+        "context window",
+        "context size",
+        "prompt is too long",
+        "prompt too long",
+        "input token count",
+        "maximum prompt length",
+        "reduce the length of the messages",
+    ];
+    if error["type"] == "exceed_context_size_error" || error["code"] == "context_length_exceeded" {
+        return true;
+    }
+    (error["message"].as_str()).is_some_and(|message| {
+        let message = message.to_ascii_lowercase();
+        WORDING.iter().any(|wording| message.contains(wording))
+    })
 }
 
 /// A server's error message as an error may quote it: non-empty, without control characters, and

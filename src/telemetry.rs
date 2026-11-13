@@ -18,6 +18,7 @@ pub(crate) fn error_type(error: &Error) -> &'static str {
         Error::Tool(_) => "tool",
         Error::Authorization(_) => "authorization",
         Error::Context(_) => "context",
+        Error::ContextOverflow(_) => "context_overflow",
         Error::Storage(_) => "storage",
         Error::IdempotencyConflict => "idempotency_conflict",
         Error::ConversationBusy => "conversation_busy",
