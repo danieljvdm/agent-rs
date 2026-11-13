@@ -336,7 +336,12 @@ async fn a_long_run_is_compacted_and_keeps_its_input_and_recent_entries() {
     assert!(matches!(summary_request.history.last(),
         Some(HistoryEntry::Steering { instruction, .. }) if instruction.contains("checkpoint summary")));
     assert_eq!(summary_request.tools.len(), 1);
-    assert_eq!(*summary_request.output_schema, json!({"type": "string"}));
+    // The agent answers in text, so its own schema is kept and the request differs from the
+    // turn before it only at its end.
+    assert_eq!(
+        summary_request.output_schema,
+        requests[asked - 1].output_schema
+    );
     assert!(
         requests
             .iter()
@@ -446,7 +451,7 @@ async fn a_summary_the_model_cannot_write_is_built_from_the_conversation() {
         || Ok(read(99)),
         || Ok(ModelResponse::final_output(json!("  "))),
         || Ok(ModelResponse::final_output(json!("s".repeat(4_000)))),
-        || Err(Error::provider("the model failed")),
+        || Err(Error::context_overflow("the summary request is too large")),
     ];
     for unusable in unusable {
         let model = Script::new(move |request, n| match request.history.last() {
@@ -701,7 +706,7 @@ fn a_context_window_is_checked_and_bound() {
             large.keep_recent_tokens,
             large.summary_tokens
         ),
-        (16_384, 20_000, 4_096)
+        (32_768, 20_000, 4_096)
     );
 }
 
@@ -919,7 +924,7 @@ async fn results_that_one_turn_cannot_hold_are_refused_in_call_order() {
         refusal.contains("output of 6002 bytes was not kept"),
         "{refusal}"
     );
-    assert!(refusal.contains("Ask for less at a time"), "{refusal}");
+    assert!(refusal.contains("make fewer calls at a time"), "{refusal}");
     // What was kept fits the window below its reserve, at the engine's three bytes a token.
     let recorded: usize = (bounded.iter())
         .map(|result| serde_json::to_vec(&result.value).unwrap().len())
@@ -929,4 +934,43 @@ async fn results_that_one_turn_cannot_hold_are_refused_in_call_order() {
     // Without a context window nothing is known about room, and every result is recorded.
     let unbounded = results(None).await;
     assert!(unbounded.iter().all(|result| !result.is_error));
+}
+
+#[tokio::test]
+async fn a_provider_failure_during_a_summary_fails_the_turn_and_is_asked_again() {
+    // An outage or a rate limit says nothing about whether the model can summarize, so it is not
+    // answered with the engine's lossy record: the run fails as on any model call, and the next
+    // run of the conversation asks for the summary again.
+    let fail = Arc::new(Mutex::new(true));
+    let failing = fail.clone();
+    let model = Script::new(move |request, n| match request.history.last() {
+        _ if asks_for_summary(request) && *failing.lock().unwrap() => {
+            Err(Error::provider("rate limited"))
+        }
+        _ if asks_for_summary(request) => Ok(ModelResponse::final_output(json!(SUMMARY))),
+        Some(HistoryEntry::Exchange { .. }) => Ok(answer()),
+        _ => Ok(read(n)),
+    });
+    let agent = builder(model.clone())
+        .context_window(window())
+        .build()
+        .unwrap();
+    let prior = earlier_runs(8);
+    let mut state = agent.new_run("c", json!("And now?"), &prior, None).unwrap();
+    drive(&agent, &mut state).await;
+    assert!(
+        matches!(&state.phase, Phase::Settled(Settlement::Failed(reason)) if reason.contains("rate limited")),
+        "{:?}",
+        state.phase
+    );
+    assert_eq!(compactions(&state.history), 0, "no lossy record was made");
+
+    *fail.lock().unwrap() = false;
+    let mut state = agent.new_run("c", json!("And now?"), &prior, None).unwrap();
+    drive(&agent, &mut state).await;
+    assert!(matches!(
+        state.phase,
+        Phase::Settled(Settlement::Completed(_))
+    ));
+    assert_eq!(summary_of(&state.history[1]), SUMMARY);
 }

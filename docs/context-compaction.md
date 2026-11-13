@@ -62,8 +62,8 @@ The quarter is there because a compaction is not free: it is a model call, and t
 
 | `ContextWindow` field | Default | Meaning |
 | --- | --- | --- |
-| `tokens` | required | The model's context window. |
-| `reserve_tokens` | 15% of the window, 4,096 to 16,384 | Room kept for the answer and for estimate error. At least twice `summary_tokens`. |
+| `tokens` | required | The model's context window, or less to compact sooner. |
+| `reserve_tokens` | 15% of the window, 4,096 to 32,768 | Room kept for the answer, reasoning and estimate error. At least twice `summary_tokens`. |
 | `keep_recent_tokens` | 15% of the window, at most 20,000 | The newest entries kept as recorded. |
 | `summary_tokens` | 5% of the window, at most 4,096 | The size the summary is asked to stay within. An answer over twice this is not used. |
 | `summary_instructions` | built in | Replaces the summary instruction. |
@@ -80,7 +80,7 @@ The newest entry and the run's latest exchange are always kept, whatever their s
 
 An exchange is sent whole or not at all, so the results of one turn must fit the window on their own. No compaction can make room for them: they are the part it keeps.
 
-With a context window, the engine therefore bounds what one exchange records. The bound is what the window holds below its reserve, less a summary of everything earlier, the instructions and tools, the calls themselves and the entries the run always sends. Results are recorded in the order the model made the calls while they fit. One that does not fit is recorded as a tool error that gives its size, the bound and what was left, and tells the model to ask for less at a time. A model that asks for five pages at once gets the first few and asks again for the rest; by then the earlier pages can be compacted.
+With a context window, the engine therefore bounds what one exchange records. The bound is what the window holds below its reserve, less a summary of everything earlier, the instructions and tools, the calls themselves and the entries the run always sends. Results are recorded in the order the model made the calls while they fit. One that does not fit is recorded as a tool error that gives its size, the bound and what was left, and tells the model to ask for less output or make fewer calls at a time. A model that asks for five pages at once gets the first few and asks again for the rest; by then the earlier pages can be compacted.
 
 The tool has still run. Give a tool whose output can be large a way to return less, such as a page size, and say so in its description. `Limits::max_tool_output_bytes` remains the limit on a single output, with or without a window.
 
@@ -90,15 +90,17 @@ The bound is in bytes at the estimated density, so it is as wrong as that estima
 
 A compaction is one model call, made under the same protocol as any other: its intent is committed first, it is charged to the run's model calls, tokens and active time, and a crash before its result is committed makes it again.
 
-The request is the part of the turn's context the compaction will cover, with the same instructions and tools, followed by one user message asking for the summary. The recent entries the compaction keeps are not in it: they are sent as recorded afterwards, and leaving them out is what lets a compaction work when the kept entries alone fill most of the window. What is sent is the start of the turn's own context, so a provider's prefix cache still serves it. `ModelRequest::allow_tool_calls` is false, which the OpenAI-protocol adapters send as `tool_choice: "none"`: the tools stay in the prompt, so the prefix is unchanged, and the model cannot call them. The answer is plain text. Its deltas are not forwarded as progress; `ProgressKind::CompactionStarted` and `ProgressKind::Compacted` are. If what the compaction covers is larger than the window less twice the summary budget, its oldest entries are left out of the request, and so out of the summary.
+The request is the part of the turn's context the compaction will cover, with the same instructions and tools, followed by one user message asking for the summary. The recent entries the compaction keeps are not in it: they are sent as recorded afterwards, and leaving them out is what lets a compaction work when the kept entries alone fill most of the window. What is sent is the start of the turn's own context, so a provider's prefix cache still serves it. `ModelRequest::allow_tool_calls` is false, which the OpenAI-protocol adapters send as `tool_choice: "none"`: the tools stay in the prompt, so the prefix is unchanged, and the model cannot call them. The answer is plain text; an agent whose output is already text keeps its own output schema, so nothing before the instruction changes. Its deltas are not forwarded as progress; `ProgressKind::CompactionStarted` and `ProgressKind::Compacted` are. If what the compaction covers is larger than the window less twice the summary budget, its oldest entries are left out of the request, and so out of the summary.
 
 The built-in instruction asks for five sections (goal, requirements, progress, open items, key details), tells the model to carry forward an earlier summary where newer messages do not contradict it, and gives a word budget. An application whose conversations have a different shape replaces it with `ContextWindow::with_summary_instructions`.
 
-A summary call that fails does not fail the run. If the model calls a tool, answers with nothing, exceeds twice the summary budget, errors or times out, the engine records a compaction whose summary it builds itself: the earlier summary, if any, and the covered inputs and final answers, newest first, each clipped, within the summary budget. `ProgressKind::Compacted` reports which kind was recorded. A conversation can therefore always continue, at the cost of detail.
+When the model cannot write a usable summary, the engine writes one. If the model calls a tool, answers with nothing or exceeds twice the summary budget, or the provider rejects the summary request as too large, the engine records a compaction whose summary it builds itself: the earlier summary, if any, and the covered inputs and final answers, newest first, each clipped, within the summary budget. `ProgressKind::Compacted` reports which kind was recorded. A conversation can therefore always continue, at the cost of detail.
+
+Any other failure of the summary call, such as an outage, a rate limit or a timeout, fails the turn as it would any model call. It says nothing about whether the model can summarize, and a lossy record made then would stay in the conversation for good. The next run asks for the summary again.
 
 ## When the provider says the request is too large
 
-Estimates can be wrong, and a server can be restarted with a smaller window. `Error::ContextOverflow` is what an adapter returns when the provider rejects a request for its size: `LlamaModel` for llama-server's `exceed_context_size_error`, the OpenAI adapters for `context_length_exceeded`.
+Estimates can be wrong, and a server can be restarted with a smaller window. `Error::ContextOverflow` is what an adapter returns when the provider rejects a request for its size. The OpenAI-protocol adapters recognise llama-server's `exceed_context_size_error`, OpenAI's `context_length_exceeded`, HTTP 413, and the messages that other providers behind OpenAI-compatible endpoints use, such as "prompt is too long" and "maximum context length". They read the message only to classify it; it is quoted only where the adapter already quotes server messages. An adapter for another provider should map that provider's rejection the same way: an overflow it misses fails the run, and another error taken for one costs one compaction.
 
 With a context window configured, the engine answers the first such error on a turn by compacting with half the usual recent part, and makes the turn again. The estimate that allowed the turn was too low, so the summary request may send only half of what the window would otherwise hold. A second overflow on the same turn fails the run, as does any overflow without a context window or with nothing left to cover.
 
@@ -109,6 +111,14 @@ Every request's output allowance, `ModelRequest::remaining_tokens`, is also capp
 The window is part of the agent's binding, like its limits: a stored run resumes under the window it was accepted with. The application supplies it.
 
 For llama-server, `LlamaModel::context_window(model)` asks the server what one request may use (`/v1/models`, `meta.n_ctx`), and returns `None` while the model is not loaded. An application that starts the server itself should set the size explicitly and pass the same number here.
+
+## Hosted models
+
+Nothing in the engine assumes a local model. What changes with a hosted one is what each decision costs.
+
+- **Usage must count the whole prompt.** The estimate starts from `TokenUsage::input` of the latest exchange. A provider that reports cached tokens apart from the rest, as some do, needs its adapter to add them back, or the estimate is low by what the cache served and the engine compacts late.
+- **Keep the prefix stable.** A compaction is the only change to earlier content, so every other turn is served from the provider's prompt cache. OpenAI documents `tool_choice: "none"` as the way to stop tool calls without removing the tools, which keeps that cache. A provider whose cache is keyed on the tool choice should not be sent a different one: its adapter should leave the request as it is and rely on the engine discarding a summary that calls a tool.
+- **A smaller `tokens` than the model's window is often right.** A frontier model's window can be a million tokens. A conversation that fills it costs that many input tokens on every turn, cached or not, and models answer less well from a full window. Set `tokens` to the context the conversation is worth.
 
 ## Running local models on a Mac
 

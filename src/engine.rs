@@ -1188,7 +1188,11 @@ impl Definition {
                             id: crate::SteeringId::nil(),
                             instruction,
                         });
-                        output_schema = Arc::new(json!({"type": "string"}));
+                        // A summary is text. An agent that already answers in text keeps its own
+                        // schema, so the request differs from a turn's only at its end.
+                        if !crate::model::takes_any_text(&output_schema) {
+                            output_schema = Arc::new(json!({"type": "string"}));
+                        }
                     }
                     if let Some(window) = window {
                         // A summary request's context may have been cut, so it is measured as
@@ -1450,6 +1454,11 @@ impl Definition {
     /// when its answer is usable, and otherwise one built from the entries it covers, so that a
     /// model that cannot summarize never leaves a conversation unable to continue. Returns
     /// whether the model's summary was used.
+    ///
+    /// A provider that failed has not shown that the model cannot summarize. Its error fails the
+    /// turn as any model call's would, and the next run asks for the summary again: a lossy
+    /// record is not worth making over an outage or a rate limit. Only its rejection of the
+    /// summary request as too large is answered here, because asking again would not help.
     fn record_compaction(
         &self,
         state: &mut RunState,
@@ -1461,7 +1470,11 @@ impl Definition {
         let floor = (self.cut(state, forced))
             .ok_or_else(|| Error::context("nothing is left to compact"))?;
         let (prior, history) = (&state.prior_context, &state.history);
-        let answer = response.ok().filter(|response| response.tools.is_empty());
+        let answer = match response {
+            Ok(response) => Some(response).filter(|response| response.tools.is_empty()),
+            Err(Error::ContextOverflow(_)) => None,
+            Err(error) => return Err(provider_error(error)),
+        };
         let summary = answer.and_then(|response| {
             compaction::usable_summary(response.output.as_ref(), window.summary_max_bytes())
         });
@@ -1923,7 +1936,7 @@ async fn finish_tool_batch(
                 value: Value::String(format!(
                     "the call finished, but its output of {bytes} bytes was not kept: the tool \
                      outputs of one turn may total {budget} bytes in this context window, and \
-                     {left} bytes were left. Ask for less at a time."
+                     {left} bytes were left. Ask for less output, or make fewer calls at a time."
                 )),
                 is_error: true,
             }

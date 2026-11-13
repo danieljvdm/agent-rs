@@ -163,9 +163,12 @@ impl Usage {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TokenUsage {
-    /// Prompt tokens.
+    /// Prompt tokens: everything the model read for the request, including what the provider
+    /// served from a prompt cache. A [`ContextWindow`](crate::ContextWindow) sizes the next
+    /// prompt from this, so an adapter for a provider that reports cached tokens apart must add
+    /// them.
     pub input: u64,
-    /// Generated tokens.
+    /// Generated tokens, including reasoning the provider counts as output.
     pub output: u64,
 }
 impl TokenUsage {

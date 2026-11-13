@@ -248,7 +248,8 @@ impl Transport {
                 Some(message) => format!("HTTP status {status}: {message}"),
                 None => format!("HTTP status {status}"),
             };
-            return Err(match is_context_overflow(&error) {
+            // 413 is a request too large in bytes, which a smaller context also answers.
+            return Err(match status == 413 || is_context_overflow(&error) {
                 true => provider.context_overflow(&message),
                 false => provider.error(&message),
             });
@@ -288,10 +289,31 @@ async fn error_body(mut response: Response) -> Value {
     body.map_or(Value::Null, |mut body| body["error"].take())
 }
 
-/// Whether a provider's `error` says the request does not fit the model's context window:
-/// llama-server's `exceed_context_size_error` type, or OpenAI's `context_length_exceeded` code.
+/// Whether a provider's `error` says the request does not fit the model's context window.
+///
+/// llama-server and OpenAI mark it, with an `exceed_context_size_error` type and a
+/// `context_length_exceeded` code. Other providers reached through an OpenAI-compatible
+/// endpoint say it only in the message, so the wording the larger ones use is recognised too.
+/// The message is read here and never quoted. Taking another error for this one costs a
+/// compaction; missing this one fails the run.
 pub(super) fn is_context_overflow(error: &Value) -> bool {
-    error["type"] == "exceed_context_size_error" || error["code"] == "context_length_exceeded"
+    const WORDING: [&str; 8] = [
+        "context length",
+        "context window",
+        "context size",
+        "prompt is too long",
+        "prompt too long",
+        "input token count",
+        "maximum prompt length",
+        "reduce the length of the messages",
+    ];
+    if error["type"] == "exceed_context_size_error" || error["code"] == "context_length_exceeded" {
+        return true;
+    }
+    (error["message"].as_str()).is_some_and(|message| {
+        let message = message.to_ascii_lowercase();
+        WORDING.iter().any(|wording| message.contains(wording))
+    })
 }
 
 /// A server's error message as an error may quote it: non-empty, without control characters, and

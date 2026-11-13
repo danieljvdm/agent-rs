@@ -44,12 +44,15 @@ const FALLBACK_MESSAGE_BYTES: usize = 400;
 #[non_exhaustive]
 pub struct ContextWindow {
     /// Tokens one request to the model may hold, prompt and answer together. At least 1,024.
+    /// It may be less than the model's own window, to compact sooner: a long prompt costs money
+    /// on a hosted model and time on a local one, and models attend less well to a full window.
     pub tokens: u64,
     /// Room kept free for the model's answer and for error in the estimate: the engine compacts
     /// once a prompt is estimated to leave less than this. At least twice
     /// [`summary_tokens`](Self::summary_tokens), so a summary always has room to be written.
-    /// Reasoning a model reports apart from its answer counts against it too. Defaults to 15%
-    /// of the window, at least 4,096 (or a quarter of a smaller window) and at most 16,384.
+    /// Reasoning counts against it too, so a model that thinks at length needs more. Defaults
+    /// to 15% of the window, at least 4,096 (or a quarter of a smaller window) and at most
+    /// 32,768.
     pub reserve_tokens: u64,
     /// How much of the newest context a compaction keeps as recorded. The newest entry and the
     /// run's latest exchange are kept whatever their size. Defaults to 15% of the window, at
@@ -69,7 +72,7 @@ impl ContextWindow {
         let percent = |share: u64| tokens / 100 * share + tokens % 100 * share / 100;
         Self {
             tokens,
-            reserve_tokens: percent(15).clamp((tokens / 4).min(4_096), 16_384),
+            reserve_tokens: percent(15).clamp((tokens / 4).min(4_096), 32_768),
             keep_recent_tokens: percent(15).min(20_000),
             summary_tokens: (tokens / 20).min(4_096),
             summary_instructions: None,

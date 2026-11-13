@@ -174,17 +174,8 @@ impl Model for LlamaModel {
 pub(super) fn answer(schema: &Value) -> Answer {
     let text = match schema {
         Value::Bool(true) => true,
-        Value::Object(fields) => {
-            fields.is_empty()
-                || (fields.get("type") == Some(&json!("string"))
-                    && fields.keys().all(|key| {
-                        matches!(
-                            key.as_str(),
-                            "type" | "$schema" | "title" | "description" | "$comment"
-                        )
-                    }))
-        }
-        _ => false,
+        Value::Object(fields) if fields.is_empty() => true,
+        schema => crate::model::takes_any_text(schema),
     };
     if text { Answer::Text } else { Answer::Envelope }
 }

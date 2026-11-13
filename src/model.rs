@@ -83,9 +83,12 @@ pub struct ModelRequest {
     /// output accordingly.
     pub remaining_tokens: u64,
     /// Whether the model may call tools on this turn. `false` only for a compaction's summary
-    /// request, whose answer must be text: `tools` still lists the agent's tools, so the prompt
-    /// begins as the earlier turns' did, and a provider that can forbid calls without removing
-    /// them should. A response with tool calls is not used as a summary either way.
+    /// request, whose answer must be text. `tools` still lists the agent's tools, so the request
+    /// begins as the earlier turns' did and a provider's prompt cache serves it. An adapter
+    /// should forbid calls only in a way that keeps that cache: OpenAI and llama-server take
+    /// `tool_choice: "none"` without discarding it, while a provider whose cache is keyed on the
+    /// tool choice is better sent the request unchanged. A response with tool calls is not used
+    /// as a summary either way.
     pub allow_tool_calls: bool,
 }
 impl ModelRequest {
@@ -212,4 +215,18 @@ impl Model for ScriptedModel {
             .clone();
         Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
     }
+}
+
+/// Whether an output `schema` takes any string and nothing else: a `string` type with no
+/// constraint beside annotations. A model answers such a schema in plain text.
+pub(crate) fn takes_any_text(schema: &Value) -> bool {
+    schema.as_object().is_some_and(|fields| {
+        fields.get("type").and_then(Value::as_str) == Some("string")
+            && fields.keys().all(|key| {
+                matches!(
+                    key.as_str(),
+                    "type" | "$schema" | "title" | "description" | "$comment"
+                )
+            })
+    })
 }

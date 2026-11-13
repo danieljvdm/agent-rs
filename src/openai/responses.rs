@@ -279,6 +279,11 @@ struct Event<'a> {
     part: Value,
     #[serde(default)]
     response: Value,
+    /// An `error` event's own code and message; a failed response carries them in `response`.
+    #[serde(default)]
+    code: Value,
+    #[serde(default)]
+    message: Value,
 }
 
 pub(super) struct Parser {
@@ -629,7 +634,11 @@ impl EventParser for Parser {
             // The provider's error message is server content, so it is not quoted.
             "response.failed" | "error" => {
                 let message = "Responses: provider stream failed";
-                return Err(match is_context_overflow(&event.response["error"]) {
+                let error = match event.response.get("error") {
+                    Some(error) => error.clone(),
+                    None => json!({"code": event.code, "message": event.message}),
+                };
+                return Err(match is_context_overflow(&error) {
                     true => Provider::OpenAi.context_overflow(message),
                     false => protocol(message),
                 });
@@ -880,6 +889,28 @@ mod tests {
                 assert_eq!(error.to_string(), expected);
                 assert!(std::error::Error::source(error).is_none());
             }
+        }
+        // A request too large for the context window, whether the stream says so in an `error`
+        // event or in the failed response, is reported as that, still without quoting it.
+        let overflow = json!({"code":"context_length_exceeded","message":leak});
+        let mut error_event = vec![good[0].clone(), overflow.clone()];
+        error_event[1]["type"] = json!("error");
+        let mut failed_response = good.clone();
+        let last = failed_response.last_mut().unwrap();
+        last["type"] = json!("response.failed");
+        last["response"]["status"] = json!("failed");
+        last["response"]["error"] = overflow;
+        for frames in [error_event, failed_response] {
+            let events = decode(&Api::Responses.encode(&frames));
+            let error = (events.iter())
+                .find_map(|event| event.as_ref().err())
+                .expect("rejected");
+            assert!(matches!(error, Error::ContextOverflow(_)), "{error:?}");
+            assert_eq!(
+                error.to_string(),
+                "context window exceeded: OpenAI: Responses: provider stream failed"
+            );
+            assert!(!everything_said(error).contains(leak));
         }
         // Malformed JSON, or an event field of the wrong type.
         for data in [
