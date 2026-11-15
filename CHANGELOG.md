@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0 (2026-11-15)
+
+### Breaking Changes
+
+#### Describe tool results with an output schema
+
+Read a tool's result schema from `Tool::output_schema`: `typed_tool` derives it from the output type, which must now implement `JsonSchema`, and an MCP tool's wraps the server's declared output schema. Code mode declares each function's return type from it instead of `unknown`; `codemode::description` now takes the tools and `codemode::declaration` takes the output schema beside the spec.
+
+### Features
+
+#### Keep conversations inside the model's context window
+
+Name the model's context window with `AgentBuilder::context_window(ContextWindow::new(tokens))`. Before a turn that would not fit, the engine replaces the oldest part of the context with a summary the model writes, recorded as `HistoryEntry::Compaction`, and it tells each tool call how much room its result has (`ToolContext::max_output_bytes`), refusing a result that does not fit with an error the model can act on. Adapters report a request the provider rejects for its size as `Error::ContextOverflow`, including from other providers behind OpenAI-compatible endpoints, and the engine answers it once per turn by compacting and making the turn again. `ModelRequest::allow_tool_calls`, `ProgressKind::CompactionStarted`, `ProgressKind::Compacted` and `LlamaModel::context_window` are new. See `docs/context-compaction.md`.
+
 ## 0.1.3 (2026-11-12)
 
 ### Features
