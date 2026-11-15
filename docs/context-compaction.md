@@ -82,7 +82,9 @@ An exchange is sent whole or not at all, so the results of one turn must fit the
 
 With a context window, the engine therefore bounds what one exchange records. The bound is what the window holds below its reserve, less a summary of everything earlier, the instructions and tools, the calls themselves and the entries the run always sends. Results are recorded in the order the model made the calls while they fit. One that does not fit is recorded as a tool error that gives its size, the bound and what was left, and tells the model to ask for less output or make fewer calls at a time. A model that asks for five pages at once gets the first few and asks again for the rest; by then the earlier pages can be compacted.
 
-The tool has still run. Give a tool whose output can be large a way to return less, such as a page size, and say so in its description. `Limits::max_tool_output_bytes` remains the limit on a single output, with or without a window.
+A tool can avoid the refusal by fitting the room it is given. `ToolContext::max_output_bytes` is the most its output may encode to and still be kept: `Limits::max_tool_output_bytes`, and with a window no more than the call's share of what the turn's results have left, split evenly over the calls still to start once the finished ones and the shares of running ones are taken out. A tool that pages its results can return a smaller page that fits, and a model that asked for five pages at once gets five shorter ones in one turn instead of a refusal and a second round trip. Shares are worked out from recorded results, so a resumed batch gives the same room to what is left of it, and nothing about them is stored.
+
+A refused result is discarded, although the tool ran, so give a tool whose output can be large a way to return less.
 
 The bound is in bytes at the estimated density, so it is as wrong as that estimate is. The reserve absorbs results up to a fifth denser than estimated.
 
@@ -104,7 +106,7 @@ Estimates can be wrong, and a server can be restarted with a smaller window. `Er
 
 With a context window configured, the engine answers the first such error on a turn by compacting with half the usual recent part, and makes the turn again. The estimate that allowed the turn was too low, so the summary request may send only half of what the window would otherwise hold. A second overflow on the same turn fails the run, as does any overflow without a context window or with nothing left to cover.
 
-Every request's output allowance, `ModelRequest::remaining_tokens`, is also capped at the room the estimate leaves in the window, so a provider is not asked for more output than could fit.
+Every request's output allowance, `ModelRequest::remaining_tokens`, is also capped at the room the estimate leaves in the window. Hosted providers such as OpenAI count the output a request asks for against the window and reject the request when the two do not fit, so an allowance sized to an estimate that came out low would turn the error into a failed turn. The part of the estimate made from bytes is therefore taken as up to half again as large; what the provider reported is exact. A summary request asks for no more than twice the summary budget, the longest summary that is used. Against lokl's hosted Gemma, the first read of five pages was estimated at about 19,700 tokens and was about 22,500: with the allowance sized to the estimate alone, the request was rejected and, with nothing earlier to compact, the run failed.
 
 ## Finding the window
 
@@ -118,6 +120,8 @@ Nothing in the engine assumes a local model. What changes with a hosted one is w
 
 - **Usage must count the whole prompt.** The estimate starts from `TokenUsage::input` of the latest exchange. A provider that reports cached tokens apart from the rest, as some do, needs its adapter to add them back, or the estimate is low by what the cache served and the engine compacts late.
 - **Keep the prefix stable.** A compaction is the only change to earlier content, so every other turn is served from the provider's prompt cache. OpenAI documents `tool_choice: "none"` as the way to stop tool calls without removing the tools, which keeps that cache. A provider whose cache is keyed on the tool choice should not be sent a different one: its adapter should leave the request as it is and rely on the engine discarding a summary that calls a tool.
+- **Requested output counts.** A hosted provider rejects a request whose prompt and `max_tokens` together exceed the window, which llama-server does not. The output allowance described above leaves for that.
+- **The window has to be given.** A hosted endpoint rarely reports it: lokl's OpenAI-compatible service lists its models without `meta.n_ctx`, so `LlamaModel::context_window` returns `None` there.
 - **A smaller `tokens` than the model's window is often right.** A frontier model's window can be a million tokens. A conversation that fills it costs that many input tokens on every turn, cached or not, and models answer less well from a full window. Set `tokens` to the context the conversation is worth.
 
 ## Running local models on a Mac

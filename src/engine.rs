@@ -1196,13 +1196,21 @@ impl Definition {
                     }
                     if let Some(window) = window {
                         // A summary request's context may have been cut, so it is measured as
-                        // sent; a turn's is estimated as the check before it was.
-                        let prompt = match turn {
-                            Turn::Chat => estimate.tokens,
-                            Turn::Compact(_) => (estimate.density)
-                                .tokens(self.overhead_bytes() + encoded_len(&history)),
+                        // sent, and it never needs more than the longest summary that is used.
+                        let room = match turn {
+                            Turn::Chat => window.output_room(estimate),
+                            Turn::Compact(_) => {
+                                let tokens = (estimate.density)
+                                    .tokens(self.overhead_bytes() + encoded_len(&history));
+                                (window.output_room(compaction::Estimate {
+                                    tokens,
+                                    uncertain: tokens,
+                                    density: estimate.density,
+                                }))
+                                .min(window.summary_tokens.saturating_mul(2))
+                            }
                         };
-                        remaining_tokens = remaining_tokens.min(window.room(prompt));
+                        remaining_tokens = remaining_tokens.min(room);
                     }
                     let request = ModelRequest {
                         run_id: state.id,
@@ -1618,6 +1626,7 @@ impl Definition {
         }
         let mut window = Window::new(reservation);
         window.resume_only = startable.resume_only;
+        window.result_budget = self.result_budget(state);
         let mut in_flight = FuturesUnordered::new();
         loop {
             let mut admitted = if window.open {
@@ -1668,11 +1677,14 @@ impl Definition {
                         continue;
                     }
                 };
+                let max_output_bytes = window.give(state, admission.index);
+                let op = &state.operations[admission.index];
                 let context = ToolContext {
                     run_id: state.id,
                     call_id: op.call.id.clone(),
                     idempotency_key: op.idempotency_key.clone(),
                     cancel: CancellationToken::new(),
+                    max_output_bytes,
                 };
                 let span = telemetry::tool_span(op, call);
                 if !span.is_disabled() {
@@ -2050,6 +2062,10 @@ struct Window {
     /// Children running in this window, from the first one started.
     children: Option<ChildWindow>,
     spans: Vec<(usize, Span)>,
+    /// Bytes of results the batch's exchange may record, with a context window.
+    result_budget: Option<usize>,
+    /// The output bytes given to each running tool call, by operation index.
+    given: Vec<(usize, usize)>,
 }
 impl Window {
     fn new(reserved_ms: u64) -> Self {
@@ -2067,7 +2083,33 @@ impl Window {
             storage: None,
             children: None,
             spans: Vec::new(),
+            result_budget: None,
+            given: Vec::new(),
         }
+    }
+    /// The output bytes the call at `index` may return, now that it starts: its even share of
+    /// what the batch's results have left, given the results already recorded and the shares of
+    /// calls still running, and never more than `max_tool_output_bytes`. Recorded results are
+    /// durable, so a resumed batch gives the same room to what is left of it.
+    fn give(&mut self, state: &RunState, index: usize) -> usize {
+        let limit = state.limits.max_tool_output_bytes;
+        let Some(budget) = self.result_budget else {
+            return limit;
+        };
+        let given: usize = self.given.iter().map(|(_, bytes)| bytes).sum();
+        let mut recorded = 0;
+        let mut waiting = 0_usize;
+        for (other, op) in state.operations.iter().enumerate() {
+            match &op.status {
+                OperationStatus::Complete(result) => recorded += encoded_len(&result.value),
+                _ if self.given.iter().any(|(running, _)| *running == other) => {}
+                _ => waiting += 1,
+            }
+        }
+        let share = budget.saturating_sub(recorded + given) / waiting.max(1);
+        let bytes = share.min(limit);
+        self.given.push((index, bytes));
+        bytes
     }
     /// Whether the operation at `index` can start in this window.
     fn startable(&self, state: &RunState, index: usize) -> bool {
@@ -2120,6 +2162,10 @@ impl Window {
         telemetry::record_operation(&span, op, call, bytes);
     }
     fn record(&mut self, state: &mut RunState, finished: Finished) {
+        let index = match &finished {
+            Finished::Tool { index, .. } | Finished::Child { index, .. } => *index,
+        };
+        self.given.retain(|(running, _)| *running != index);
         let (index, outcome, cleanup) = match finished {
             Finished::Tool {
                 index,

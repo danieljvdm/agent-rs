@@ -160,6 +160,15 @@ impl ContextWindow {
     pub(crate) fn room(&self, prompt_tokens: u64) -> u64 {
         self.tokens.saturating_sub(prompt_tokens).max(1)
     }
+    /// The output a turn may ask for beside a prompt estimated at `estimate`.
+    ///
+    /// Providers such as OpenAI count the output a request asks for against the window and
+    /// reject the request when the two do not fit, so an output allowance sized to an estimate
+    /// that came out low makes the request fail. The part of the estimate made from bytes is
+    /// therefore taken as up to half again as large; what the provider reported is exact.
+    pub(crate) fn output_room(&self, estimate: Estimate) -> u64 {
+        self.room(estimate.tokens.saturating_add(estimate.uncertain / 2))
+    }
     /// The user message that asks the model for a summary.
     pub(crate) fn instruction(&self) -> String {
         match &self.summary_instructions {
@@ -230,6 +239,8 @@ impl Density {
 pub(crate) struct Estimate {
     /// Prompt tokens.
     pub tokens: u64,
+    /// Of those, the tokens estimated from bytes rather than reported by the provider.
+    pub uncertain: u64,
     /// The density the estimate used, for sizing what a compaction keeps and sends.
     pub density: Density,
 }
@@ -284,16 +295,21 @@ pub(crate) fn estimate(
     match reported {
         Some(usage) => {
             let density = Density::measured(before, usage.input);
+            let uncertain = density.tokens(since);
             Estimate {
-                tokens: (usage.input.saturating_add(usage.output))
-                    .saturating_add(density.tokens(since)),
+                tokens: (usage.input.saturating_add(usage.output)).saturating_add(uncertain),
+                uncertain,
                 density,
             }
         }
-        None => Estimate {
-            tokens: Density::DEFAULT.tokens(before + since),
-            density: Density::DEFAULT,
-        },
+        None => {
+            let tokens = Density::DEFAULT.tokens(before + since);
+            Estimate {
+                tokens,
+                uncertain: tokens,
+                density: Density::DEFAULT,
+            }
+        }
     }
 }
 

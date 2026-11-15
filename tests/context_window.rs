@@ -640,10 +640,17 @@ async fn output_is_capped_at_the_room_the_prompt_leaves() {
     drive(&agent, &mut state).await;
     let requests = model.requests();
     let sent = |request: &ModelRequest| serde_json::to_vec(&request.history).unwrap().len() as u64;
-    for request in &requests {
-        // The estimate counts the context and what comes with every request.
-        assert!(request.remaining_tokens < WINDOW_TOKENS - sent(request) / 3);
-        assert!(request.remaining_tokens > WINDOW_TOKENS - sent(request) / 3 - 300);
+    // The scripted model reports no usage, so the whole prompt is estimated from bytes, and
+    // a provider that counts requested output against the window must not see it overrun:
+    // what is asked for leaves room for a prompt half again as large as estimated.
+    for request in requests.iter().filter(|request| !asks_for_summary(request)) {
+        let estimate = sent(request) / 3;
+        assert!(request.remaining_tokens < WINDOW_TOKENS - estimate * 3 / 2);
+        assert!(request.remaining_tokens > WINDOW_TOKENS - estimate * 3 / 2 - 500);
+    }
+    // A summary request asks for no more than the longest summary that is used.
+    for request in requests.iter().filter(|request| asks_for_summary(request)) {
+        assert!(request.remaining_tokens <= window().summary_tokens * 2);
     }
     // The run's own allowance still applies when it is the smaller.
     let model = Script::new(reader);
@@ -790,9 +797,10 @@ async fn a_dense_prompt_makes_what_follows_count_for_more() {
             unreachable!()
         };
         let reported = response.usage.input + response.usage.output;
-        let estimate = 32_768 - requests[1].remaining_tokens;
+        // The allowance leaves room for the part estimated from bytes to be half again as large.
+        let allowed = 32_768 - requests[1].remaining_tokens;
         let recorded = serde_json::to_vec(results).unwrap().len() as u64;
-        (estimate - reported, recorded)
+        (((allowed - reported) * 2).div_ceil(3), recorded)
     }
     // JSON at two bytes a token: the result recorded since is counted at about that density.
     // (A little under, because the engine also counts the instructions and tools as sent.)
@@ -973,4 +981,132 @@ async fn a_provider_failure_during_a_summary_fails_the_turn_and_is_asked_again()
         Phase::Settled(Settlement::Completed(_))
     ));
     assert_eq!(summary_of(&state.history[1]), SUMMARY);
+}
+
+#[tokio::test]
+async fn a_tool_that_fits_the_room_it_is_given_keeps_every_result() {
+    // The three reads of the turn above, from a tool that returns no more than its call's
+    // `max_output_bytes`: all three are kept, each shortened, where the second was refused when
+    // the tool ignored it.
+    let given = Arc::new(Mutex::new(Vec::new()));
+    let seen = given.clone();
+    let fitting = typed_tool::<usize, String, _, _>(
+        ToolSpec::new("read", "1").with_retry(RetryPolicy::ReadOnly),
+        move |bytes, context: ToolContext| {
+            seen.lock().unwrap().push(context.max_output_bytes);
+            // Two bytes of the room go to the string's quotes.
+            let fits = bytes.min(context.max_output_bytes.saturating_sub(2));
+            async move { Ok(ToolOutput::Complete("r".repeat(fits))) }
+        },
+    );
+    let call = |id: &str, bytes: usize| ToolCall {
+        id: id.into(),
+        name: "read".into(),
+        arguments: json!(bytes),
+    };
+    let model = Script::new(move |request, _| {
+        Ok(match request.history.last() {
+            Some(HistoryEntry::Exchange { .. }) => answer(),
+            _ => ModelResponse::tools(vec![
+                call("first", 6_000),
+                call("second", 6_000),
+                call("third", 2_000),
+            ]),
+        })
+    });
+    let agent = Agent::builder("reader", model)
+        .tool(fitting)
+        .context_window(window())
+        .input::<String>()
+        .output::<String>()
+        .build()
+        .unwrap();
+    let mut state = agent.new_run("c", json!("Read three"), &[], None).unwrap();
+    drive(&agent, &mut state).await;
+    assert!(matches!(
+        state.phase,
+        Phase::Settled(Settlement::Completed(_))
+    ));
+    let HistoryEntry::Exchange { results, .. } = &state.history[1] else {
+        panic!("not an exchange")
+    };
+    assert!(results.iter().all(|result| !result.is_error));
+    let sizes: Vec<usize> = (results.iter())
+        .map(|result| result.value.as_str().unwrap().len())
+        .collect();
+    // The room the earlier test refused the second read for is shared: no read got all it
+    // asked for but the last, which needed less than its share.
+    assert!(sizes[0] < 6_000 && sizes[1] < 6_000, "{sizes:?}");
+    assert_eq!(sizes[2], 2_000, "{sizes:?}");
+    let room = *given.lock().unwrap().iter().max().unwrap();
+    let recorded: usize = (results.iter())
+        .map(|result| serde_json::to_vec(&result.value).unwrap().len())
+        .sum();
+    assert!(recorded <= room * 3, "{recorded} of {room}");
+
+    // Without a context window a call is given what `max_tool_output_bytes` allows.
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let record = seen.clone();
+    let tool = typed_tool::<usize, String, _, _>(
+        ToolSpec::new("read", "1").with_retry(RetryPolicy::ReadOnly),
+        move |_, context: ToolContext| {
+            record.lock().unwrap().push(context.max_output_bytes);
+            async { Ok(ToolOutput::Complete(String::new())) }
+        },
+    );
+    let model = Script::new(|request, n| {
+        Ok(match request.history.last() {
+            Some(HistoryEntry::Exchange { .. }) => answer(),
+            _ => read(n),
+        })
+    });
+    let agent = Agent::builder("reader", model)
+        .tool(tool)
+        .limits(Limits::default().with_max_tool_output_bytes(5_000))
+        .input::<String>()
+        .output::<String>()
+        .build()
+        .unwrap();
+    let mut state = agent.new_run("c", json!("Read"), &[], None).unwrap();
+    drive(&agent, &mut state).await;
+    assert_eq!(*seen.lock().unwrap(), [5_000]);
+}
+
+#[tokio::test]
+async fn a_provider_that_counts_requested_output_against_the_window_is_not_overrun() {
+    // A hosted provider (OpenAI, an OpenAI-compatible service) rejects a request whose prompt
+    // and requested output together exceed the window. This one counts the prompt at 2.5 bytes
+    // a token, denser than the engine's first estimate, and reports usage as such services do.
+    // The first run of a conversation reads most of the window at once, so a rejection would
+    // have nothing earlier to compact and would fail the run.
+    let model = Script::new(|request, n| {
+        let sent = serde_json::to_vec(&request.history).unwrap().len() as u64 + 400;
+        let prompt = sent * 2 / 5;
+        if prompt + request.remaining_tokens > WINDOW_TOKENS {
+            return Err(Error::context_overflow(
+                "prompt and output exceed the window",
+            ));
+        }
+        let response = match request.history.last() {
+            Some(HistoryEntry::Exchange { .. }) => answer(),
+            _ => ModelResponse::tools(vec![ToolCall {
+                id: format!("read-{n}"),
+                name: "read".into(),
+                arguments: json!(8_000),
+            }]),
+        };
+        Ok(response.with_usage(TokenUsage::new(prompt, 20)))
+    });
+    let agent = builder(model.clone())
+        .context_window(window())
+        .build()
+        .unwrap();
+    let mut state = agent.new_run("c", json!("Read it all"), &[], None).unwrap();
+    drive(&agent, &mut state).await;
+    assert!(
+        matches!(state.phase, Phase::Settled(Settlement::Completed(_))),
+        "{:?}",
+        state.phase
+    );
+    assert_eq!(model.requests().len(), 2, "no request was rejected");
 }
