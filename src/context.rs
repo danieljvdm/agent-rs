@@ -257,6 +257,9 @@ pub struct PriorContext<'a> {
     entries: Vec<HistoryEntry>,
     /// Inputs offered so far: the runs accepted after the next entry's own.
     runs: usize,
+    /// Once the latest compaction has been offered, how many of the entries before it are
+    /// still to come: it covers everything older.
+    kept: Option<usize>,
     full: bool,
 }
 impl<'a> PriorContext<'a> {
@@ -270,16 +273,35 @@ impl<'a> PriorContext<'a> {
             },
             entries: Vec::new(),
             runs: 0,
+            kept: None,
             full: false,
         }
     }
-    /// Offers the conversation's next older entry. Returns whether it was retained: once an
-    /// entry does not fit `max_context_bytes`, it and every older entry are refused, so stop
-    /// reading. An entry is measured as the run will send it, after the agent's
+    /// Offers the conversation's next older entry. Returns whether to offer the one before it:
+    /// once an entry does not fit `max_context_bytes`, it and every older entry are refused, so
+    /// stop reading. An entry is measured as the run will send it, after the agent's
     /// [`ContextPolicy::prior_result`] has replaced any of its tool results.
+    ///
+    /// The newest [`HistoryEntry::Compaction`] ends the context: it is retained with the
+    /// entries it kept, and everything older is refused, because its summary covers it.
     pub fn push(&mut self, mut entry: HistoryEntry) -> bool {
         if self.full {
             return false;
+        }
+        match (&entry, &mut self.kept) {
+            (_, Some(0)) => {
+                self.full = true;
+                return false;
+            }
+            // An earlier compaction among the kept entries is never sent: the newest one's
+            // summary carries it forward.
+            (HistoryEntry::Compaction { .. }, Some(kept)) => {
+                *kept -= 1;
+                return true;
+            }
+            (HistoryEntry::Compaction { kept, .. }, None) => self.kept = Some(*kept as usize),
+            (_, Some(kept)) => *kept -= 1,
+            (_, None) => {}
         }
         if let (Some(policy), HistoryEntry::Exchange { response, results }) =
             (self.policy, &mut entry)
@@ -317,6 +339,49 @@ impl<'a> PriorContext<'a> {
     }
 }
 
+/// The latest compaction of a run's context, by index into `prior ++ history`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Compacted {
+    /// Where the [`HistoryEntry::Compaction`] is.
+    pub at: usize,
+    /// The first entry it kept. Everything before is covered by its summary.
+    pub floor: usize,
+}
+/// The latest compaction among `prior ++ history`, if there is one.
+pub(crate) fn compacted(prior: &[HistoryEntry], history: &[HistoryEntry]) -> Option<Compacted> {
+    let latest = |entries: &[HistoryEntry], offset: usize| {
+        (entries.iter().enumerate().rev()).find_map(|(index, entry)| match entry {
+            HistoryEntry::Compaction { kept, .. } => Some(Compacted {
+                at: offset + index,
+                floor: (offset + index).saturating_sub(*kept as usize),
+            }),
+            _ => None,
+        })
+    };
+    latest(history, prior.len()).or_else(|| latest(prior, 0))
+}
+/// Whether the run always sends the entry at `index` of its own history: its input, its latest
+/// exchange, its steering instructions and what its policy pins. A compaction is never one of
+/// these; the latest is sent first and the others not at all.
+pub(crate) fn pins(
+    history: &[HistoryEntry],
+    index: usize,
+    latest_exchange: Option<usize>,
+    pinned: &impl Fn(&HistoryEntry) -> bool,
+) -> bool {
+    match &history[index] {
+        HistoryEntry::Compaction { .. } => false,
+        HistoryEntry::Steering { .. } => true,
+        entry => index == 0 || Some(index) == latest_exchange || pinned(entry),
+    }
+}
+/// The index of the run's latest exchange in its own history.
+pub(crate) fn latest_exchange(history: &[HistoryEntry]) -> Option<usize> {
+    history
+        .iter()
+        .rposition(|entry| matches!(entry, HistoryEntry::Exchange { .. }))
+}
+
 /// One turn's history, selected in a single pass and cloned once, as [`ContextPolicy`] describes.
 ///
 /// Pinned: the run's current input (`history[0]`), its latest exchange, its steering
@@ -324,6 +389,9 @@ impl<'a> PriorContext<'a> {
 /// optional and is added newest first until the next one does not fit, so optional entries form
 /// one contiguous suffix. The result keeps chronological order. `derived` is trimmed to its cap
 /// and to the room the pinned entries leave, and the rest of that room bounds optional entries.
+///
+/// After a compaction its entry is pinned too and sent first, optional entries reach back no
+/// further than the first entry it kept, and no other compaction is sent.
 fn select_history(
     prior: &[HistoryEntry],
     history: &[HistoryEntry],
@@ -332,50 +400,54 @@ fn select_history(
     max_derived_bytes: usize,
     pinned: impl Fn(&HistoryEntry) -> bool,
 ) -> Result<Vec<HistoryEntry>> {
-    let latest_exchange = history
-        .iter()
-        .rposition(|entry| matches!(entry, HistoryEntry::Exchange { .. }));
-    let is_pinned = |index: usize| {
-        index == 0
-            || Some(index) == latest_exchange
-            || matches!(history[index], HistoryEntry::Steering { .. })
-            || pinned(&history[index])
-    };
+    let latest_exchange = latest_exchange(history);
+    let is_pinned = |index: usize| pins(history, index, latest_exchange, &pinned);
+    let compacted = compacted(prior, history);
+    let summary = compacted.map(|compacted| match compacted.at.checked_sub(prior.len()) {
+        Some(index) => &history[index],
+        None => &prior[compacted.at],
+    });
     let mut window = Window::new(max_bytes)?;
+    let too_large = || Error::context("current input and pinned history exceed context limit");
+    if let Some(summary) = summary
+        && !window.add(summary)
+    {
+        return Err(too_large());
+    }
     for (index, entry) in history.iter().enumerate() {
         if is_pinned(index) && !window.add(entry) {
-            return Err(Error::context(
-                "current input and pinned history exceed context limit",
-            ));
+            return Err(too_large());
         }
     }
     window.max -= fit_derived(derived, max_derived_bytes, max_bytes - window.bytes);
+    let floor = compacted.map_or(0, |compacted| compacted.floor);
+    let is_compaction = |entry: &HistoryEntry| matches!(entry, HistoryEntry::Compaction { .. });
     // Run history at or after `cut` is kept whole; before it, only pinned entries survive.
-    let mut cut = 0;
+    let mut cut = floor.saturating_sub(prior.len());
     let mut prior_start = prior.len();
     'fill: {
-        for index in (0..history.len()).rev() {
-            if !is_pinned(index) && !window.add(&history[index]) {
+        for index in (cut..history.len()).rev() {
+            let entry = &history[index];
+            if !is_pinned(index) && !is_compaction(entry) && !window.add(entry) {
                 cut = index + 1;
                 break 'fill;
             }
         }
-        for (index, entry) in prior.iter().enumerate().rev() {
-            if !window.add(entry) {
+        for index in (floor.min(prior.len())..prior.len()).rev() {
+            if !is_compaction(&prior[index]) && !window.add(&prior[index]) {
                 break 'fill;
             }
             prior_start = index;
         }
     }
     let mut selected = Vec::with_capacity(window.entries);
-    selected.extend_from_slice(&prior[prior_start..]);
-    selected.extend(
-        history
-            .iter()
-            .enumerate()
+    selected.extend(summary.cloned());
+    let optional = prior[prior_start..].iter().chain(
+        (history.iter().enumerate())
             .filter(|&(index, _)| index >= cut || is_pinned(index))
-            .map(|(_, entry)| entry.clone()),
+            .map(|(_, entry)| entry),
     );
+    selected.extend(optional.filter(|entry| !is_compaction(entry)).cloned());
     Ok(selected)
 }
 

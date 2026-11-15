@@ -16,6 +16,7 @@ mod automation;
 mod children;
 #[cfg(feature = "codemode")]
 pub mod codemode;
+mod compaction;
 mod context;
 mod engine;
 mod error;
@@ -44,6 +45,7 @@ pub use automation::{
     FiringReport, IntervalAutomation, Occurrence, OccurrenceOutcome,
 };
 pub use children::{AttachedChild, ChildOutcome, ChildResult, ParentRun};
+pub use compaction::ContextWindow;
 pub use context::{ContextPolicy, ContextRequest, PriorContext, PriorResult};
 pub use engine::{
     Agent, AgentBuilder, Checkpoint, Conversation, MemoryCheckpoint, RunControl, Subagent,

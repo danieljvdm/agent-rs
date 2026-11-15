@@ -22,10 +22,21 @@ pub struct ToolContext {
     /// work the tool handed to other tasks can stop. On a timeout or interruption the engine
     /// also drops the `execute` future.
     pub cancel: CancellationToken,
+    /// The most bytes this call's output may encode to and still be kept.
+    ///
+    /// It is [`Limits::max_tool_output_bytes`](crate::Limits::max_tool_output_bytes), and with
+    /// a [`ContextWindow`](crate::ContextWindow) no more than this call's share of the room the
+    /// turn's results have left: the room less what the batch's finished calls returned and what
+    /// its running calls were given, split evenly over the calls still to start. A tool that can
+    /// return less, such as a smaller page, should fit it. A larger output is recorded as an
+    /// error, so the model is told to ask for less. A tool that may have an effect (any
+    /// [`RetryPolicy`](crate::RetryPolicy) but `ReadOnly`) is given the whole limit, and its output is always kept.
+    pub max_output_bytes: usize,
 }
 impl ToolContext {
     /// A context for calling a tool outside the engine, such as in the tool's own tests, with a
-    /// fresh cancellation token. The engine builds the context for every call it dispatches.
+    /// fresh cancellation token and no bound on output. The engine builds the context for every
+    /// call it dispatches.
     pub fn new(
         run_id: RunId,
         call_id: impl Into<String>,
@@ -36,7 +47,13 @@ impl ToolContext {
             call_id: call_id.into(),
             idempotency_key: idempotency_key.into(),
             cancel: CancellationToken::new(),
+            max_output_bytes: usize::MAX,
         }
+    }
+    /// Sets [`max_output_bytes`](Self::max_output_bytes).
+    pub fn with_max_output_bytes(mut self, bytes: usize) -> Self {
+        self.max_output_bytes = bytes;
+        self
     }
 }
 /// What a tool's execution reports when its outcome is known; see [`Tool`] for what an error

@@ -20,6 +20,7 @@ Other fields below are engine-specific.
 | --- | --- | --- |
 | `invoke_agent` | INFO | `otel.name` = `invoke_agent {agent id}`, `otel.kind` = `internal`, `gen_ai.operation.name` = `invoke_agent`, `gen_ai.agent.id`, `run_id`, optional `parent_run_id`, optional `gen_ai.conversation.id`, `outcome`, optional `error.type` |
 | `chat` | INFO | `otel.name` = `chat {model}`, `otel.kind` = `client`, `gen_ai.operation.name` = `chat`, `gen_ai.request.model`, `turn`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `response_bytes`, optional `time_to_first_delta_ms`, `outcome`, optional `error.type` |
+| `compact` | INFO | A [compaction](context-compaction.md)'s summary call, in place of `chat`: the same fields, with `otel.name` = `compact {model}`, `forced` (whether the provider rejected the turn first) and `summarized` (whether the model's summary was used). Its events name their operation `chat`. |
 | `execute_tool` | INFO | `otel.name` = `execute_tool {tool name}`, `otel.kind` = `internal`, `gen_ai.operation.name` = `execute_tool`, `gen_ai.tool.name`, `run_id`, `turn`, `tool_call_index`, `operation.status`, optional `output_bytes` |
 | `tool_window` | DEBUG | None |
 | `commit` | DEBUG | `revision` after the checkpoint returns successfully |

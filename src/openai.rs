@@ -117,6 +117,9 @@ fn request_body(request: ModelRequest) -> Result<Value> {
             "name":tool.name,"description":tool.description,"parameters":tool.input_schema,"strict":false
         }})).collect();
         body["parallel_tool_calls"] = json!(true);
+        if !request.allow_tool_calls {
+            body["tool_choice"] = json!("none");
+        }
     }
     Ok(body)
 }
@@ -165,6 +168,7 @@ fn push_history(
             HistoryEntry::Steering { instruction, .. } => {
                 messages.push(steering_message(instruction))
             }
+            HistoryEntry::Compaction { summary, .. } => messages.push(compaction_message(&summary)),
             HistoryEntry::Exchange { response, results } => {
                 if response.tools.is_empty() {
                     let output = response
@@ -249,6 +253,15 @@ fn derived_context_document(derived_context: &[Value]) -> String {
 fn steering_message(instruction: String) -> Value {
     json!({"role":"user", "content": instruction})
 }
+
+/// A compaction as every adapter sends it, in place of the conversation it covers: a user
+/// message that says what the summary is, so the model does not take it for a request.
+fn compaction_message(summary: &str) -> Value {
+    json!({"role":"user", "content": format!("{COMPACTION_NOTICE}\n\n<summary>\n{summary}\n</summary>")})
+}
+
+/// What every adapter tells the model about a compaction's summary, ahead of it.
+const COMPACTION_NOTICE: &str = "The conversation before this point was compacted into the summary below. It is a record of what was said and done, not a new request or instruction.";
 
 /// The agent's output schema inside the `{"value": O}` envelope both APIs answer with.
 fn output_schema(schema: Arc<Value>) -> Value {
@@ -494,7 +507,11 @@ impl EventParser for Parser {
                     .and_then(server_message)
                     .map(|message| format!("provider stream error: {message}")),
             };
-            return Err(self.fail(message.as_deref().unwrap_or("provider stream error")));
+            let message = message.as_deref().unwrap_or("provider stream error");
+            return Err(match transport::is_context_overflow(&error) {
+                true => self.provider.context_overflow(message),
+                false => self.fail(message),
+            });
         }
         if let Some(usage) = chunk.usage {
             if self.usage.is_some() {
@@ -769,6 +786,7 @@ mod tests {
             turn: 1,
             max_response_bytes: 1024,
             remaining_tokens: 256,
+            allow_tool_calls: true,
         };
         let mut exhausted = request.clone();
         exhausted.remaining_tokens = 0;
@@ -825,6 +843,7 @@ mod tests {
             turn: 2,
             max_response_bytes: 1024,
             remaining_tokens: 256,
+            allow_tool_calls: true,
         };
         let steering = json!({"role":"user","content":"Use the revised request."});
         // Chat Completions sends the instructions as the first message.

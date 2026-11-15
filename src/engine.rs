@@ -1,4 +1,5 @@
-use crate::context::{PriorContext, assemble, encoded_len, suffix_start};
+use crate::compaction::{self, ContextWindow};
+use crate::context::{PriorContext, assemble, encoded_len, pins, suffix_start};
 use crate::steering::Boundary;
 use crate::types::{STATE_VERSION, now_ms};
 use crate::{
@@ -123,6 +124,8 @@ struct Definition {
     validate_output: Validator,
     authorizer: Arc<dyn Authorizer>,
     context_policy: Option<(Arc<dyn ContextPolicy>, usize)>,
+    /// The model's context window, if the agent compacts conversations to stay inside it.
+    context_window: Option<ContextWindow>,
     /// Computed once from the fields above by [`Definition::compose_binding`], shared by every
     /// run this agent accepts, and compared with each run `drive` resumes.
     binding: Arc<Value>,
@@ -154,6 +157,7 @@ impl Agent {
             limits: Limits::default(),
             authorizer: Arc::new(AllowAll),
             context_policy: None,
+            context_window: None,
             subagents: None,
             types: PhantomData,
         }
@@ -189,22 +193,28 @@ impl<I, O> Agent<I, O> {
     ) -> Result<RunState> {
         let accepted = self.check_acceptance(conversation_id.into(), input)?;
         let definition = &*self.definition;
-        let prior_context = if definition.context_policy.is_none() {
-            // Nothing is replaced, so the suffix is measured in place and copied once.
-            let max_context_bytes = definition.limits.max_context_bytes;
-            conversation[suffix_start(conversation, max_context_bytes)?..].to_vec()
-        } else {
-            let mut prior = self.prior_context();
-            for entry in conversation.iter().rev() {
-                if !prior.push(entry.clone()) {
-                    break;
-                }
-            }
-            if prior.is_empty() && !conversation.is_empty() {
-                return Err(Error::context("newest history group exceeds context limit"));
-            }
-            prior.into_entries()
+        let max_context_bytes = definition.limits.max_context_bytes;
+        let suffix = match definition.context_policy {
+            // Nothing is replaced, so the suffix is measured in place.
+            None => Some(&conversation[suffix_start(conversation, max_context_bytes)?..]),
+            Some(_) => None,
         };
+        let compacted = |entry: &HistoryEntry| matches!(entry, HistoryEntry::Compaction { .. });
+        let prior_context =
+            if let Some(suffix) = suffix.filter(|suffix| !suffix.iter().any(compacted)) {
+                suffix.to_vec()
+            } else {
+                let mut prior = self.prior_context();
+                for entry in conversation.iter().rev() {
+                    if !prior.push(entry.clone()) {
+                        break;
+                    }
+                }
+                if prior.is_empty() && !conversation.is_empty() {
+                    return Err(Error::context("newest history group exceeds context limit"));
+                }
+                prior.into_entries()
+            };
         Ok(self.accepted(accepted, prior_context, expires_at_ms))
     }
     /// Starts the prior context of a run this agent is about to accept, for a store that reads
@@ -402,6 +412,9 @@ impl Definition {
         if let Some((policy, max_bytes)) = &self.context_policy {
             binding["context_policy"] = json!({"binding":policy.binding(),"max_bytes":max_bytes});
         }
+        if let Some(window) = &self.context_window {
+            binding["context_window"] = json!(window);
+        }
         let adapter = self.model.binding();
         if !adapter.is_null() {
             binding["model_adapter"] = adapter;
@@ -424,6 +437,15 @@ impl Definition {
             .filter(|work| work.spec() == &op.spec)
             .ok_or_else(|| Error::incompatible(format!("tool contract differs: {}", op.call.name)))
     }
+}
+/// What one model call is for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Turn {
+    /// A turn of the conversation.
+    Chat,
+    /// The summary request of a compaction: `true` when the provider rejected the turn as too
+    /// large, which cuts deeper than the estimate alone would.
+    Compact(bool),
 }
 /// What one operation runs: a tool, or a delegation to a child agent.
 #[derive(Clone, Copy)]
@@ -462,6 +484,7 @@ pub struct AgentBuilder<I = Value, O = Value> {
     limits: Limits,
     authorizer: Arc<dyn Authorizer>,
     context_policy: Option<(Arc<dyn ContextPolicy>, usize)>,
+    context_window: Option<ContextWindow>,
     subagents: Option<(usize, Vec<Subagent>)>,
     types: PhantomData<fn(I) -> O>,
 }
@@ -506,6 +529,16 @@ impl<I, O> AgentBuilder<I, O> {
         self.context_policy = Some((policy, max_derived_bytes));
         self
     }
+    /// The model's context window. With one, the engine keeps every conversation inside it: it
+    /// compacts the conversation into a summary before a turn that would not fit, and compacts
+    /// and retries once when the provider rejects a turn as too large. It also refuses a tool
+    /// result that one turn has no room for, with an error the model can act on. See
+    /// [`ContextWindow`].
+    /// Defaults to none, which leaves `max_context_bytes` as the only bound.
+    pub fn context_window(mut self, window: ContextWindow) -> Self {
+        self.context_window = Some(window);
+        self
+    }
     /// Child agents the model can delegate to, each called like a tool; see [`Subagent`]. At
     /// most `max_parallel` children run at once, 1..=1024, beside up to `max_parallel_tools`
     /// tools. Replaces any subagents set before.
@@ -537,6 +570,7 @@ impl<I, O> AgentBuilder<I, O> {
             limits: self.limits,
             authorizer: self.authorizer,
             context_policy: self.context_policy,
+            context_window: self.context_window,
             subagents: self.subagents,
             types: PhantomData,
         }
@@ -550,7 +584,8 @@ where
     /// Checks the definition and composes its binding. Fails with [`Error::Config`] for an ID
     /// outside 1..=256 bytes, a zero parallelism, byte limit or timeout, a duplicate, unbounded
     /// or unversioned tool name, an idempotent tool without a retry contract, a derived
-    /// context cap above `max_context_bytes`, or subagents whose parallelism is outside
+    /// context cap above `max_context_bytes`, a [`ContextWindow`] whose thresholds do not fit
+    /// it, or subagents whose parallelism is outside
     /// 1..=1024, whose names are unbounded or shared with a tool or another subagent, or whose
     /// agents have subagents of their own.
     pub fn build(self) -> Result<Agent<I, O>> {
@@ -563,6 +598,7 @@ where
             limits,
             authorizer,
             context_policy,
+            context_window,
             subagents,
             types: _,
         } = self;
@@ -604,6 +640,9 @@ where
                 "derived context cap must fit the context limit",
             ));
         }
+        if let Some(window) = &context_window {
+            window.validate()?;
+        }
         let subagents = subagents
             .map(|(max_parallel, subagents)| Subagents::new(max_parallel, subagents, &by_name))
             .transpose()?
@@ -630,6 +669,7 @@ where
             validate_output: validate::<O>,
             authorizer,
             context_policy,
+            context_window,
             binding: Arc::default(),
         };
         definition.binding = Arc::new(definition.compose_binding());
@@ -844,6 +884,9 @@ impl Definition {
             if recovered {
                 commit(checkpoint, state, &control).await?;
             }
+            // Whether the turn being attempted has already been compacted for a provider's
+            // rejection, so a second rejection fails the run.
+            let mut overflowed = false;
             loop {
                 if state.cancel_requested || control.cancel.is_cancelled() {
                     state.cancel_requested = true;
@@ -876,7 +919,34 @@ impl Definition {
                             )
                             .await;
                         }
-                        self.model_turn(state, checkpoint, &control).await
+                        if self.compaction_due(state) {
+                            self.model_turn(state, checkpoint, &control, Turn::Compact(false))
+                                .await
+                        } else {
+                            match self
+                                .model_turn(state, checkpoint, &control, Turn::Chat)
+                                .await
+                            {
+                                // The provider says the turn does not fit: compact harder than
+                                // the estimate asked for, once, and make the turn again.
+                                Err(Error::ContextOverflow(_))
+                                    if !overflowed && self.can_compact(state, true) =>
+                                {
+                                    overflowed = true;
+                                    self.model_turn(
+                                        state,
+                                        checkpoint,
+                                        &control,
+                                        Turn::Compact(true),
+                                    )
+                                    .await
+                                }
+                                step => {
+                                    overflowed &= step.is_err();
+                                    step
+                                }
+                            }
+                        }
                     }
                     Phase::Tools => self.tool_batch(state, checkpoint, &control).await,
                     Phase::Settled(_) => return Ok(()),
@@ -944,19 +1014,102 @@ impl Definition {
         }
         Ok(recovered)
     }
+    /// Bytes of every request that are not context: instructions, tool specs, the output schema
+    /// and the most derived context a policy may add.
+    fn overhead_bytes(&self) -> usize {
+        self.instructions.len()
+            + encoded_len(&*self.tool_specs)
+            + encoded_len(&*self.output_schema)
+            + self.context_policy.as_ref().map_or(0, |(_, max)| *max)
+    }
+    /// The estimated prompt of the run's next model turn.
+    fn estimate(&self, state: &RunState) -> compaction::Estimate {
+        let pinned = |entry: &HistoryEntry| self.pinned(entry);
+        compaction::estimate(
+            &state.prior_context,
+            &state.history,
+            self.overhead_bytes(),
+            &pinned,
+        )
+    }
+    fn pinned(&self, entry: &HistoryEntry) -> bool {
+        (self.context_policy.as_ref()).is_some_and(|(policy, _)| policy.pinned(entry))
+    }
+    /// Where a compaction of the run's context would cut, if it would cover anything.
+    fn cut(&self, state: &RunState, forced: bool) -> Option<usize> {
+        let window = self.context_window.as_ref()?;
+        let pinned = |entry: &HistoryEntry| self.pinned(entry);
+        compaction::cut(
+            &state.prior_context,
+            &state.history,
+            window.keep_bytes(self.estimate(state).density, forced),
+            forced,
+            &pinned,
+        )
+    }
+    /// Whether a compaction could be made now: there is a window, something to cover, and a
+    /// model call left for the turn after it.
+    fn can_compact(&self, state: &RunState, forced: bool) -> bool {
+        state
+            .limits
+            .max_model_calls
+            .saturating_sub(state.usage.model_calls)
+            >= 2
+            && exhausted(state, true, 0).is_none()
+            && self.cut(state, forced).is_some()
+    }
+    /// Bytes of results the batch's exchange may record, with a context window: what the window
+    /// has room for beside the instructions, tools, the batch's own calls and the entries the run
+    /// always sends.
+    fn result_budget(&self, state: &RunState) -> Option<usize> {
+        let window = self.context_window.as_ref()?;
+        let pinned = |entry: &HistoryEntry| self.pinned(entry);
+        // The exchange being recorded becomes the latest, so the one before it is not pinned.
+        let always: usize = (0..state.history.len())
+            .filter(|&index| pins(&state.history, index, None, &pinned))
+            .map(|index| encoded_len(&state.history[index]) + 1)
+            .sum();
+        let calls = state.pending_response.as_ref().map_or(0, encoded_len);
+        let fixed = self.overhead_bytes() + always + calls;
+        Some(window.exchange_bytes(self.estimate(state).density, fixed))
+    }
+    /// Whether the next turn's prompt is estimated to leave less than the window's reserve, and
+    /// a compaction can be made first.
+    fn compaction_due(&self, state: &RunState) -> bool {
+        (self.context_window.as_ref()).is_some_and(|window| {
+            self.estimate(state).tokens >= window.compact_at() && self.can_compact(state, false)
+        })
+    }
+
+    /// One model call: a turn of the conversation, or the summary request of a compaction.
     async fn model_turn(
         &self,
         state: &mut RunState,
         checkpoint: &dyn Checkpoint,
         control: &RunControl,
+        turn: Turn,
     ) -> Result<()> {
-        let span = tracing::info_span!("chat",
-            otel.name = %format_args!("chat {}", self.config.model), otel.kind = "client",
-            gen_ai.operation.name = "chat", gen_ai.request.model = %self.config.model,
-            turn = state.usage.model_calls.saturating_sub(state.child_usage.model_calls) + 1,
-            gen_ai.usage.input_tokens = Empty, gen_ai.usage.output_tokens = Empty,
-            response_bytes = Empty, time_to_first_delta_ms = Empty, outcome = Empty, error.type = Empty
-        );
+        let model_turn = state
+            .usage
+            .model_calls
+            .saturating_sub(state.child_usage.model_calls)
+            + 1;
+        let span = match turn {
+            Turn::Chat => tracing::info_span!("chat",
+                otel.name = %format_args!("chat {}", self.config.model), otel.kind = "client",
+                gen_ai.operation.name = "chat", gen_ai.request.model = %self.config.model,
+                turn = model_turn,
+                gen_ai.usage.input_tokens = Empty, gen_ai.usage.output_tokens = Empty,
+                response_bytes = Empty, time_to_first_delta_ms = Empty, outcome = Empty, error.type = Empty
+            ),
+            Turn::Compact(forced) => tracing::info_span!("compact",
+                otel.name = %format_args!("compact {}", self.config.model), otel.kind = "client",
+                gen_ai.operation.name = "chat", gen_ai.request.model = %self.config.model,
+                turn = model_turn, forced, summarized = Empty,
+                gen_ai.usage.input_tokens = Empty, gen_ai.usage.output_tokens = Empty,
+                response_bytes = Empty, time_to_first_delta_ms = Empty, outcome = Empty, error.type = Empty
+            ),
+        };
         // Reported usage survives rejection, interruption, timeout, and cleanup failure.
         let mut usage = crate::TokenUsage::default();
         let mut bytes = 0_usize;
@@ -967,16 +1120,98 @@ impl Definition {
             let (reservation, work_ms) = reserve(state);
             state.usage.model_calls += 1;
             state.phase = Phase::ModelInFlight;
-            emit(state, control, ProgressKind::ModelStarted);
+            emit(
+                state,
+                control,
+                match turn {
+                    Turn::Chat => ProgressKind::ModelStarted,
+                    Turn::Compact(_) => ProgressKind::CompactionStarted,
+                },
+            );
             commit(checkpoint, state, control).await?;
             let started = Instant::now();
             let operation_cancel = CancellationToken::new();
             let outcome = {
                 let future = async {
+                    let window = self.context_window.as_ref();
+                    let estimate = self.estimate(state);
                     // Assemble context after the dispatch checkpoint and inside the operation's
                     // deadline, so the checkpoint can contribute history and preparation is bounded.
-                    let (history, derived_context) =
+                    let (mut history, derived_context) =
                         assemble(state, self.context_policy.as_ref(), &operation_cancel).await?;
+                    // A summary request sends what the compaction will cover and its instruction,
+                    // not the recent entries it keeps: those are sent as recorded afterwards.
+                    // What it sends is the start of the turn's own context, so a provider's
+                    // prefix cache serves it.
+                    let summary = match (turn, window) {
+                        (Turn::Compact(forced), Some(window)) => {
+                            let floor = (self.cut(state, forced))
+                                .ok_or_else(|| Error::context("nothing is left to compact"))?;
+                            let kept = (state.prior_context.iter().chain(&state.history))
+                                .skip(floor)
+                                .filter(|entry| !matches!(entry, HistoryEntry::Compaction { .. }))
+                                .count();
+                            history.truncate(history.len().saturating_sub(kept));
+                            let instruction = window.instruction();
+                            let overhead = self.overhead_bytes() + instruction.len();
+                            let max_bytes =
+                                window.summary_context_bytes(estimate.density, overhead, forced);
+                            // Its oldest entries are left out if even that does not fit, after
+                            // the earlier summary it must carry forward.
+                            let first = usize::from(matches!(
+                                history.first(),
+                                Some(HistoryEntry::Compaction { .. })
+                            ));
+                            while history.len() > first + 1 && encoded_len(&history) > max_bytes {
+                                history.remove(first);
+                            }
+                            if history.len() <= first {
+                                return Err(Error::context("nothing to summarize"));
+                            }
+                            Some(instruction)
+                        }
+                        (Turn::Compact(_), None) => {
+                            return Err(Error::context("compaction needs a context window"));
+                        }
+                        (Turn::Chat, _) => None,
+                    };
+                    let mut remaining_tokens = state.limits.max_tokens.saturating_sub(
+                        state
+                            .usage
+                            .input_tokens
+                            .saturating_add(state.usage.output_tokens),
+                    );
+                    let mut output_schema = self.output_schema.clone();
+                    if let Some(instruction) = summary {
+                        // Sent as a steering instruction is: the user's words, as written.
+                        history.push(HistoryEntry::Steering {
+                            id: crate::SteeringId::nil(),
+                            instruction,
+                        });
+                        // A summary is text. An agent that already answers in text keeps its own
+                        // schema, so the request differs from a turn's only at its end.
+                        if !crate::model::takes_any_text(&output_schema) {
+                            output_schema = Arc::new(json!({"type": "string"}));
+                        }
+                    }
+                    if let Some(window) = window {
+                        // A summary request's context may have been cut, so it is measured as
+                        // sent, and it never needs more than the longest summary that is used.
+                        let room = match turn {
+                            Turn::Chat => window.output_room(estimate),
+                            Turn::Compact(_) => {
+                                let tokens = (estimate.density)
+                                    .tokens(self.overhead_bytes() + encoded_len(&history));
+                                (window.output_room(compaction::Estimate {
+                                    tokens,
+                                    uncertain: tokens,
+                                    density: estimate.density,
+                                }))
+                                .min(window.summary_tokens.saturating_mul(2))
+                            }
+                        };
+                        remaining_tokens = remaining_tokens.min(room);
+                    }
                     let request = ModelRequest {
                         run_id: state.id,
                         instructions: self.instructions.clone(),
@@ -984,17 +1219,13 @@ impl Definition {
                         history,
                         derived_context,
                         tools: self.tool_specs.clone(),
-                        output_schema: self.output_schema.clone(),
+                        output_schema,
                         // Children's model calls are in the run's usage but are not its turns.
                         turn: (state.usage.model_calls)
                             .saturating_sub(state.child_usage.model_calls),
                         max_response_bytes: state.limits.max_response_bytes,
-                        remaining_tokens: state.limits.max_tokens.saturating_sub(
-                            state
-                                .usage
-                                .input_tokens
-                                .saturating_add(state.usage.output_tokens),
-                        ),
+                        remaining_tokens,
+                        allow_tool_calls: turn == Turn::Chat,
                     };
                     let mut stream = self
                         .model
@@ -1023,7 +1254,9 @@ impl Definition {
                                         "stream exceeds response byte limit",
                                     ));
                                 }
-                                emit(state, control, ProgressKind::TextDelta(text));
+                                if turn == Turn::Chat {
+                                    emit(state, control, ProgressKind::TextDelta(text));
+                                }
                             }
                             ModelEvent::ReasoningDelta(text) => {
                                 first_delta.get_or_insert_with(|| started.elapsed());
@@ -1033,7 +1266,9 @@ impl Definition {
                                         "stream exceeds response byte limit",
                                     ));
                                 }
-                                emit(state, control, ProgressKind::ReasoningDelta(text));
+                                if turn == Turn::Chat {
+                                    emit(state, control, ProgressKind::ReasoningDelta(text));
+                                }
                             }
                             ModelEvent::Response(value) => {
                                 record_usage(&mut usage, &value.usage)?;
@@ -1094,6 +1329,37 @@ impl Definition {
                 }
                 WorkOutcome::TimedOut => Err(Error::provider("model operation timed out")),
             };
+            if let Turn::Compact(forced) = turn {
+                if is_expired(state) {
+                    return settle(
+                        self,
+                        checkpoint,
+                        state,
+                        control,
+                        Settlement::Stopped(StopReason::Expired),
+                    )
+                    .await;
+                }
+                cleanup
+                    .map_err(|_| Error::provider("model cleanup timed out"))?
+                    .map_err(provider_error)?;
+                let summarized = self.record_compaction(state, forced, response_result)?;
+                span.record("summarized", summarized);
+                if (state.usage.input_tokens).saturating_add(state.usage.output_tokens)
+                    > state.limits.max_tokens
+                {
+                    return settle(
+                        self,
+                        checkpoint,
+                        state,
+                        control,
+                        Settlement::Stopped(StopReason::Tokens),
+                    )
+                    .await;
+                }
+                emit(state, control, ProgressKind::Compacted { summarized });
+                return commit(checkpoint, state, control).await;
+            }
             if let Ok(response) = &response_result {
                 // Retain the complete response even when cleanup or validation rejects it.
                 state.pending_response = Some(response.clone());
@@ -1190,6 +1456,45 @@ impl Definition {
             span.record("error.type", telemetry::error_type(error));
         }
         result
+    }
+
+    /// Appends the [`HistoryEntry::Compaction`] a summary request earned: the model's summary
+    /// when its answer is usable, and otherwise one built from the entries it covers, so that a
+    /// model that cannot summarize never leaves a conversation unable to continue. Returns
+    /// whether the model's summary was used.
+    ///
+    /// A provider that failed has not shown that the model cannot summarize. Its error fails the
+    /// turn as any model call's would, and the next run asks for the summary again: a lossy
+    /// record is not worth making over an outage or a rate limit. Only its rejection of the
+    /// summary request as too large is answered here, because asking again would not help.
+    fn record_compaction(
+        &self,
+        state: &mut RunState,
+        forced: bool,
+        response: Result<ModelResponse>,
+    ) -> Result<bool> {
+        let window = (self.context_window.as_ref())
+            .ok_or_else(|| Error::context("compaction needs a context window"))?;
+        let floor = (self.cut(state, forced))
+            .ok_or_else(|| Error::context("nothing is left to compact"))?;
+        let (prior, history) = (&state.prior_context, &state.history);
+        let answer = match response {
+            Ok(response) => Some(response).filter(|response| response.tools.is_empty()),
+            Err(Error::ContextOverflow(_)) => None,
+            Err(error) => return Err(provider_error(error)),
+        };
+        let summary = answer.and_then(|response| {
+            compaction::usable_summary(response.output.as_ref(), window.summary_max_bytes())
+        });
+        let summarized = summary.is_some();
+        let summary = summary.unwrap_or_else(|| {
+            compaction::fallback_summary(prior, history, floor, window.summary_max_bytes())
+        });
+        let kept = u32::try_from(prior.len() + history.len() - floor).unwrap_or(u32::MAX);
+        state
+            .history
+            .push(HistoryEntry::Compaction { summary, kept });
+        Ok(summarized)
     }
 
     fn validate_response(&self, response: &ModelResponse, state: &RunState) -> Result<()> {
@@ -1290,7 +1595,8 @@ impl Definition {
                 return Ok(());
             }
         }
-        finish_tool_batch(state, checkpoint, control).await
+        let budget = self.result_budget(state);
+        finish_tool_batch(state, checkpoint, control, budget).await
     }
     /// Runs runnable operations in declaration order through a sliding window of at most
     /// `max_parallel_tools` slots: the next operation starts as soon as a slot frees. Returns once
@@ -1320,6 +1626,7 @@ impl Definition {
         }
         let mut window = Window::new(reservation);
         window.resume_only = startable.resume_only;
+        window.result_budget = self.result_budget(state);
         let mut in_flight = FuturesUnordered::new();
         loop {
             let mut admitted = if window.open {
@@ -1370,11 +1677,14 @@ impl Definition {
                         continue;
                     }
                 };
+                let max_output_bytes = window.give(state, admission.index);
+                let op = &state.operations[admission.index];
                 let context = ToolContext {
                     run_id: state.id,
                     call_id: op.call.id.clone(),
                     idempotency_key: op.idempotency_key.clone(),
                     cancel: CancellationToken::new(),
+                    max_output_bytes,
                 };
                 let span = telemetry::tool_span(op, call);
                 if !span.is_disabled() {
@@ -1599,10 +1909,17 @@ async fn complete_due_waits(
     Ok(())
 }
 /// Once every operation is complete, appends the exchange to history and returns to the model.
+///
+/// `budget` is the bytes of results the context window has room for. An exchange is always sent
+/// whole, so one larger than the window could never be sent at all. The results of calls that
+/// may have had an effect are always kept and are charged first: refusing one would invite the
+/// model to repeat the effect. Read-only results are then kept in call order while they fit, and
+/// one that does not is recorded as an error that tells the model how much room there is.
 async fn finish_tool_batch(
     state: &mut RunState,
     checkpoint: &dyn Checkpoint,
     control: &RunControl,
+    budget: Option<usize>,
 ) -> Result<()> {
     if !state
         .operations
@@ -1611,12 +1928,41 @@ async fn finish_tool_batch(
     {
         return Ok(());
     }
-    let results = state
-        .operations
-        .iter()
-        .map(|op| match &op.status {
-            OperationStatus::Complete(result) => result.clone(),
-            _ => unreachable!(),
+    let result = |op: &Operation| match &op.status {
+        OperationStatus::Complete(result) => result.clone(),
+        _ => unreachable!(),
+    };
+    let effect = |op: &Operation| op.spec.retry != RetryPolicy::ReadOnly;
+    let mut left = budget.map(|budget| {
+        let effects: usize = (state.operations.iter())
+            .filter(|op| effect(op))
+            .map(|op| encoded_len(&result(op).value))
+            .sum();
+        budget.saturating_sub(effects)
+    });
+    let results = (state.operations.iter())
+        .map(|op| {
+            let result = result(op);
+            let (Some(budget), Some(left)) = (budget, left.as_mut()) else {
+                return result;
+            };
+            if effect(op) {
+                return result;
+            }
+            let bytes = encoded_len(&result.value);
+            if bytes <= *left {
+                *left -= bytes;
+                return result;
+            }
+            ToolResult {
+                call_id: result.call_id.clone(),
+                value: Value::String(format!(
+                    "the call finished, but its output of {bytes} bytes was not kept: the tool \
+                     outputs of one turn may total {budget} bytes in this context window, and \
+                     {left} bytes were left. Ask for less output, or make fewer calls at a time."
+                )),
+                is_error: true,
+            }
         })
         .collect();
     let response = state
@@ -1727,6 +2073,10 @@ struct Window {
     /// Children running in this window, from the first one started.
     children: Option<ChildWindow>,
     spans: Vec<(usize, Span)>,
+    /// Bytes of results the batch's exchange may record, with a context window.
+    result_budget: Option<usize>,
+    /// The output bytes given to each running tool call, by operation index.
+    given: Vec<(usize, usize)>,
 }
 impl Window {
     fn new(reserved_ms: u64) -> Self {
@@ -1744,7 +2094,38 @@ impl Window {
             storage: None,
             children: None,
             spans: Vec::new(),
+            result_budget: None,
+            given: Vec::new(),
         }
+    }
+    /// The output bytes the call at `index` may return, now that it starts: its even share of
+    /// what the batch's results have left, given the results already recorded and the shares of
+    /// calls still running, and never more than `max_tool_output_bytes`. Recorded results are
+    /// durable, so a resumed batch gives the same room to what is left of it. A call that may
+    /// have an effect is given the whole limit, since its result is always kept.
+    fn give(&mut self, state: &RunState, index: usize) -> usize {
+        let limit = state.limits.max_tool_output_bytes;
+        let Some(budget) = self.result_budget else {
+            return limit;
+        };
+        if state.operations[index].spec.retry != RetryPolicy::ReadOnly {
+            self.given.push((index, 0));
+            return limit;
+        }
+        let given: usize = self.given.iter().map(|(_, bytes)| bytes).sum();
+        let mut recorded = 0;
+        let mut waiting = 0_usize;
+        for (other, op) in state.operations.iter().enumerate() {
+            match &op.status {
+                OperationStatus::Complete(result) => recorded += encoded_len(&result.value),
+                _ if self.given.iter().any(|(running, _)| *running == other) => {}
+                _ => waiting += 1,
+            }
+        }
+        let share = budget.saturating_sub(recorded + given) / waiting.max(1);
+        let bytes = share.min(limit);
+        self.given.push((index, bytes));
+        bytes
     }
     /// Whether the operation at `index` can start in this window.
     fn startable(&self, state: &RunState, index: usize) -> bool {
@@ -1797,6 +2178,10 @@ impl Window {
         telemetry::record_operation(&span, op, call, bytes);
     }
     fn record(&mut self, state: &mut RunState, finished: Finished) {
+        let index = match &finished {
+            Finished::Tool { index, .. } | Finished::Child { index, .. } => *index,
+        };
+        self.given.retain(|(running, _)| *running != index);
         let (index, outcome, cleanup) = match finished {
             Finished::Tool {
                 index,
@@ -2177,10 +2562,10 @@ fn record_usage(usage: &mut crate::TokenUsage, reported: &crate::TokenUsage) -> 
     Ok(())
 }
 /// A model's error, as the provider failure it is to the run, keeping it as the cause. One that
-/// already is a provider failure is kept as it is.
+/// already is a provider failure, or its rejection of a request as too large, is kept as it is.
 fn provider_error(error: Error) -> Error {
     match error {
-        Error::Provider(_) => error,
+        Error::Provider(_) | Error::ContextOverflow(_) => error,
         error => Error::provider(error),
     }
 }

@@ -163,9 +163,12 @@ impl Usage {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TokenUsage {
-    /// Prompt tokens.
+    /// Prompt tokens: everything the model read for the request, including what the provider
+    /// served from a prompt cache. A [`ContextWindow`](crate::ContextWindow) sizes the next
+    /// prompt from this, so an adapter for a provider that reports cached tokens apart must add
+    /// them.
     pub input: u64,
-    /// Generated tokens.
+    /// Generated tokens, including reasoning the provider counts as output.
     pub output: u64,
 }
 impl TokenUsage {
@@ -265,6 +268,17 @@ pub enum HistoryEntry {
         response: ModelResponse,
         /// One result per call of `response.tools`, in call order; empty for a final output.
         results: Vec<ToolResult>,
+    },
+    /// A compaction of the conversation, recorded by an agent with a
+    /// [`ContextWindow`](crate::ContextWindow) when a turn would not fit. From here on a turn
+    /// sends the summary in place of every entry before the kept ones. Stored history keeps
+    /// those entries; only what is sent changes.
+    Compaction {
+        /// What stands in for the entries the compaction covers: the model's summary, or one
+        /// the engine built from them when the model's could not be used.
+        summary: String,
+        /// How many entries immediately before this one are still sent as recorded.
+        kept: u32,
     },
 }
 /// What may happen when a call's outcome is not known: after an error, a timeout, an interrupted
@@ -762,6 +776,16 @@ pub enum ProgressKind {
     },
     /// The run's settlement was committed; it is terminal.
     Settled,
+    /// A compaction's model call was reserved in place of a turn's; its intent is committed
+    /// next. The summary's text is not delivered as deltas.
+    CompactionStarted,
+    /// A [`HistoryEntry::Compaction`] was recorded; its commit follows.
+    #[non_exhaustive]
+    Compacted {
+        /// Whether the model wrote the summary. `false` when its answer could not be used and
+        /// the engine built the summary from the covered entries instead.
+        summarized: bool,
+    },
 }
 pub(crate) fn now_ms() -> u64 {
     SystemTime::now()

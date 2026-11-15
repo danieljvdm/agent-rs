@@ -325,6 +325,71 @@ async fn adapters_do_not_retry_http_errors_or_expose_server_bodies() {
 }
 
 #[tokio::test]
+async fn adapters_report_a_request_too_large_for_the_context_window_without_quoting_it() {
+    // What OpenAI and the larger providers behind OpenAI-compatible endpoints answer when a
+    // request does not fit, and a body-less 413. None of these bodies is quoted.
+    let rejections = [
+        (
+            "400 Bad Request",
+            r#"{"error":{"code":"context_length_exceeded","message":"sensitive"}}"#,
+        ),
+        (
+            "400 Bad Request",
+            r#"{"error":{"type":"invalid_request_error","message":"prompt is too long: 213462 tokens > 200000 maximum"}}"#,
+        ),
+        (
+            "400 Bad Request",
+            r#"{"error":{"message":"The input token count (1196265) exceeds the maximum number of tokens allowed (1048575)."}}"#,
+        ),
+        (
+            "400 Bad Request",
+            r#"{"error":{"message":"This model's maximum context length is 131072 tokens. However, you requested 140000 tokens."}}"#,
+        ),
+        ("413 Payload Too Large", ""),
+    ];
+    for api in Api::ALL {
+        for (status, body) in rejections {
+            let (base, server) = serve_status(api, vec![body.into()], status, "application/json");
+            let error = match model(api, &base)
+                .stream(request(), CancellationToken::new())
+                .await
+            {
+                Err(error) => error,
+                Ok(_) => panic!("accepted {status}"),
+            };
+            assert!(
+                matches!(error, Error::ContextOverflow(_)),
+                "{body}: {error:?}"
+            );
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "context window exceeded: OpenAI: HTTP status {}",
+                    &status[..3]
+                )
+            );
+            server.join().unwrap();
+        }
+        // A rate limit that mentions tokens is not a context window.
+        let (base, server) = serve_status(
+            api,
+            vec![r#"{"error":{"code":"rate_limit_exceeded","message":"Rate limit reached for tokens per min"}}"#.into()],
+            "429 Too Many Requests",
+            "application/json",
+        );
+        let error = match model(api, &base)
+            .stream(request(), CancellationToken::new())
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("accepted a rate limit"),
+        };
+        assert!(matches!(error, Error::Provider(_)), "{error:?}");
+        server.join().unwrap();
+    }
+}
+
+#[tokio::test]
 async fn adapters_pre_cancel_without_connecting_and_drop_active_connections() {
     for api in Api::ALL {
         let cancel = CancellationToken::new();

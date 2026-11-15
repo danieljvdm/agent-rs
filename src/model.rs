@@ -77,8 +77,19 @@ pub struct ModelRequest {
     pub turn: u32,
     /// [`Limits::max_response_bytes`]: streamed text and the encoded response must each fit it.
     pub max_response_bytes: usize,
-    /// Remaining cumulative token allowance; providers should cap generated output accordingly.
+    /// Tokens the model may generate: what is left of the run's cumulative allowance, and no more
+    /// than the room the turn's prompt is estimated to leave in the agent's
+    /// [`ContextWindow`](crate::ContextWindow), if it has one. Providers should cap generated
+    /// output accordingly.
     pub remaining_tokens: u64,
+    /// Whether the model may call tools on this turn. `false` only for a compaction's summary
+    /// request, whose answer must be text. `tools` still lists the agent's tools, so the request
+    /// begins as the earlier turns' did and a provider's prompt cache serves it. An adapter
+    /// should forbid calls only in a way that keeps that cache: OpenAI and llama-server take
+    /// `tool_choice: "none"` without discarding it, while a provider whose cache is keyed on the
+    /// tool choice is better sent the request unchanged. A response with tool calls is not used
+    /// as a summary either way.
+    pub allow_tool_calls: bool,
 }
 impl ModelRequest {
     /// A first turn of `run_id` over `history`, for calling a model outside the engine, such as
@@ -99,6 +110,7 @@ impl ModelRequest {
             turn: 1,
             max_response_bytes: limits.max_response_bytes,
             remaining_tokens: limits.max_tokens,
+            allow_tool_calls: true,
         }
     }
 }
@@ -203,4 +215,18 @@ impl Model for ScriptedModel {
             .clone();
         Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
     }
+}
+
+/// Whether an output `schema` takes any string and nothing else: a `string` type with no
+/// constraint beside annotations. A model answers such a schema in plain text.
+pub(crate) fn takes_any_text(schema: &Value) -> bool {
+    schema.as_object().is_some_and(|fields| {
+        fields.get("type").and_then(Value::as_str) == Some("string")
+            && fields.keys().all(|key| {
+                matches!(
+                    key.as_str(),
+                    "type" | "$schema" | "title" | "description" | "$comment"
+                )
+            })
+    })
 }
