@@ -86,6 +86,8 @@ A tool can avoid the refusal by fitting the room it is given. `ToolContext::max_
 
 A refused result is discarded, although the tool ran, so give a tool whose output can be large a way to return less.
 
+A call whose tool may have an effect, one whose `RetryPolicy` is not `ReadOnly`, is never refused. Telling the model that a message it sent was not kept would invite it to send the message again. Such results are kept whatever their size, charged before any read-only result, and their calls are given the whole of `max_tool_output_bytes`; the read-only calls share what is left.
+
 The bound is in bytes at the estimated density, so it is as wrong as that estimate is. The reserve absorbs results up to a fifth denser than estimated.
 
 ## The summary call

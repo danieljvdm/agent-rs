@@ -1110,3 +1110,49 @@ async fn a_provider_that_counts_requested_output_against_the_window_is_not_overr
     );
     assert_eq!(model.requests().len(), 2, "no request was rejected");
 }
+
+#[tokio::test]
+async fn a_result_of_a_call_with_an_effect_is_always_kept() {
+    // Two reads that fit the turn's room with too little left, then a send. Refusing the send's
+    // result, as call order alone would, would tell the model to ask again for a message that
+    // was already delivered, so its result is kept
+    // and charged first, and the read that no longer fits is refused instead.
+    let send = typed_tool::<String, String, _, _>(
+        ToolSpec::new("send", "1").with_retry(RetryPolicy::Never),
+        |_, _| async { Ok(ToolOutput::Complete(format!("sent: {}", "s".repeat(194)))) },
+    );
+    let call = |id: &str, name: &str, arguments: Value| ToolCall {
+        id: id.into(),
+        name: name.into(),
+        arguments,
+    };
+    let model = Script::new(move |request, _| {
+        Ok(match request.history.last() {
+            Some(HistoryEntry::Exchange { .. }) => answer(),
+            _ => ModelResponse::tools(vec![
+                call("first", "read", json!(6_000)),
+                call("second", "read", json!(4_500)),
+                call("send", "send", json!("Running late")),
+            ]),
+        })
+    });
+    let agent = builder(model.clone())
+        .tool(send)
+        .context_window(window())
+        .build()
+        .unwrap();
+    let mut state = agent
+        .new_run("c", json!("Read two, then tell them"), &[], None)
+        .unwrap();
+    drive(&agent, &mut state).await;
+    assert!(matches!(
+        state.phase,
+        Phase::Settled(Settlement::Completed(_))
+    ));
+    let HistoryEntry::Exchange { results, .. } = &state.history[1] else {
+        panic!("not an exchange")
+    };
+    let refused: Vec<bool> = results.iter().map(|result| result.is_error).collect();
+    assert_eq!(refused, [false, true, false]);
+    assert!(results[2].value.as_str().unwrap().starts_with("sent: "));
+}

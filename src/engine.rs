@@ -1909,12 +1909,12 @@ async fn complete_due_waits(
     Ok(())
 }
 /// Once every operation is complete, appends the exchange to history and returns to the model.
-/// Records the batch as an exchange once every operation has a result.
 ///
-/// `budget` is the bytes of results the context window has room for. Results are recorded in
-/// call order while they fit; one that does not is recorded as an error that tells the model how
-/// much room there is, since an exchange is always sent whole and one larger than the window
-/// could never be sent at all.
+/// `budget` is the bytes of results the context window has room for. An exchange is always sent
+/// whole, so one larger than the window could never be sent at all. The results of calls that
+/// may have had an effect are always kept and are charged first: refusing one would invite the
+/// model to repeat the effect. Read-only results are then kept in call order while they fit, and
+/// one that does not is recorded as an error that tells the model how much room there is.
 async fn finish_tool_batch(
     state: &mut RunState,
     checkpoint: &dyn Checkpoint,
@@ -1928,20 +1928,31 @@ async fn finish_tool_batch(
     {
         return Ok(());
     }
-    let results = state.operations.iter().map(|op| match &op.status {
-        OperationStatus::Complete(result) => result,
+    let result = |op: &Operation| match &op.status {
+        OperationStatus::Complete(result) => result.clone(),
         _ => unreachable!(),
+    };
+    let effect = |op: &Operation| op.spec.retry != RetryPolicy::ReadOnly;
+    let mut left = budget.map(|budget| {
+        let effects: usize = (state.operations.iter())
+            .filter(|op| effect(op))
+            .map(|op| encoded_len(&result(op).value))
+            .sum();
+        budget.saturating_sub(effects)
     });
-    let mut left = budget;
-    let results = results
-        .map(|result| {
+    let results = (state.operations.iter())
+        .map(|op| {
+            let result = result(op);
             let (Some(budget), Some(left)) = (budget, left.as_mut()) else {
-                return result.clone();
+                return result;
             };
+            if effect(op) {
+                return result;
+            }
             let bytes = encoded_len(&result.value);
             if bytes <= *left {
                 *left -= bytes;
-                return result.clone();
+                return result;
             }
             ToolResult {
                 call_id: result.call_id.clone(),
@@ -2090,12 +2101,17 @@ impl Window {
     /// The output bytes the call at `index` may return, now that it starts: its even share of
     /// what the batch's results have left, given the results already recorded and the shares of
     /// calls still running, and never more than `max_tool_output_bytes`. Recorded results are
-    /// durable, so a resumed batch gives the same room to what is left of it.
+    /// durable, so a resumed batch gives the same room to what is left of it. A call that may
+    /// have an effect is given the whole limit, since its result is always kept.
     fn give(&mut self, state: &RunState, index: usize) -> usize {
         let limit = state.limits.max_tool_output_bytes;
         let Some(budget) = self.result_budget else {
             return limit;
         };
+        if state.operations[index].spec.retry != RetryPolicy::ReadOnly {
+            self.given.push((index, 0));
+            return limit;
+        }
         let given: usize = self.given.iter().map(|(_, bytes)| bytes).sum();
         let mut recorded = 0;
         let mut waiting = 0_usize;

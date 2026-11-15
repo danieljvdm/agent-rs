@@ -29,7 +29,8 @@ pub struct ToolContext {
     /// turn's results have left: the room less what the batch's finished calls returned and what
     /// its running calls were given, split evenly over the calls still to start. A tool that can
     /// return less, such as a smaller page, should fit it. A larger output is recorded as an
-    /// error, so the model is told to ask for less.
+    /// error, so the model is told to ask for less. A tool that may have an effect (any
+    /// [`RetryPolicy`] but `ReadOnly`) is given the whole limit, and its output is always kept.
     pub max_output_bytes: usize,
 }
 impl ToolContext {
