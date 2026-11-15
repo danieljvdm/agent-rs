@@ -1,5 +1,5 @@
 ---
-default: minor
+default: major
 ---
 
 # Describe tool results with an output schema
