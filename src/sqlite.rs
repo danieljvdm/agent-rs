@@ -103,9 +103,22 @@ struct Counters {
     writes: AtomicU64,
 }
 struct Database {
+    // Fields drop in order: the connection closes before the lock is released.
     connection: Connection,
-    _lock: File,
+    _lock: ProcessLock,
     counters: Arc<Counters>,
+}
+/// The store's exclusive lock on its `.lock` file, released explicitly when dropped.
+///
+/// Closing the file alone is not enough: on Unix the lock belongs to the open file description,
+/// and a process the host spawns at the wrong moment holds a duplicate of the descriptor until
+/// it execs (std opens files close-on-exec, which closes it only then). Unlocking releases the
+/// lock for every duplicate, so a closed store can be reopened at once.
+struct ProcessLock(File);
+impl Drop for ProcessLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
 }
 struct Worker {
     sender: Option<mpsc::Sender<Job>>,
@@ -332,11 +345,12 @@ impl Database {
             .open(PathBuf::from(lock_path))
             .map_err(Error::storage)?;
         // An exclusive, non-blocking lock (flock on Unix, LockFileEx on Windows), released when
-        // the file closes: when the store's worker drops the database, or the process exits.
+        // the worker drops the database, including when opening fails below, or the process exits.
         lock.try_lock().map_err(|error| match error {
             TryLockError::WouldBlock => Error::StoreBusy,
             TryLockError::Error(error) => Error::storage(error),
         })?;
+        let lock = ProcessLock(lock);
         let connection = Connection::open(canonical).map_err(Error::storage)?;
         if let Some(key) = &options.key {
             apply_key(&connection, key)?;
@@ -1309,5 +1323,22 @@ mod tests {
         assert_eq!(db.status(id).await.unwrap().history, state.history);
         assert_eq!(db.history("c").await.unwrap(), state.history);
         db.close().await.unwrap();
+    }
+
+    /// A process spawned while the store is open holds a duplicate of the lock file's descriptor
+    /// until it execs. Closing the store must still release the lock.
+    #[tokio::test]
+    async fn close_releases_the_lock_while_a_duplicate_descriptor_is_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("dup.sqlite");
+        let db = SqliteStore::open(&path).await.unwrap();
+        let inherited = db
+            .call(|database| database._lock.0.try_clone().map_err(Error::storage))
+            .await
+            .unwrap();
+        db.close().await.unwrap();
+        let reopened = SqliteStore::open(&path).await.unwrap();
+        reopened.close().await.unwrap();
+        drop(inherited);
     }
 }
