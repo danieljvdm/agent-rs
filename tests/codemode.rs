@@ -101,6 +101,52 @@ fn child(state: &RunState) -> &RunState {
     &state.children[0].state
 }
 
+#[tokio::test]
+async fn a_call_without_a_code_string_is_an_error_the_model_can_correct() {
+    let executions = counter();
+    let call = |id: &str, arguments: Value| {
+        ModelResponse::tools(vec![ToolCall {
+            id: id.into(),
+            name: "code".into(),
+            arguments,
+        }])
+    };
+    // A model that names the argument wrongly, then sends a number, then writes the call properly.
+    let model = ScriptedModel::new(vec![
+        call("first", json!({"description": "await search({q: 'a'})"})),
+        call("second", json!({"code": 7})),
+        call(
+            "third",
+            json!({"code": "return (await search({q: 'a'})).hits.length;"}),
+        ),
+        ModelResponse::final_output(json!("done")),
+    ]);
+    let agent = Agent::builder("parent", Arc::new(model))
+        .subagents(
+            1,
+            [code_mode(vec![search(executions.clone())]).build().unwrap()],
+        )
+        .build()
+        .unwrap();
+    let (result, state) = run(&agent).await;
+    assert_eq!(result.unwrap(), json!("done"));
+    let results: Vec<&ToolResult> = (state.history.iter())
+        .filter_map(|entry| match entry {
+            HistoryEntry::Exchange { results, .. } => results.first(),
+            _ => None,
+        })
+        .collect();
+    let first = results[0].value["error"].as_str().unwrap();
+    assert!(
+        results[0].is_error && first.contains("the properties `description`"),
+        "{first}"
+    );
+    assert!(first.contains("`code`"), "{first}");
+    assert!(results[1].is_error, "{:?}", results[1]);
+    assert!(!results[2].is_error, "{:?}", results[2]);
+    assert_eq!(executions.load(Ordering::SeqCst), 1);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Step 1: the replay driver, against a runtime that plays a fixed list of steps.
 
@@ -1279,10 +1325,13 @@ async fn model_and_tool_call_limits_stop_the_script() {
             child(&state).phase,
             Phase::Settled(Settlement::Stopped(reason.clone()))
         );
-        assert_eq!(
-            delegated(&state).value,
-            json!({"error": format!("stopped: {reason}")})
+        let error = delegated(&state).value["error"].as_str().unwrap();
+        assert!(
+            error.starts_with(&format!("stopped: {reason}. ")),
+            "{error}"
         );
+        // The script's author cannot see the limit: the error says what to change.
+        assert!(error.contains("Make fewer"), "{error}");
         assert!(delegated(&state).is_error);
     }
 }
@@ -1370,10 +1419,41 @@ fn declarations_render_each_kind_of_schema() {
         (json!({"$ref": "#/$defs/Missing"}), "unknown"),
         (json!({"$ref": "https://example.com/schema"}), "unknown"),
         (json!({"$ref": "#", "type": "object"}), "unknown"),
+        // A reference is not a level of nesting: a page of items of participants, each named.
+        (
+            json!({"$ref": "#/$defs/Page", "$defs": {
+                "Page": {"type": "object", "required": ["data"], "properties": {
+                    "data": {"type": "array", "items": {"$ref": "#/$defs/Item"}}}},
+                "Item": {"type": "object", "required": ["id", "people"], "properties": {
+                    "id": {"type": "integer"},
+                    "people": {"type": "array", "items": {"$ref": "#/$defs/Person"}}}},
+                "Person": {"type": "object", "required": ["ids"], "properties": {
+                    "ids": {"type": "array", "items": {"$ref": "#/$defs/Id"}}}},
+                "Id": {"type": "integer"},
+            }}),
+            "{\n  data: {\n    id: number;\n    people: {\n      ids: number[];\n    }[];\n  }[];\n}",
+        ),
+        // A schema that refers to itself ends where it does.
+        (
+            json!({"$ref": "#/$defs/Node", "$defs": {"Node": {"type": "object", "properties": {
+                "next": {"$ref": "#/$defs/Node"}}}}}),
+            "{\n  next?: unknown;\n}",
+        ),
     ];
     for (schema, expected) in cases {
         assert_eq!(input_type(&schema), expected, "{schema}");
     }
+    let mut deep = json!({"type": "string"});
+    for _ in 0..12 {
+        deep = json!({"type": "object", "properties": {"n": deep}});
+    }
+    let deep = input_type(&json!({"type": "object", "required": ["id"],
+        "properties": {"id": {"type": "integer"}, "deep": deep}}));
+    assert!(
+        deep.contains("id: number;"),
+        "a part nested too deeply keeps the rest: {deep}"
+    );
+    assert!(deep.contains("n?: unknown;"), "{deep}");
     let wide: serde_json::Map<String, Value> = (0..400)
         .map(|n| (format!("field_{n}"), json!({"type": "string"})))
         .collect();
@@ -1460,6 +1540,28 @@ fn find_contacts() -> Arc<dyn Tool> {
             next: None,
         }))
     })
+}
+#[test]
+fn a_result_type_several_tools_share_is_declared_once() {
+    let named = |name: &str| {
+        typed_tool::<Query, Contacts, _, _>(spec(name), |_, _| async {
+            Ok(ToolOutput::Complete(Contacts {
+                data: vec![],
+                next: None,
+            }))
+        })
+    };
+    let text = description(&[
+        named("find_contacts"),
+        named("list_contacts"),
+        search(counter()),
+    ]);
+    assert_eq!(text.matches("type Contacts = {\n").count(), 1, "{text}");
+    assert_eq!(text.matches("): Promise<Contacts>;\n").count(), 2, "{text}");
+    assert!(text.contains("}): Promise<unknown>;\n"), "{text}");
+    // One tool's type stays where it is used.
+    let alone = description(&[named("find_contacts"), search(counter())]);
+    assert!(!alone.contains("type Contacts"), "{alone}");
 }
 /// A tool around another, as an application writes to add its own cleanup or audit.
 struct Wrapped(Arc<dyn Tool>, bool);

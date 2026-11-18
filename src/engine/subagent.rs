@@ -289,7 +289,13 @@ pub(super) fn prepare(
         // A sibling may still return budget; try again when it finishes.
         return Err(Admission::Wait);
     }
-    let message = format!("child allocation does not fit the remaining budget: {reason}");
+    // The model reads this, and repeating the call cannot succeed.
+    let message = format!(
+        "child allocation does not fit the remaining budget: {reason}. `{}` cannot run again in \
+         this run. Do not call it again: answer from the results already returned, or say what \
+         could not be completed.",
+        subagent.spec.name
+    );
     state.operations[index].status = OperationStatus::Complete(ToolResult {
         call_id: op.call.id.clone(),
         value: error_value(&message, state.limits.max_tool_output_bytes),

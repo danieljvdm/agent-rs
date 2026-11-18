@@ -1,14 +1,18 @@
 //! What the model is told about code mode: each allowed tool as a TypeScript declaration, after a
 //! fixed description of the contract. Rendering never fails; a schema it cannot render, or one
-//! too large, becomes `unknown`, as does the result of a tool with no output schema.
+//! too large, becomes `unknown`, as does the result of a tool with no output schema. A part nested
+//! too deeply, or one that refers back to itself, is `unknown` on its own.
 use crate::{Tool, ToolSpec};
 use serde_json::{Map, Value};
 use std::{fmt::Write, sync::Arc};
 
 /// Bytes one input or result type may take before it is declared `unknown`.
 const MAX_TYPE_BYTES: usize = 4 * 1024;
-/// How deep a type may nest, counting `$ref`s followed, before it is `unknown`.
+/// How deep a type may nest before the part below is `unknown`. Following a `$ref` is not a
+/// level: a schema generator names every struct, and naming one does not nest it.
 const MAX_DEPTH: usize = 8;
+/// Bytes a result type takes before functions that share it refer to one declaration of it.
+const MIN_SHARED_BYTES: usize = 64;
 
 /// Words a tool function must not be named, because the language reserves them or because the
 /// script needs the global they name.
@@ -132,12 +136,40 @@ Functions:
 ";
 
 /// The description of a code mode tool for `tools`: the fixed contract, then one declaration per
-/// tool. Byte-stable for a given list of specs and output schemas.
+/// tool. A result type that several tools share is declared once, before the functions, and they
+/// refer to it by name. Byte-stable for a given list of specs and output schemas.
 pub fn description(tools: &[Arc<dyn Tool>]) -> String {
     let mut out = String::from(PREAMBLE);
     out.push_str("```ts\n");
-    for tool in tools {
-        out.push_str(&declaration(tool.spec(), tool.output_schema()));
+    let outputs: Vec<String> = (tools.iter())
+        .map(|tool| (tool.output_schema()).map_or_else(|| "unknown".into(), output_type))
+        .collect();
+    let functions: Vec<String> = (tools.iter())
+        .map(|tool| identifier(&tool.spec().name))
+        .collect();
+    let mut shared: Vec<(&str, String)> = Vec::new();
+    for (index, output) in outputs.iter().enumerate() {
+        if output.len() < MIN_SHARED_BYTES
+            || shared.iter().any(|(ty, _)| ty == output)
+            || !outputs[index + 1..].contains(output)
+        {
+            continue;
+        }
+        let title = (tools[index].output_schema())
+            .and_then(|schema| schema.get("title"))
+            .and_then(Value::as_str)
+            .filter(|title| is_identifier(title) && !RESERVED.contains(title))
+            .filter(|title| !functions.iter().any(|name| name == title))
+            .filter(|title| !shared.iter().any(|(_, name)| name == title));
+        let name = title.map_or_else(|| format!("Result{}", shared.len() + 1), str::to_owned);
+        let _ = writeln!(out, "type {name} = {output};");
+        shared.push((output, name));
+    }
+    for (tool, output) in tools.iter().zip(&outputs) {
+        let output = (shared.iter())
+            .find(|(ty, _)| ty == output)
+            .map_or(output.as_str(), |(_, name)| name);
+        out.push_str(&declare(tool.spec(), output));
     }
     out.push_str("```\n");
     out
@@ -146,11 +178,17 @@ pub fn description(tools: &[Arc<dyn Tool>]) -> String {
 /// One tool's declaration, with its description as a doc comment. The function resolves to the
 /// type of `output_schema`, the tool's [`Tool::output_schema`], or to `unknown` without one.
 pub fn declaration(spec: &ToolSpec, output_schema: Option<&Value>) -> String {
+    declare(
+        spec,
+        &output_schema.map_or_else(|| "unknown".into(), output_type),
+    )
+}
+
+fn declare(spec: &ToolSpec, output: &str) -> String {
     let mut out = String::new();
     doc_comment(&mut out, &spec.description, "");
     let name = identifier(&spec.name);
     let schema = &spec.input_schema;
-    let output = output_schema.map_or_else(|| "unknown".into(), output_type);
     if is_empty_object(schema) {
         let _ = writeln!(out, "declare function {name}(): Promise<{output}>;");
     } else {
@@ -176,7 +214,10 @@ pub fn output_type(schema: &Value) -> String {
 }
 
 fn schema_type(schema: &Value) -> String {
-    let mut renderer = Renderer { root: schema };
+    let mut renderer = Renderer {
+        root: schema,
+        following: Vec::new(),
+    };
     match renderer.render(schema, 0, "") {
         Some(ty) if ty.len() <= MAX_TYPE_BYTES => ty,
         _ => "unknown".into(),
@@ -219,13 +260,16 @@ fn is_empty_object(schema: &Value) -> bool {
 
 struct Renderer<'a> {
     root: &'a Value,
+    /// The references being followed, so that a schema which refers to itself ends.
+    following: Vec<&'a str>,
 }
 impl<'a> Renderer<'a> {
-    /// Renders `schema`, or `None` if any part of it cannot be rendered. Nested types are
-    /// indented by `indent`.
+    /// Renders `schema`, or `None` if any part of it cannot be rendered. A part nested deeper
+    /// than `MAX_DEPTH`, or a reference back to a schema being rendered, is `unknown`. Nested
+    /// types are indented by `indent`.
     fn render(&mut self, schema: &'a Value, depth: usize, indent: &str) -> Option<String> {
         if depth > MAX_DEPTH {
-            return None;
+            return Some("unknown".into());
         }
         let object = match schema {
             Value::Bool(true) => return Some("unknown".into()),
@@ -234,8 +278,15 @@ impl<'a> Renderer<'a> {
             _ => return None,
         };
         if let Some(reference) = object.get("$ref") {
-            let target = self.resolve(reference.as_str()?)?;
-            return self.render(target, depth + 1, indent);
+            let reference = reference.as_str()?;
+            if self.following.contains(&reference) {
+                return Some("unknown".into());
+            }
+            let target = self.resolve(reference)?;
+            self.following.push(reference);
+            let rendered = self.render(target, depth, indent);
+            self.following.pop();
+            return rendered;
         }
         if let Some(value) = object.get("const") {
             return literal(value);
