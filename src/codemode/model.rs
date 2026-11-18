@@ -120,6 +120,11 @@ impl Model for ScriptModel {
         let inner = self.inner.clone();
         let history = request.history;
         let max_response_bytes = request.max_response_bytes;
+        if let Some(error) = invalid_input(&history) {
+            let response =
+                ModelResponse::final_output(json!({"error": error, "logs": [], "calls": []}));
+            return Ok(Box::pin(stream::iter([Ok(ModelEvent::Response(response))])));
+        }
         let (done, finished) = oneshot::channel::<()>();
         (self.inner.running.lock())
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -148,6 +153,30 @@ impl Model for ScriptModel {
         }
         Ok(())
     }
+}
+
+/// What to tell the model that called the tool without a `code` string: what it sent and what the
+/// tool takes. `None` for a usable input, and for a history the journal will refuse.
+fn invalid_input(history: &[HistoryEntry]) -> Option<String> {
+    let Some(HistoryEntry::Input(input)) = history.first() else {
+        return None;
+    };
+    if input.get("code").is_some_and(Value::is_string) {
+        return None;
+    }
+    let received = match input {
+        Value::Object(fields) if fields.is_empty() => "an empty object".to_owned(),
+        Value::Object(fields) => {
+            let mut names: Vec<&str> = fields.keys().map(String::as_str).take(8).collect();
+            names.sort_unstable();
+            format!("the properties `{}`", names.join("`, `"))
+        }
+        _ => "a value that is not an object".to_owned(),
+    };
+    Some(format!(
+        "invalid input: nothing ran. The input must be an object whose `code` property is a \
+         string of JavaScript; it was {received}. Call again with the JavaScript in `code`."
+    ))
 }
 
 /// The final response of a script that ended, within `max_bytes`: an output too large for it,

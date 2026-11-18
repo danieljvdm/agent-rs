@@ -49,19 +49,34 @@ pub use runtime::{
 };
 
 use crate::{
-    Agent, AllowAll, Authorizer, ChildOutcome, ChildResult, Limits, Result, Subagent, Tool,
+    Agent, AllowAll, Authorizer, ChildOutcome, ChildResult, Limits, Result, StopReason, Subagent,
+    Tool,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 
+// The doc comment is the schema's description, which the model reads: keep it to that.
+// Deserializing accepts any JSON, because a model's malformed call should come back to it as an
+// error it can correct, not fail the run. `ScriptModel` answers an input without a `code` string.
 /// The input of a code mode tool.
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, JsonSchema)]
 struct CodeInput {
     /// The body of an async JavaScript function that calls the declared functions and returns
     /// the result.
     code: String,
+}
+impl<'de> Deserialize<'de> for CodeInput {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let input = Value::deserialize(deserializer)?;
+        let code = input.get("code").and_then(Value::as_str);
+        Ok(Self {
+            code: code.unwrap_or_default().to_owned(),
+        })
+    }
 }
 
 /// The limits a code mode child runs within unless [`CodeMode::limits`] sets others: 16 model
@@ -156,14 +171,31 @@ impl CodeMode {
 }
 
 /// The delegation's tool result: the script's own output, an error if it threw, or an error
-/// naming how the child ended otherwise.
+/// naming how the child ended otherwise. A script stopped by a limit on its calls is told what it
+/// can change, since its author cannot see the limit.
 fn result(result: ChildResult<Value>) -> (Value, bool) {
+    let rounds = result.usage.model_calls;
     match result.outcome {
         ChildOutcome::Completed(output) => {
             let threw = output.get("error").is_some();
             (output, threw)
         }
-        ChildOutcome::Stopped(reason) => (json!({"error": format!("stopped: {reason}")}), true),
+        ChildOutcome::Stopped(reason) => {
+            let advice = match reason {
+                StopReason::ModelCalls => format!(
+                    ". The code was stopped after {rounds} rounds of calls and returned nothing. \
+                     Each call awaited on its own is a round. Make fewer: ask each call for more \
+                     at once, such as a larger page, or await independent calls together with \
+                     `Promise.all`."
+                ),
+                StopReason::ToolCalls => ". The code made more calls than it may and returned \
+                     nothing. Make fewer: ask each call for more at once, such as a larger page, \
+                     or narrow what it asks for."
+                    .into(),
+                _ => String::new(),
+            };
+            (json!({"error": format!("stopped: {reason}{advice}")}), true)
+        }
         ChildOutcome::Failed(message) => (json!({"error": format!("failed: {message}")}), true),
         ChildOutcome::Cancelled => (json!({"error": "cancelled"}), true),
     }
