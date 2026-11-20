@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.3 (2026-11-20)
+
+### Features
+
+#### Add `CodeMode::description`
+
+`CodeMode::description(text)` replaces the parent tool description, so callers that discover action signatures on demand can keep the prompt short while keeping `CodeMode`'s child result mapping.
+
 ## 0.2.2 (2026-11-18)
 
 ### Fixes
