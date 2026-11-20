@@ -1865,3 +1865,38 @@ async fn shutdown_mid_replay_leaves_the_child_resumable_and_cancellation_settles
         assert_eq!(executions.load(Ordering::SeqCst), 2);
     }
 }
+
+#[tokio::test]
+async fn custom_description_preserves_codemode_result_mapping() {
+    let custom = "Run compact JS against discovered tools.";
+    let code = code_mode(vec![search(counter())])
+        .description(custom)
+        .build()
+        .unwrap();
+    assert_eq!(code.spec().description, custom);
+
+    // Success returns {result, logs} directly without child_run_id/parent_run_id/usage envelope.
+    let agent = parent(code.clone(), "return { ok: true };");
+    let mut state = agent.new_run("c", json!("go"), &[], None).unwrap();
+    agent
+        .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+        .await
+        .unwrap();
+    let ok = delegated(&state);
+    assert!(!ok.is_error);
+    assert_eq!(ok.value, json!({"result": {"ok": true}, "logs": []}));
+    assert!(ok.value.get("child_run_id").is_none());
+    assert!(ok.value.get("usage").is_none());
+
+    // Thrown script returns is_error=true with error text and no envelope fields.
+    let agent = parent(code, "throw new Error('boom');");
+    let mut state = agent.new_run("c", json!("go"), &[], None).unwrap();
+    agent
+        .drive(&mut state, &MemoryCheckpoint, RunControl::default())
+        .await
+        .unwrap();
+    let err = delegated(&state);
+    assert!(err.is_error);
+    assert!(err.value["error"].as_str().unwrap().contains("boom"));
+    assert!(err.value.get("child_run_id").is_none());
+}
