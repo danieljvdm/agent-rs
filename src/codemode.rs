@@ -95,6 +95,7 @@ pub fn default_limits() -> Limits {
 #[must_use = "a code mode builder does nothing until `build` is called"]
 pub struct CodeMode {
     name: String,
+    description: Option<String>,
     tools: Vec<Arc<dyn Tool>>,
     authorizer: Arc<dyn Authorizer>,
     limits: Limits,
@@ -107,12 +108,19 @@ impl CodeMode {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            description: None,
             tools: Vec::new(),
             authorizer: Arc::new(AllowAll),
             limits: default_limits(),
             script_limits: ScriptLimits::default(),
             runtime: Arc::new(QuickJs),
         }
+    }
+    /// Overrides the tool description offered to the parent's model. Defaults to [`description`]
+    /// over the registered tools.
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
     }
     /// Adds tools the script may call, after any added before. Only these are declared to the
     /// model and callable; a tool of the parent is not, unless it is added here too.
@@ -144,19 +152,21 @@ impl CodeMode {
         self
     }
     /// Builds the child agent and the subagent that delegates to it. Its description is the
-    /// [`description`] of the tools. Fails with [`Error::Config`](crate::Error::Config) as
+    /// [`description`] of the tools unless overridden with [`CodeMode::description`]. Fails with
+    /// [`Error::Config`](crate::Error::Config) as
     /// [`AgentBuilder::build`](crate::AgentBuilder::build) does, or if two tools map to the same
     /// function name.
     pub fn build(self) -> Result<Subagent> {
         let Self {
             name,
+            description,
             tools,
             authorizer,
             limits,
             script_limits,
             runtime,
         } = self;
-        let description = description(&tools);
+        let description = description.unwrap_or_else(|| self::description(&tools));
         let model = ScriptModel::new(runtime, tools.iter().cloned(), script_limits)?;
         let agent = Agent::builder("codemode", Arc::new(model))
             .tools(tools)
