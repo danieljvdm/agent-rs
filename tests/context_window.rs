@@ -38,13 +38,12 @@ const SLIDING_COLD_REQUESTS: usize = 15;
 const WINDOW_TOKENS: u64 = (MAX_CONTEXT_BYTES / BYTES_PER_TOKEN) as u64;
 // With a context window the conversation is compacted when a prompt would leave less than the
 // window's reserve. Every prompt extends the one before it except the first after a compaction,
-// which starts from the summary: three summary requests buy an 81% cut in bytes evaluated again.
-// (Keeping 30% of the window through a compaction instead of 15% made it five, and 62,791 bytes.)
-const COMPACTIONS: usize = 3;
-const COMPACTED_REQUESTS: usize = 51;
-const COMPACTED_SENT_BYTES: usize = 338_053;
-const COMPACTED_COLD_BYTES: usize = 45_854;
-const COMPACTED_LARGEST_REQUEST_BYTES: usize = 11_675;
+// which starts from the summary: five summary requests buy an 81% cut in bytes evaluated again.
+const COMPACTIONS: usize = 5;
+const COMPACTED_REQUESTS: usize = 53;
+const COMPACTED_SENT_BYTES: usize = 259_655;
+const COMPACTED_COLD_BYTES: usize = 46_750;
+const COMPACTED_LARGEST_REQUEST_BYTES: usize = 8_293;
 
 /// The summary the scripted model writes when it is asked for one.
 const SUMMARY: &str = "## Goal\nRead the schedule.\n\n## Requirements\n(none)\n\n## Progress\nPages were read and answered.\n\n## Open items\n(none)\n\n## Key details\nThe schedule is on the pages.";
@@ -528,7 +527,8 @@ async fn a_second_compaction_carries_the_first_summary_forward() {
 
 #[tokio::test]
 async fn reported_usage_decides_when_to_compact() {
-    // Six earlier runs are about 3,100 tokens by their bytes, under the 4,096 that compacts.
+    // Three earlier runs are about 1,600 tokens by their bytes, leaving more than the reserve
+    // even after a tool read and with the half-again margin on unmeasured bytes.
     for reported in [None, Some(TokenUsage::new(4_000, 20))] {
         let usage = reported.clone();
         let model = Script::new(move |request, n| {
@@ -544,7 +544,7 @@ async fn reported_usage_decides_when_to_compact() {
             .limits(Limits::default().with_max_tokens(1_000_000))
             .build()
             .unwrap();
-        let prior = earlier_runs(6);
+        let prior = earlier_runs(3);
         let mut state = agent.new_run("c", json!("And now?"), &prior, None).unwrap();
         drive(&agent, &mut state).await;
         assert!(matches!(
@@ -574,7 +574,7 @@ async fn a_rejected_turn_is_compacted_and_made_again_once() {
         .context_window(window())
         .build()
         .unwrap();
-    let prior = earlier_runs(6);
+    let prior = earlier_runs(4);
     let mut state = agent.new_run("c", json!("And now?"), &prior, None).unwrap();
     drive(&agent, &mut state).await;
     assert!(matches!(
@@ -1155,4 +1155,121 @@ async fn a_result_of_a_call_with_an_effect_is_always_kept() {
     let refused: Vec<bool> = results.iter().map(|result| result.is_error).collect();
     assert_eq!(refused, [false, true, false]);
     assert!(results[2].value.as_str().unwrap().starts_with("sent: "));
+}
+
+#[tokio::test]
+async fn multi_run_conversation_never_wedges_in_the_compaction_dead_zone() {
+    // Reproduces the live 32,768-token window dead zone:
+    // ContextWindow::new(32_768) has reserve_tokens = 4,915 (compact_at = 27,853).
+    // Across runs, a conversation grows past ~62 KB (~21,845 estimated tokens at 3 B/tok,
+    // ~18,600 actual tokens at ~3.3 B/tok) and eventually past 27,853 tokens.
+    // Neither chat turns nor summary requests may ever clamp remaining_tokens below
+    // their reserve (let alone to 1) before compaction triggers.
+    let window = ContextWindow::new(32_768);
+    assert_eq!(window.reserve_tokens, 4_915);
+
+    let model = Script::new(move |request, _n| {
+        let sent = serde_json::to_vec(&request.history).unwrap().len() as u64;
+        // ~3.33 bytes/token, matching real prose/JSON mix observed on lokld.
+        let prompt_tokens = sent * 3 / 10;
+        if asks_for_summary(request) {
+            assert!(
+                request.remaining_tokens >= window.summary_tokens,
+                "summary request starved of output room: remaining_tokens={}, prompt_tokens={prompt_tokens}",
+                request.remaining_tokens,
+            );
+            return Ok(ModelResponse::final_output(json!(SUMMARY))
+                .with_usage(TokenUsage::new(prompt_tokens, 80)));
+        }
+        assert!(
+            request.remaining_tokens >= window.reserve_tokens,
+            "chat turn entered compaction dead zone: remaining_tokens={} < reserve_tokens={} (sent={sent}B, prompt_tokens={prompt_tokens})",
+            request.remaining_tokens,
+            window.reserve_tokens,
+        );
+        Ok(
+            ModelResponse::final_output(json!(format!("Reply: {}", "a".repeat(3_600))))
+                .with_usage(TokenUsage::new(prompt_tokens, 1_000)),
+        )
+    });
+
+    let agent = Agent::builder("chat", model.clone())
+        .instructions("Answer concisely.")
+        .context_window(window.clone())
+        .limits(Limits::default().with_max_tokens(1_000_000))
+        .input::<String>()
+        .output::<String>()
+        .build()
+        .unwrap();
+
+    let mut conversation = Conversation::default();
+    for run in 0..30 {
+        let input = format!("Turn {run}: {}", "u".repeat(400));
+        let reply = agent.run(&mut conversation, input).await.unwrap();
+        assert!(reply.starts_with("Reply: "));
+    }
+    assert!(
+        compactions(&conversation.history) >= 1,
+        "conversation should have compacted cleanly over 30 runs"
+    );
+    // Carrying forward prior run usage lets the conversation grow past the old 66.7% dead zone
+    // (~65 KB / ~21,845 byte-estimated tokens) before compacting near 85%.
+    let max_sent_bytes = model
+        .requests()
+        .iter()
+        .filter(|r| !asks_for_summary(r))
+        .map(|r| serde_json::to_vec(&r.history).unwrap().len())
+        .max()
+        .unwrap();
+    assert!(
+        max_sent_bytes > 70_000,
+        "prior run usage should prevent premature compaction: max_sent_bytes={max_sent_bytes}"
+    );
+}
+
+#[tokio::test]
+async fn unmeasured_multi_run_conversation_compacts_before_output_room_falls_below_reserve() {
+    // Even when a provider reports no usage (estimate.uncertain == estimate.tokens),
+    // compaction must trigger before output_room drops below reserve_tokens.
+    let window = ContextWindow::new(32_768);
+    let model = Script::new(move |request, _n| {
+        if asks_for_summary(request) {
+            assert!(
+                request.remaining_tokens >= window.summary_tokens,
+                "summary request starved of output room: remaining_tokens={}",
+                request.remaining_tokens,
+            );
+            return Ok(ModelResponse::final_output(json!(SUMMARY)));
+        }
+        assert!(
+            request.remaining_tokens >= window.reserve_tokens,
+            "unmeasured chat turn entered compaction dead zone: remaining_tokens={} < reserve_tokens={}",
+            request.remaining_tokens,
+            window.reserve_tokens,
+        );
+        Ok(ModelResponse::final_output(json!(format!(
+            "Reply: {}",
+            "a".repeat(3_600)
+        ))))
+    });
+
+    let agent = Agent::builder("chat", model.clone())
+        .instructions("Answer concisely.")
+        .context_window(window)
+        .limits(Limits::default().with_max_tokens(1_000_000))
+        .input::<String>()
+        .output::<String>()
+        .build()
+        .unwrap();
+
+    let mut conversation = Conversation::default();
+    for run in 0..25 {
+        let input = format!("Turn {run}: {}", "u".repeat(400));
+        let reply = agent.run(&mut conversation, input).await.unwrap();
+        assert!(reply.starts_with("Reply: "));
+    }
+    assert!(
+        compactions(&conversation.history) >= 1,
+        "unmeasured conversation should have compacted before starving output_room"
+    );
 }

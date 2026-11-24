@@ -28,10 +28,10 @@ So the context is append-only between compactions, and every change to earlier c
 
 | | Byte limit only | Context window |
 | --- | --- | --- |
-| Requests | 48 | 51, three of them summary requests |
-| Bytes sent | 598,867 | 338,053 |
-| Bytes after the prefix shared with the previous request | 244,387 | 45,854 |
-| Requests that reuse under a quarter of the prompt before them | 15 | 3, each the first after a compaction |
+| Requests | 48 | 53, five of them summary requests |
+| Bytes sent | 598,867 | 259,655 |
+| Bytes after the prefix shared with the previous request | 244,387 | 46,750 |
+| Requests that reuse under a quarter of the prompt before them | 15 | 5, each the first after a compaction |
 
 The scripted model does no inference, so these are bytes, not seconds. The bytes after the shared prefix are what a prefix cache evaluates again.
 
@@ -51,12 +51,12 @@ A later run of the conversation is accepted with the same view. Acceptance reads
 
 Before each model turn the engine estimates the turn's prompt in tokens:
 
-- the prompt and output tokens the provider reported for the run's latest exchange, plus an estimate from the encoded bytes of everything recorded since;
+- the prompt and output tokens the provider reported for the conversation's latest exchange since the latest compaction, plus an estimate from the encoded bytes of everything recorded since;
 - or, when no exchange since the latest compaction reported usage, an estimate from the encoded bytes of the instructions, tool specs, output schema, derived-context cap and the context itself.
 
-Bytes become tokens at three bytes a token, or fewer when the provider's count for the run's latest prompt shows the context is denser than that. Prose runs near four bytes a token, but tool results are JSON: against Gemma 4 31B, pages of message records came to 2.5. An estimate that assumes prose lets such a turn through to the provider, which rejects it. The same density sizes what a compaction keeps and what its summary request sends.
+Bytes become tokens at three bytes a token, or fewer when the provider's count for the latest prompt shows the context is denser than that. Prose runs near four bytes a token, but tool results are JSON: against Gemma 4 31B, pages of message records came to 2.5. An estimate that assumes prose lets such a turn through to the provider, which rejects it. The same density sizes what a compaction keeps and what its summary request sends.
 
-It compacts when that estimate reaches `tokens - reserve_tokens`, the compaction would cover at least a quarter of the context, and the run has at least two model calls left.
+It compacts when that estimate — taking the byte-estimated part as up to half again as large, matching the margin `output_room` reserves against the window — reaches `tokens - reserve_tokens`, the compaction would cover at least a quarter of the context, and the run has at least two model calls left.
 
 The quarter is there because a compaction is not free: it is a model call, and the prompt after it is evaluated from its start. When the entries that must be kept are most of the context, such as one tool result that fills half a small window, summarizing the rest frees little and the next result puts the run over the threshold again. The turn is then made as it is, inside the reserve, and the engine compacts only if the provider rejects it.
 

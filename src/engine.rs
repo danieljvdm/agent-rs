@@ -1077,7 +1077,8 @@ impl Definition {
     /// a compaction can be made first.
     fn compaction_due(&self, state: &RunState) -> bool {
         (self.context_window.as_ref()).is_some_and(|window| {
-            self.estimate(state).tokens >= window.compact_at() && self.can_compact(state, false)
+            self.estimate(state).conservative() >= window.compact_at()
+                && self.can_compact(state, false)
         })
     }
 
@@ -1202,9 +1203,16 @@ impl Definition {
                             Turn::Compact(_) => {
                                 let tokens = (estimate.density)
                                     .tokens(self.overhead_bytes() + encoded_len(&history));
+                                let instruction_tokens = history
+                                    .last()
+                                    .map_or(0, |entry| estimate.density.tokens(encoded_len(entry)));
+                                let uncertain = estimate
+                                    .uncertain
+                                    .saturating_add(instruction_tokens)
+                                    .min(tokens);
                                 (window.output_room(compaction::Estimate {
                                     tokens,
-                                    uncertain: tokens,
+                                    uncertain,
                                     density: estimate.density,
                                 }))
                                 .min(window.summary_tokens.saturating_mul(2))

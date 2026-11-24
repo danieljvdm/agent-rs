@@ -167,7 +167,7 @@ impl ContextWindow {
     /// that came out low makes the request fail. The part of the estimate made from bytes is
     /// therefore taken as up to half again as large; what the provider reported is exact.
     pub(crate) fn output_room(&self, estimate: Estimate) -> u64 {
-        self.room(estimate.tokens.saturating_add(estimate.uncertain / 2))
+        self.room(estimate.conservative())
     }
     /// The user message that asks the model for a summary.
     pub(crate) fn instruction(&self) -> String {
@@ -244,12 +244,19 @@ pub(crate) struct Estimate {
     /// The density the estimate used, for sizing what a compaction keeps and sends.
     pub density: Density,
 }
+impl Estimate {
+    /// Prompt tokens with a half-again margin on the byte-estimated part, matching what
+    /// [`ContextWindow::output_room`] reserves against the window.
+    pub(crate) fn conservative(self) -> u64 {
+        self.tokens.saturating_add(self.uncertain / 2)
+    }
+}
 
 /// Estimates the prompt of the run's next model turn.
 ///
-/// The run's latest exchange since its latest compaction says what its prompt and answer really
-/// came to, if the provider reported usage: only what was recorded after it is estimated from
-/// bytes, at the density that prompt had. Otherwise everything is estimated at the default
+/// The conversation's latest exchange since its latest compaction says what its prompt and answer
+/// really came to, if the provider reported usage: only what was recorded after it is estimated
+/// from bytes, at the density that prompt had. Otherwise everything is estimated at the default
 /// density: `overhead` bytes of instructions, tools, output schema and derived-context cap, and
 /// the context the turn would send.
 pub(crate) fn estimate(
@@ -258,11 +265,20 @@ pub(crate) fn estimate(
     overhead: usize,
     pinned: &impl Fn(&HistoryEntry) -> bool,
 ) -> Estimate {
-    // The exchange whose usage anchors the estimate, by its index in the run's history.
-    let anchor = (history.iter().enumerate().rev())
+    // The exchange whose usage anchors the estimate, by its index in `prior ++ history`.
+    let anchor = history
+        .iter()
+        .enumerate()
+        .rev()
+        .map(|(index, entry)| (prior.len() + index, entry))
+        .chain(prior.iter().enumerate().rev())
         .take_while(|(_, entry)| !matches!(entry, HistoryEntry::Compaction { .. }))
-        .find(|(_, entry)| matches!(entry, HistoryEntry::Exchange { response, .. } if response.usage.input > 0))
-        .map(|(index, _)| index);
+        .find_map(|(index, entry)| match entry {
+            HistoryEntry::Exchange { response, .. } if response.usage.input > 0 => {
+                Some((index, &response.usage))
+            }
+            _ => None,
+        });
     let compacted = compacted(prior, history);
     let floor = compacted.map_or(0, |compacted| compacted.floor);
     let latest_exchange = latest_exchange(history);
@@ -279,21 +295,17 @@ pub(crate) fn estimate(
         if !send {
             continue;
         }
-        match (anchor, own, entry) {
+        match (anchor, entry) {
             // The anchor's own response is in what the provider counted; its results are not.
-            (Some(anchor), Some(own), HistoryEntry::Exchange { results, .. }) if own == anchor => {
+            (Some((anchor, _)), HistoryEntry::Exchange { results, .. }) if index == anchor => {
                 since += encoded_len(results);
             }
-            (Some(anchor), Some(own), _) if own > anchor => since += encoded_len(entry) + 1,
+            (Some((anchor, _)), _) if index > anchor => since += encoded_len(entry) + 1,
             _ => before += encoded_len(entry) + 1,
         }
     }
-    let reported = anchor.and_then(|anchor| match &history[anchor] {
-        HistoryEntry::Exchange { response, .. } => Some(&response.usage),
-        _ => None,
-    });
-    match reported {
-        Some(usage) => {
+    match anchor {
+        Some((_, usage)) => {
             let density = Density::measured(before, usage.input);
             let uncertain = density.tokens(since);
             Estimate {
