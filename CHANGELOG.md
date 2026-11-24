@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.4 (2026-11-24)
+
+### Fixes
+
+#### Eliminate compaction dead zone on multi-run conversations
+
+Align `ContextWindow::compaction_due` and `output_room` so multi-run conversations trigger compaction before `max_tokens` can collapse to `1`.
+
 ## 0.2.3 (2026-11-20)
 
 ### Features
